@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.31.6)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-project(vulkan-prog
+project(vulkan-project
     LANGUAGES C CXX
 )
 
@@ -30,23 +30,51 @@ if (LTO_SUPPORTED AND CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
-include_directories(${CMAKE_SOURCE_DIR}/include)
+# Dependencies
+include(FetchContent)
 
-# Find dependencies
+FetchContent_Declare(
+    fetch_vk_bootstrap
+    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
+    GIT_TAG        v1.4.338
+)
+FetchContent_MakeAvailable(fetch_vk_bootstrap)
+
+FetchContent_Declare(
+    VMA
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+    GIT_TAG        v3.3.0
+)
+set(VMA_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(VMA_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(VMA)
+
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-find_package(assimp CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
 # ---- Executable ----
 add_executable(vulkan-prog
     main.cpp
+    vulkan-renderer.cppm
+    vendored/vma_compilation_unit.cpp
 )
+
+target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 target_link_libraries(vulkan-prog
     PRIVATE
         Vulkan::Vulkan
         SDL3::SDL3
+        vk-bootstrap::vk-bootstrap
+        GPUOpen::VulkanMemoryAllocator
+        glm::glm
+)
+
+target_sources(vulkan-prog
+        PRIVATE
+        FILE_SET CXX_MODULES FILES
+        vulkan-renderer.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE
