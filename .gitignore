@@ -1,6 +1,8 @@
 /build/
 /build-release/
 /build-deb-no-opt/
+shaders/compiled/*
+!shaders/compiled/.gitkeep
 /.idea/
 /.cache/
 .clang-tidy

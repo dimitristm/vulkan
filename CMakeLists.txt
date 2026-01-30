@@ -82,3 +82,36 @@ target_compile_options(vulkan-prog PRIVATE
     -Wextra
     -Wpedantic
 )
+
+# ---- Shaders ----
+# todo: also support glslangValidator
+# Find the shader compiler
+find_program(SHADER_COMPILER glslc REQUIRED)
+
+# Find all shader source files
+file(GLOB_RECURSE SHADER_SOURCES
+    CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/shaders/*.frag"
+    "${PROJECT_SOURCE_DIR}/shaders/*.vert"
+    "${PROJECT_SOURCE_DIR}/shaders/*.comp"
+)
+
+# Compile each shader to SPIR-V
+set(SHADER_BINARIES)
+foreach(SHADER_SOURCE ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
+    set(SHADER_OUTPUT "${PROJECT_SOURCE_DIR}/shaders/compiled/${SHADER_NAME}.spv")
+
+    add_custom_command(
+        OUTPUT ${SHADER_OUTPUT}
+        COMMAND ${SHADER_COMPILER} ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER_SOURCE}
+        COMMENT "Compiling ${SHADER_NAME}"
+        VERBATIM
+    )
+
+    list(APPEND SHADER_BINARIES ${SHADER_OUTPUT})
+endforeach()
+
+# Create target that builds all shaders
+add_custom_target(Shaders ALL DEPENDS ${SHADER_BINARIES})
