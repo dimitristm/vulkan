@@ -12,6 +12,7 @@ module;
 #include <chrono>
 #include <cmath>
 #include <print>
+#include <fstream>
 
 
 // Disable harmless VMA warnings
@@ -32,6 +33,7 @@ module;
 #  pragma GCC diagnostic pop
 #endif
 
+//TODO: enable VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT
 
 export module vulkanRenderer;
 
@@ -60,7 +62,6 @@ namespace struct_makers{
         info.flags = flags;
         return info;
     }
-
 
     static VkCommandBufferAllocateInfo command_buffer_allocate_info(VkCommandPool pool, uint32_t count)
     {
@@ -290,6 +291,140 @@ struct VulkanImageInfo{
     VkFormat image_format;
 };
 
+
+struct DescriptorLayoutBuilder {
+    std::vector<VkDescriptorSetLayoutBinding> bindings; // todo reserve some amount in the constructor
+
+    void add_binding(uint32_t binding, VkDescriptorType type);
+    void clear();
+    VkDescriptorSetLayout build(VkDevice device, VkShaderStageFlags shaderStages, void* pNext = nullptr, VkDescriptorSetLayoutCreateFlags flags = 0);
+
+    DescriptorLayoutBuilder(){
+        bindings.reserve(10); //TODO: is 10 a logical amount here?
+    }
+};
+
+void DescriptorLayoutBuilder::add_binding(uint32_t binding, VkDescriptorType type) {
+    VkDescriptorSetLayoutBinding newbind {};
+    newbind.binding = binding;
+    newbind.descriptorCount = 1;
+    newbind.descriptorType = type;
+
+    bindings.push_back(newbind);
+}
+
+void DescriptorLayoutBuilder::clear() {
+    bindings.clear();
+}
+
+VkDescriptorSetLayout DescriptorLayoutBuilder::build(VkDevice device, VkShaderStageFlags shaderStages, void* pNext, VkDescriptorSetLayoutCreateFlags flags)
+{
+    for (auto& b : bindings){
+        b.stageFlags |= shaderStages;
+    }
+
+    VkDescriptorSetLayoutCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.pNext = pNext;
+    info.pBindings = bindings.data();
+    info.bindingCount = bindings.size();
+    info.flags = flags;
+
+    VkDescriptorSetLayout set = nullptr;
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &info, nullptr, &set));
+
+    return set;
+}
+
+struct DescriptorAllocator{
+    struct PoolSizePerDescriptorSet{
+        VkDescriptorType type;
+        float size;
+    };
+
+    VkDescriptorPool pool;
+
+    void init_pool(VkDevice device, uint32_t maxSets, std::span<PoolSizePerDescriptorSet> pool_sizes_per_set);
+    void clear_descriptors(VkDevice device) const;
+    void destroy_pool(VkDevice device) const;
+
+    VkDescriptorSet allocate(VkDevice device, VkDescriptorSetLayout layout) const;
+};
+
+void DescriptorAllocator::init_pool(VkDevice device, uint32_t maxSets, std::span<PoolSizePerDescriptorSet> pool_sizes_per_set){
+    std::vector<VkDescriptorPoolSize> poolSizes;
+    for (PoolSizePerDescriptorSet pool_size_mult : pool_sizes_per_set) {
+        poolSizes.push_back(VkDescriptorPoolSize {
+            .type = pool_size_mult.type,
+            .descriptorCount = static_cast<uint32_t>(pool_size_mult.size * maxSets) // this is all really bad redo it completely
+        });
+    }
+
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags = 0;
+    pool_info.maxSets = maxSets;
+    pool_info.poolSizeCount = (uint32_t)poolSizes.size();
+    pool_info.pPoolSizes = poolSizes.data();
+
+    vkCreateDescriptorPool(device, &pool_info, nullptr, &pool);
+}
+
+void DescriptorAllocator::clear_descriptors(VkDevice device) const{
+    vkResetDescriptorPool(device, pool, 0);
+}
+
+void DescriptorAllocator::destroy_pool(VkDevice device) const{
+    vkDestroyDescriptorPool(device,pool,nullptr);
+}
+
+VkDescriptorSet DescriptorAllocator::allocate(VkDevice device, VkDescriptorSetLayout layout) const{
+    VkDescriptorSetAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.pNext = nullptr;
+    allocInfo.descriptorPool = pool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &layout;
+
+    VkDescriptorSet ds;
+    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &ds));
+
+    return ds;
+}
+
+
+static bool load_shader_module(const char* filePath, VkDevice device, VkShaderModule* outShaderModule){
+    // open the file. With cursor at the end
+    std::ifstream file(filePath, std::ios::ate | std::ios::binary);
+
+    if (!file.is_open()) {
+        return false;
+    }
+
+    // find what the size of the file is by looking up the location of the cursor
+    // because the cursor is at the end, it gives the size directly in bytes
+    size_t fileSize = (size_t)file.tellg();
+    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+    file.seekg(0);
+    file.read((char*)buffer.data(), fileSize);
+    file.close();
+
+    // create a new shader module, using the buffer we loaded
+    VkShaderModuleCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
+    createInfo.codeSize = buffer.size() * sizeof(uint32_t);
+    createInfo.pCode = buffer.data();
+
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        return false;
+    }
+    *outShaderModule = shaderModule;
+    return true;
+}
+
+
 export class Renderer{
 public:
     VkExtent2D window_extent = {1700, 900};
@@ -316,6 +451,13 @@ public:
     VulkanImageInfo draw_image;
     VkExtent2D draw_extent;
 
+    DescriptorAllocator globalDescriptorAllocator;
+    VkDescriptorSet drawImageDescriptors;
+    VkDescriptorSetLayout drawImageDescriptorLayout;
+
+    VkPipeline _gradientPipeline;
+    VkPipelineLayout _gradientPipelineLayout;
+
     void create_swapchain(u_int32_t width, u_int32_t height){
         vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
         vkb::Swapchain vkb_swapchain = swapchain_builder
@@ -339,6 +481,73 @@ public:
         for(auto &swapchain_image_view : swapchain_image_views){
             vkDestroyImageView(device, swapchain_image_view, nullptr);
         }
+    }
+
+    void init_descriptors(){
+        //create a descriptor pool that will hold 10 sets with 1 image each
+        std::vector<DescriptorAllocator::PoolSizePerDescriptorSet> sizes = {
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
+        };
+
+        globalDescriptorAllocator.init_pool(device, 10, sizes);
+
+        //make the descriptor set layout for our compute draw
+        DescriptorLayoutBuilder builder;
+        builder.add_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        drawImageDescriptorLayout = builder.build(device, VK_SHADER_STAGE_COMPUTE_BIT);
+
+        //allocate a descriptor set for our draw image
+        drawImageDescriptors = globalDescriptorAllocator.allocate(device,drawImageDescriptorLayout);
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        imgInfo.imageView = draw_image.image_view;
+
+        VkWriteDescriptorSet drawImageWrite = {};
+        drawImageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        drawImageWrite.pNext = nullptr;
+        drawImageWrite.dstBinding = 0;
+        drawImageWrite.dstSet = drawImageDescriptors;
+        drawImageWrite.descriptorCount = 1;
+        drawImageWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        drawImageWrite.pImageInfo = &imgInfo;
+
+        vkUpdateDescriptorSets(device, 1, &drawImageWrite, 0, nullptr);
+    }
+
+    void init_background_pipelines(){
+        VkPipelineLayoutCreateInfo computeLayout{};
+        computeLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        computeLayout.pNext = nullptr;
+        computeLayout.pSetLayouts = &drawImageDescriptorLayout;
+        computeLayout.setLayoutCount = 1;
+
+        VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &_gradientPipelineLayout));
+
+        VkShaderModule computeShader;
+        if (!load_shader_module("shaders/compiled/gradient.comp.spv", device, &computeShader)){
+                std::print("Error when building the compute shader\n");
+        }
+
+        VkPipelineShaderStageCreateInfo stageinfo{};
+        stageinfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageinfo.pNext = nullptr;
+        stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageinfo.module = computeShader;
+        stageinfo.pName = "main";
+
+        VkComputePipelineCreateInfo computePipelineCreateInfo{};
+        computePipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        computePipelineCreateInfo.pNext = nullptr;
+        computePipelineCreateInfo.layout = _gradientPipelineLayout;
+        computePipelineCreateInfo.stage = stageinfo;
+
+        VK_CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &_gradientPipeline));
+        vkDestroyShaderModule(device, computeShader, nullptr);
+    }
+
+    void init_pipelines(){
+        init_background_pipelines();
     }
 
     Renderer(){
@@ -452,10 +661,20 @@ public:
             VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.swapchain_semaphore));
             VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.render_semaphore));
 	}
+
+        init_descriptors();
+        init_pipelines();
     }
 
     ~Renderer(){
         vkDeviceWaitIdle(device);
+
+        vkDestroyPipelineLayout(device, _gradientPipelineLayout, nullptr);
+        vkDestroyPipeline(device, _gradientPipeline, nullptr);
+
+        globalDescriptorAllocator.destroy_pool(device);
+        vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
+
         for (auto & frame : frames) {
             vkDestroyCommandPool(device, frame.command_pool, nullptr);
             vkDestroyFence(device, frame.render_fence, nullptr);
@@ -478,15 +697,25 @@ public:
 
     void draw_background(VkCommandBuffer cmd) const
     {
-        //make a clear-color from frame number. This will flash with a 120 frame period.
-        VkClearColorValue clearValue;
-        float flash = std::abs(std::sin(frame_number / 120.f));
-        clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+        ////make a clear-color from frame number. This will flash with a 120 frame period.
+        //VkClearColorValue clearValue;
+        //float flash = std::abs(std::sin(frame_number / 120.f));
+        //clearValue = { { 0.0f, 0.0f, flash, 1.0f } };
+        //
+        //VkImageSubresourceRange clearRange = struct_makers::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+        //
+        ////clear image
+        //vkCmdClearColorImage(cmd, draw_image.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
 
-        VkImageSubresourceRange clearRange = struct_makers::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
 
-        //clear image
-        vkCmdClearColorImage(cmd, draw_image.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
+	// bind the gradient drawing compute pipeline
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _gradientPipeline);
+
+	// bind the descriptor set containing the draw image for the compute pipeline
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _gradientPipelineLayout, 0, 1, &drawImageDescriptors, 0, nullptr);
+
+	// execute the compute pipeline dispatch. We are using 16x16 workgroup size so we need to divide by it
+	vkCmdDispatch(cmd, std::ceil(draw_extent.width / 16.0), std::ceil(draw_extent.height / 16.0), 1);
     }
 
     void draw(){
