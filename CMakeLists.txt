@@ -58,9 +58,16 @@ add_executable(vulkan-prog
     main.cpp
     vulkan-renderer.cppm
     vendored/vma_compilation_unit.cpp
+    vendored/imgui.cpp
+    vendored/imgui_impl_sdl3.cpp
+    vendored/imgui_impl_vulkan.cpp
+    vendored/imgui_demo.cpp
+    vendored/imgui_draw.cpp
+    vendored/imgui_tables.cpp
+    vendored/imgui_widgets.cpp
 )
 
-target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored)
 
 target_link_libraries(vulkan-prog
     PRIVATE

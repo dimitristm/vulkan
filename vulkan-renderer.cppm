@@ -1,5 +1,6 @@
 module;
 
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL_events.h>
@@ -13,6 +14,12 @@ module;
 #include <cmath>
 #include <print>
 #include <fstream>
+#include <functional>
+
+
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_vulkan.h"
 
 
 // Disable harmless VMA warnings
@@ -202,6 +209,35 @@ namespace struct_makers{
         return info;
     }
 
+
+    static VkRenderingAttachmentInfo attachment_info( VkImageView view, VkClearValue* clear ,VkImageLayout layout /*= VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL*/){
+        VkRenderingAttachmentInfo colorAttachment {};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.pNext = nullptr;
+        colorAttachment.imageView = view;
+        colorAttachment.imageLayout = layout;
+        colorAttachment.loadOp = (clear != nullptr) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (clear != nullptr) {
+            colorAttachment.clearValue = *clear;
+        }
+
+        return colorAttachment;
+    }
+
+    static VkRenderingInfo rendering_info(VkExtent2D renderExtent, VkRenderingAttachmentInfo* colorAttachment, VkRenderingAttachmentInfo* depthAttachment){
+        VkRenderingInfo renderInfo {};
+        renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.pNext = nullptr;
+        renderInfo.renderArea = VkRect2D { VkOffset2D { 0, 0 }, renderExtent };
+        renderInfo.layerCount = 1;
+        renderInfo.colorAttachmentCount = 1;
+        renderInfo.pColorAttachments = colorAttachment;
+        renderInfo.pDepthAttachment = depthAttachment;
+        renderInfo.pStencilAttachment = nullptr;
+
+        return renderInfo;
+    }
 }
 
 // todo: check this
@@ -458,6 +494,11 @@ public:
     VkPipeline _gradientPipeline;
     VkPipelineLayout _gradientPipelineLayout;
 
+    // immediate submit structures
+    VkFence _immFence;
+    VkCommandBuffer _immCommandBuffer;
+    VkCommandPool _immCommandPool;
+
     void create_swapchain(u_int32_t width, u_int32_t height){
         vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
         vkb::Swapchain vkb_swapchain = swapchain_builder
@@ -549,6 +590,92 @@ public:
     void init_pipelines(){
         init_background_pipelines();
     }
+
+
+    void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function)
+    {
+        VK_CHECK(vkResetFences(device, 1, &_immFence));
+        VK_CHECK(vkResetCommandBuffer(_immCommandBuffer, 0));
+
+        VkCommandBuffer cmd = _immCommandBuffer;
+
+        VkCommandBufferBeginInfo cmdBeginInfo = struct_makers::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+        VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+
+        function(cmd);
+
+        VK_CHECK(vkEndCommandBuffer(cmd));
+
+        VkCommandBufferSubmitInfo cmdinfo = struct_makers::command_buffer_submit_info(cmd);
+        VkSubmitInfo2 submit = struct_makers::submit_info(&cmdinfo, nullptr, nullptr);
+
+        // submit command buffer to the queue and execute it.
+        //  _renderFence will now block until the graphic commands finish execution
+        VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit, _immFence));
+
+        VK_CHECK(vkWaitForFences(device, 1, &_immFence, true, 9999999999));
+    }
+
+
+void init_imgui() {
+    // 1: create descriptor pool for IMGUI
+    //  the size of the pool is very oversize, but it's copied from imgui demo
+    //  itself.
+    // VkDescriptorPoolSize pool_sizes[] = {
+    //     { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+    //     { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+    // };
+    //
+    // VkDescriptorPoolCreateInfo pool_info = {};
+    // pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    // pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    // pool_info.maxSets = 1000;
+    // pool_info.poolSizeCount = (uint32_t)std::size(pool_sizes);
+    // pool_info.pPoolSizes = pool_sizes;
+    //
+    // VkDescriptorPool imguiPool;
+    // VK_CHECK(vkCreateDescriptorPool(device, &pool_info, nullptr, &imguiPool));
+
+    ImGui::CreateContext();
+    ImGui_ImplSDL3_InitForVulkan(window);
+
+    // this initializes imgui for Vulkan
+    ImGui_ImplVulkan_InitInfo init_info = {};
+    init_info.ApiVersion = VK_MAKE_VERSION(vkAPI_ver.major, vkAPI_ver.minor, vkAPI_ver.patch);
+    init_info.Instance = vk_instance;
+    init_info.PhysicalDevice = physical_device;
+    init_info.Device = device;
+    init_info.Queue = graphics_queue;
+    init_info.QueueFamily = graphics_queue_family;
+    init_info.DescriptorPool = nullptr;
+    init_info.DescriptorPoolSize = 1000; // Probably overkill
+    init_info.MinImageCount = 3;
+    init_info.ImageCount = 3;
+    init_info.UseDynamicRendering = true;
+    //init_info.MinAllocationSize = 1024*1024; would stop best practices validation warning and waste some memory
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pNext = nullptr;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &swapchain_image_format;
+    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    ImGui_ImplVulkan_Init(&init_info);
+
+    // add the destroy the imgui created structures
+    // _mainDeletionQueue.push_function([=]() {
+    // ImGui_ImplVulkan_Shutdown();
+    // vkDestroyDescriptorPool(_device, imguiPool, nullptr);
+    // });
+}
 
     Renderer(){
         SDL_Init(SDL_INIT_VIDEO);
@@ -662,6 +789,14 @@ public:
             VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.render_semaphore));
 	}
 
+        // immediate submit initialization
+        VK_CHECK(vkCreateCommandPool(device, &commandPoolInfo, nullptr, &_immCommandPool));
+        // allocate the command buffer for immediate submits
+        VkCommandBufferAllocateInfo cmdAllocInfo = struct_makers::command_buffer_allocate_info(_immCommandPool, 1);
+        VK_CHECK(vkAllocateCommandBuffers(device, &cmdAllocInfo, &_immCommandBuffer));
+
+        init_imgui();
+
         init_descriptors();
         init_pipelines();
     }
@@ -674,6 +809,9 @@ public:
 
         globalDescriptorAllocator.destroy_pool(device);
         vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
+
+        ImGui_ImplVulkan_Shutdown();
+        // vkDestroyCommandPool(device, _immCommandPool, nullptr);
 
         for (auto & frame : frames) {
             vkDestroyCommandPool(device, frame.command_pool, nullptr);
@@ -695,6 +833,17 @@ public:
     FrameData& get_current_frame() { return frames[frame_number % FRAME_OVERLAP]; }
 
 
+    void draw_imgui(VkCommandBuffer cmd, VkImageView targetImageView) const{
+        VkRenderingAttachmentInfo colorAttachment = struct_makers::attachment_info(targetImageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo renderInfo = struct_makers::rendering_info(swapchain_extent, &colorAttachment, nullptr);
+
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+
+        vkCmdEndRendering(cmd);
+    }
+
     void draw_background(VkCommandBuffer cmd) const
     {
         ////make a clear-color from frame number. This will flash with a 120 frame period.
@@ -706,7 +855,6 @@ public:
         //
         ////clear image
         //vkCmdClearColorImage(cmd, draw_image.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
-
 
 	// bind the gradient drawing compute pipeline
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _gradientPipeline);
@@ -744,7 +892,11 @@ public:
 
 	copy_image_to_image(cmd_buffer, draw_image.image, swapchain_images[swapchain_image_index], draw_extent, swapchain_extent);
 
-	transition_image(cmd_buffer, swapchain_images[swapchain_image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        transition_image(cmd_buffer, swapchain_images[swapchain_image_index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        draw_imgui(cmd_buffer, swapchain_image_views[swapchain_image_index]);
+
+	transition_image(cmd_buffer, swapchain_images[swapchain_image_index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
 	VK_CHECK(vkEndCommandBuffer(cmd_buffer));
 
@@ -777,12 +929,21 @@ public:
                 if (event.type == SDL_EVENT_QUIT) { quit = true; }
                 if (event.type == SDL_EVENT_WINDOW_MINIMIZED) { stop_rendering = true; }
                 if (event.type == SDL_EVENT_WINDOW_RESTORED) { stop_rendering = false; }
+                ImGui_ImplSDL3_ProcessEvent(&event);
             }
 
             if (stop_rendering){
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             else{
+                ImGui_ImplVulkan_NewFrame();
+                ImGui_ImplSDL3_NewFrame();
+                ImGui::NewFrame();
+
+                ImGui::ShowDemoWindow();
+
+                ImGui::Render();
+
                 draw();
             }
         }
