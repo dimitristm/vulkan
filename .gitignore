@@ -6,3 +6,4 @@ shaders/compiled/*
 /.idea/
 /.cache/
 .clang-tidy
+imgui.ini
