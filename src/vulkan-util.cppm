@@ -15,6 +15,7 @@ module;
 #include <print>
 #include <fstream>
 #include <functional>
+#include <tuple>
 
 
 #include "imgui.h"
@@ -66,157 +67,6 @@ struct APIVersionVulkan{
     }
 };
 
-struct Swapchain{
-    VkSwapchainKHR swapchain{};
-    VkFormat image_format = VK_FORMAT_B8G8R8A8_UNORM;
-    VkExtent2D extent{};
-    std::vector<VkImage> images;
-    std::vector<VkImageView> image_views;
-
-    Swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
-    {
-        build_swapchain(physical_device, device, surface, size, present_mode);
-    }
-    Swapchain() = default;
-
- private:
-    void build_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
-    {
-        vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
-        vkb::Swapchain vkb_swapchain = swapchain_builder
-            // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
-            // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
-            // as the last thing before blitting to swapchain and presenting.
-            .set_desired_format(VkSurfaceFormatKHR{ .format = image_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-            .set_desired_present_mode(present_mode)
-            .set_desired_extent(size.x, size.y)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-            .build()
-            .value();
-
-        this->extent = vkb_swapchain.extent;
-        this->swapchain = vkb_swapchain.swapchain;
-        this->images = vkb_swapchain.get_images().value();
-        this->image_views = vkb_swapchain.get_image_views().value();
-    }
-
- public:
-    // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
-    // VulkanInstanceInfo that made it.
-    void destroy_swapchain(VkDevice device){
-        vkDestroySwapchainKHR(device, swapchain, nullptr);
-        for(auto &swapchain_image_view : image_views){
-            vkDestroyImageView(device, swapchain_image_view, nullptr);
-        }
-    }
-
-    void rebuild_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
-    {
-        destroy_swapchain(device);
-        build_swapchain(physical_device, device, surface, size, present_mode);
-    }
-};
-
-
-export struct VulkanEngine{
-    VkInstance vk_instance;
-    VkDebugUtilsMessengerEXT debug_messenger;
-    VkSurfaceKHR surface{};
-    VkPhysicalDevice physical_device;
-    VkDevice device;
-    VkQueue graphics_queue;
-    u_int32_t graphics_queue_family;
-    APIVersionVulkan api_version;
-    Swapchain swapchain;
-
-    VulkanEngine(SDL_Window *window)
-    :api_version{.major=1, .minor=3, .patch=0}
-    {
-        vkb::InstanceBuilder builder;
-        vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
-            .request_validation_layers(use_validation_layers)
-            .use_default_debug_messenger()
-            .require_api_version(api_version.major, api_version.minor, api_version.patch)
-            .build()
-            .value();
-        this->vk_instance = vkb_inst.instance;
-        this->debug_messenger = vkb_inst.debug_messenger;
-
-        SDL_Vulkan_CreateSurface(window, vk_instance, nullptr, &surface);
-
-        // Init physical device
-        VkPhysicalDeviceVulkan13Features features13{};
-        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.synchronization2 = (uint)true;
-        features13.dynamicRendering = (uint)true;
-
-        VkPhysicalDeviceVulkan12Features features12{};
-        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.descriptorIndexing = (uint)true;
-        features12.bufferDeviceAddress = (uint)true;
-
-        vkb::PhysicalDeviceSelector selector{vkb_inst};
-        vkb::PhysicalDevice vkb_physical_device = selector
-            .set_minimum_version(api_version.major, api_version.minor)
-            .set_required_features_13(features13)
-            .set_required_features_12(features12)
-            .set_surface(this->surface)
-            .select()
-            .value();
-
-        vkb::DeviceBuilder device_builder{vkb_physical_device};
-        vkb::Device vkb_device = device_builder.build().value();
-        this->physical_device = vkb_physical_device.physical_device;
-        this->device = vkb_device.device;
-        this->graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
-        this->graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
-
-        if (vkb_device.get_queue(vkb::QueueType::present).value() != graphics_queue){
-            std::println("Error: device does not support shared graphics and present queues.");
-        }
-
-        this->swapchain = Swapchain(physical_device, device, surface, {1700, 900}, VK_PRESENT_MODE_FIFO_KHR);
-    };
-
-    ~VulkanEngine(){
-        vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
-        vkDestroyDevice(device, nullptr);
-        vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
-        vkDestroyInstance(vk_instance, nullptr);
-    }
-};
-
-struct VulkanImage{
-    VkImage vk_image;
-    VkImageView image_view;
-    VmaAllocation allocation;
-    VkExtent3D extent;
-    VkFormat format;
-    VkImageLayout layout;
-};
-
-struct FrameData {
-    VkSemaphore swapchain_semaphore;
-    VkSemaphore render_semaphore;
-    VkFence render_fence;
-    VkCommandPool command_pool;
-    VkCommandBuffer main_command_buffer;
-};
 
 namespace struct_makers {
 
@@ -405,8 +255,247 @@ static VkRenderingInfo rendering_info(
 
 } // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
 
+static VmaAllocator init_vma_allocator(
+    VkPhysicalDevice physical_device,
+    VkDevice device,
+    VkInstance instance,
+    APIVersionVulkan version,
+    VmaAllocatorCreateFlagBits flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+    unsigned long preferred_large_heap_block_size = 0) // Default 0 usually means 256 MiB
+{
+    VmaAllocator allocator{};
+    VmaAllocatorCreateInfo allocatorInfo{
+        .flags = flags,
+        .physicalDevice = physical_device,
+        .device = device,
+        .preferredLargeHeapBlockSize = preferred_large_heap_block_size,
+        .pAllocationCallbacks = nullptr,
+        .pDeviceMemoryCallbacks = nullptr,
+        .pHeapSizeLimit = nullptr,
+        .pVulkanFunctions = nullptr,
+        .instance = instance,
+        .vulkanApiVersion = version.to_vk_enum(),
+        .pTypeExternalMemoryHandleTypes = nullptr,
+    };
+    VK_CHECK(vmaCreateAllocator(&allocatorInfo, &allocator));
+    return allocator;
+}
 
+static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    for(auto &swapchain_image_view : swapchain_image_views){
+        vkDestroyImageView(device, swapchain_image_view, nullptr);
+    }
+}
 
+struct Swapchain{
+    VkSwapchainKHR swapchain{};
+    VkFormat image_format = VK_FORMAT_B8G8R8A8_UNORM;
+    VkExtent2D extent{};
+    std::vector<VkImage> images;
+    std::vector<VkImageView> image_views;
+
+    Swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 size,
+        VkPresentModeKHR present_mode)
+    {
+        build_swapchain(physical_device, device, surface, size, present_mode);
+    }
+    Swapchain() = default;
+
+ private:
+    void build_swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 size,
+        VkPresentModeKHR present_mode)
+    {
+        vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
+        vkb::Swapchain vkb_swapchain = swapchain_builder
+            // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
+            // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
+            // as the last thing before blitting to swapchain and presenting.
+            .set_desired_format(VkSurfaceFormatKHR{ .format = image_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+            .set_desired_present_mode(present_mode)
+            .set_desired_extent(size.x, size.y)
+            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .build()
+            .value();
+
+        this->extent = vkb_swapchain.extent;
+        this->swapchain = vkb_swapchain.swapchain;
+        this->images = vkb_swapchain.get_images().value();
+        this->image_views = vkb_swapchain.get_image_views().value();
+    }
+
+ public:
+    // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
+    // VulkanInstanceInfo that made it.
+    void destroy_this_swapchain(VkDevice device){
+        destroy_swapchain(swapchain, device, image_views);
+    }
+
+    void rebuild_swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 size,
+        VkPresentModeKHR present_mode)
+    {
+        destroy_this_swapchain(device);
+        build_swapchain(physical_device, device, surface, size, present_mode);
+    }
+};
+
+struct VulkanImage{
+    VkImage vk_image;
+    VkImageView image_view;
+    VmaAllocation allocation;
+    VkExtent3D extent;
+    VkFormat format;
+    VkImageLayout layout;
+
+    VulkanImage(
+        VkExtent3D extent,
+        VkFormat format,
+        VkImageUsageFlags image_usage_flags,
+        VkMemoryPropertyFlagBits memory_property_flags)
+    {
+    }
+};
+
+export struct VulkanEngine{
+    VkInstance vk_instance;
+    VkDebugUtilsMessengerEXT debug_messenger;
+    VkSurfaceKHR surface{};
+    VkPhysicalDevice physical_device;
+    VkDevice device;
+    VkQueue graphics_queue;
+    u_int32_t graphics_queue_family;
+    VmaAllocator allocator;
+    APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
+
+ private:
+    // These are used in the destructor to delete everything this engine made.
+    // Might also be used in asserts in debug mode to ensure this is the engine that made them.
+    // Maybe I'll get around to deleting individual elements
+    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
+    std::vector<SwapchainTrackingInfo> created_swapchains;
+    struct ImageTrackingInfo{VkImage image; VkImageView view; VmaAllocation allocation;};
+    std::vector<ImageTrackingInfo> created_images;
+    std::vector<VkCommandPool> created_command_pools;
+    std::vector<VkFence> created_fences;
+    std::vector<VkSemaphore> created_semaphores;
+
+ public:
+    VulkanEngine(SDL_Window *window) {
+        vkb::InstanceBuilder builder;
+        vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
+            .request_validation_layers(use_validation_layers)
+            .use_default_debug_messenger()
+            .require_api_version(api_version.major, api_version.minor, api_version.patch)
+            .build()
+            .value();
+        this->vk_instance = vkb_inst.instance;
+        this->debug_messenger = vkb_inst.debug_messenger;
+
+        SDL_Vulkan_CreateSurface(window, vk_instance, nullptr, &surface);
+
+        // Init physical device
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.synchronization2 = (uint)true;
+        features13.dynamicRendering = (uint)true;
+
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        features12.descriptorIndexing = (uint)true;
+        features12.bufferDeviceAddress = (uint)true;
+
+        vkb::PhysicalDeviceSelector selector{vkb_inst};
+        vkb::PhysicalDevice vkb_physical_device = selector
+            .set_minimum_version(api_version.major, api_version.minor)
+            .set_required_features_13(features13)
+            .set_required_features_12(features12)
+            .set_surface(this->surface)
+            .select()
+            .value();
+
+        vkb::DeviceBuilder device_builder{vkb_physical_device};
+        vkb::Device vkb_device = device_builder.build().value();
+        this->physical_device = vkb_physical_device.physical_device;
+        this->device = vkb_device.device;
+        this->graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
+        this->graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+        if (vkb_device.get_queue(vkb::QueueType::present).value() != graphics_queue){
+            std::println("Error: device does not support shared graphics and present queues.");
+        }
+
+        allocator = init_vma_allocator(physical_device, device, vk_instance, api_version);
+    };
+
+    Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
+        assert((created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
+
+        int pixel_width{}, pixel_height{};
+        SDL_GetWindowSizeInPixels(window, &pixel_width, &pixel_height);
+        Swapchain swapchain = {physical_device, device, surface, {pixel_width, pixel_height}, present_mode};
+        created_swapchains.push_back({swapchain.swapchain, swapchain.image_views});
+        return swapchain;
+    }
+
+    VulkanImage create_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags image_usage_flags, VkMemoryPropertyFlagBits memory_property_flags){
+        VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, extent);
+        VmaAllocationCreateInfo img_alloc_info = {};
+        img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
+        VkImage image;
+        VmaAllocation allocation;
+        vmaCreateImage(allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
+
+        VulkanImage ;
+
+    }
+
+    ~VulkanEngine(){
+        vkDeviceWaitIdle(device);
+
+        for(auto &command_pool : created_command_pools){
+            vkDestroyCommandPool(device, command_pool, nullptr);
+        }
+        for(auto &fence : created_fences){
+            vkDestroyFence(device, fence, nullptr);
+        }
+        for(auto &sema : created_semaphores){
+            vkDestroySemaphore(device, sema, nullptr);
+        }
+        for(auto &image : created_images){
+            vkDestroyImageView(device, image.view, nullptr);
+            vmaDestroyImage(allocator, image.image, image.allocation);
+        }
+        for(auto &swapchain : created_swapchains){
+            destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
+        }
+        vmaDestroyAllocator(allocator);
+        vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
+        vkDestroyDevice(device, nullptr);
+        vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
+        vkDestroyInstance(vk_instance, nullptr);
+    }
+};
+
+struct FrameData {
+    VkSemaphore swapchain_semaphore;
+    VkSemaphore render_semaphore;
+    VkFence render_fence;
+    VkCommandPool command_pool;
+    VkCommandBuffer main_command_buffer;
+};
 
 
 
