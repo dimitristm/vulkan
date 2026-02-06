@@ -171,24 +171,25 @@ static VkSubmitInfo2 submit_info(
 static VkImageCreateInfo image_create_info(
     VkFormat format,
     VkImageUsageFlags usageFlags,
-    VkExtent3D extent)
+    VkExtent3D extent,
+    VkImageLayout initial_layout)
 {
     return VkImageCreateInfo{
-        .sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext       = nullptr,
+        .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext         = nullptr,
         .flags{},
-        .imageType   = VK_IMAGE_TYPE_2D,
-        .format      = format,
-        .extent      = extent,
-        .mipLevels   = 1,
-        .arrayLayers = 1,
-        .samples     = VK_SAMPLE_COUNT_1_BIT,
-        .tiling      = VK_IMAGE_TILING_OPTIMAL,
-        .usage       = usageFlags,
+        .imageType     = VK_IMAGE_TYPE_2D,
+        .format        = format,
+        .extent        = extent,
+        .mipLevels     = 1,
+        .arrayLayers   = 1,
+        .samples       = VK_SAMPLE_COUNT_1_BIT,
+        .tiling        = VK_IMAGE_TILING_OPTIMAL,
+        .usage         = usageFlags,
         .sharingMode{},
         .queueFamilyIndexCount{},
         .pQueueFamilyIndices{},
-        .initialLayout{},
+        .initialLayout = initial_layout,
     };
 }
 
@@ -288,7 +289,7 @@ static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::ve
     }
 }
 
-struct Swapchain{
+export struct Swapchain{
     VkSwapchainKHR swapchain{};
     VkFormat image_format = VK_FORMAT_B8G8R8A8_UNORM;
     VkExtent2D extent{};
@@ -311,7 +312,7 @@ struct Swapchain{
         VkPhysicalDevice physical_device,
         VkDevice device,
         VkSurfaceKHR surface,
-        glm::uvec2 size,
+        glm::uvec2 &size,
         VkPresentModeKHR present_mode)
     {
         vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
@@ -351,21 +352,95 @@ struct Swapchain{
     }
 };
 
-struct VulkanImage{
+export struct VulkanImage{
     VkImage vk_image;
-    VkImageView image_view;
+    VkImageView view;
     VmaAllocation allocation;
     VkExtent3D extent;
     VkFormat format;
     VkImageLayout layout;
 
     VulkanImage(
+        VkDevice device,
         VkExtent3D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags)
+        VkMemoryPropertyFlagBits memory_property_flags,
+        VmaAllocator allocator,
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED)
+    :extent(extent),
+     format(format),
+     layout(layout)
     {
+        VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, extent, layout);
+        VmaAllocationCreateInfo img_alloc_info = {};
+        img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
+        VkImage image{};
+        VmaAllocation allocation{};
+        vmaCreateImage(allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
+
+        VkImageViewCreateInfo view_info = struct_makers::imageview_create_info(format, image, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageView view{};
+        VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
+
+        this->vk_image = image;
+        this->view = view;
+        this->allocation = allocation;
     }
+};
+
+struct GpuFence{
+    VkFence fence;
+    GpuFence(VkDevice device, bool signaled){
+        VkFenceCreateInfo fence_create_info {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0u,
+        };
+        VK_CHECK(vkCreateFence(device, &fence_create_info, nullptr, &fence));
+    }
+};
+
+struct GpuSemaphore{
+    VkSemaphore semaphore;
+    GpuSemaphore(VkDevice device){
+        VkSemaphoreCreateInfo semaphore_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+        };
+        VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &semaphore));
+    }
+};
+
+struct CommandPool{
+    VkCommandPool pool;
+    CommandPool(VkDevice device, uint32_t graphics_queue_family){
+        VkCommandPoolCreateInfo command_pool_info{
+            .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext            = nullptr,
+            .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = graphics_queue_family,
+        };
+        VK_CHECK(vkCreateCommandPool(device, &command_pool_info, nullptr, &pool));
+    }
+};
+
+struct CommandBuffer{
+    VkCommandBuffer buffer;
+    CommandBuffer(VkCommandPool pool){
+        VkCommandBufferAllocateInfo{
+            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext              = nullptr,
+            .commandPool        = pool,
+            .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+    }
+};
+
+struct DescriptorSet{
 };
 
 export struct VulkanEngine{
@@ -442,24 +517,28 @@ export struct VulkanEngine{
     Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
         assert((created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
 
-        int pixel_width{}, pixel_height{};
-        SDL_GetWindowSizeInPixels(window, &pixel_width, &pixel_height);
-        Swapchain swapchain = {physical_device, device, surface, {pixel_width, pixel_height}, present_mode};
+        glm::ivec2 size;
+        SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
+        Swapchain swapchain{
+            physical_device, device, surface, size, present_mode
+        };
         created_swapchains.push_back({swapchain.swapchain, swapchain.image_views});
         return swapchain;
     }
 
-    VulkanImage create_image(VkExtent3D extent, VkFormat format, VkImageUsageFlags image_usage_flags, VkMemoryPropertyFlagBits memory_property_flags){
-        VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, extent);
-        VmaAllocationCreateInfo img_alloc_info = {};
-        img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-        img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
-        VkImage image;
-        VmaAllocation allocation;
-        vmaCreateImage(allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
-
-        VulkanImage ;
-
+    VulkanImage create_image(
+        VkExtent3D extent,
+        VkFormat format,
+        VkImageUsageFlags image_usage_flags,
+        VkMemoryPropertyFlagBits memory_property_flags,
+        VmaAllocator allocator,
+        VkImageLayout layout)
+    {
+        VulkanImage image{
+            device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
+        };
+        created_images.push_back(ImageTrackingInfo{image.vk_image, image.view, image.allocation});
+        return image;
     }
 
     ~VulkanEngine(){

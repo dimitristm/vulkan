@@ -23,5 +23,7 @@ sudo dnf install vulkan-loader-devel vulkan-validation-layers-devel SDL3-devel g
 ```
 
 Then build with:
+```
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake
 cmake --build build-release
+```
