@@ -256,6 +256,37 @@ static VkRenderingInfo rendering_info(
 
 } // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
 
+
+
+static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
+    VkDescriptorPoolSize sizes[] = {
+        { VK_DESCRIPTOR_TYPE_SAMPLER,                pool_size },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, pool_size },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          pool_size },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          pool_size },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,   pool_size },
+        { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,   pool_size },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         pool_size },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         pool_size },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, pool_size },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, pool_size },
+        { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,     pool_size },
+    };
+
+    VkDescriptorPoolCreateInfo descriptor_pool_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .maxSets = max_sets,
+        .poolSizeCount = 1,
+        .pPoolSizes = sizes,
+    };
+
+    VkDescriptorPool pool{};
+    VK_CHECK(vkCreateDescriptorPool(device, &descriptor_pool_info, nullptr, &pool));
+    return pool;
+}
+
 static VmaAllocator init_vma_allocator(
     VkPhysicalDevice physical_device,
     VkDevice device,
@@ -390,7 +421,7 @@ export struct VulkanImage{
     }
 };
 
-struct GpuFence{
+export struct GpuFence{
     VkFence fence;
     GpuFence(VkDevice device, bool signaled){
         VkFenceCreateInfo fence_create_info {
@@ -402,7 +433,7 @@ struct GpuFence{
     }
 };
 
-struct GpuSemaphore{
+export struct GpuSemaphore{
     VkSemaphore semaphore;
     GpuSemaphore(VkDevice device){
         VkSemaphoreCreateInfo semaphore_create_info{
@@ -414,7 +445,7 @@ struct GpuSemaphore{
     }
 };
 
-struct CommandPool{
+export struct CommandPool{
     VkCommandPool pool;
     CommandPool(VkDevice device, uint32_t graphics_queue_family){
         VkCommandPoolCreateInfo command_pool_info{
@@ -427,20 +458,31 @@ struct CommandPool{
     }
 };
 
-struct CommandBuffer{
+export struct CommandBuffer{
     VkCommandBuffer buffer;
-    CommandBuffer(VkCommandPool pool){
-        VkCommandBufferAllocateInfo{
+    CommandBuffer(VkDevice device, VkCommandPool pool){
+        VkCommandBufferAllocateInfo alloc_info{
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext              = nullptr,
             .commandPool        = pool,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
+        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
     }
 };
 
-struct DescriptorSet{
+export struct DescriptorSet{
+    VkDescriptorSet set;
+    DescriptorSet(VkDevice device, VkDescriptorSetLayout layout, VkDescriptorPool pool){
+        VkDescriptorSetAllocateInfo alloc_info = {};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.pNext = nullptr;
+        alloc_info.descriptorPool = pool;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &layout;
+        VK_CHECK(vkAllocateDescriptorSets(device, &alloc_info, &set));
+    }
 };
 
 export struct VulkanEngine{
@@ -452,6 +494,7 @@ export struct VulkanEngine{
     VkQueue graphics_queue;
     u_int32_t graphics_queue_family;
     VmaAllocator allocator;
+    VkDescriptorPool descriptor_pool;
     APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
 
  private:
@@ -465,6 +508,7 @@ export struct VulkanEngine{
     std::vector<VkCommandPool> created_command_pools;
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
+    std::vector<VkDescriptorSetLayout> layouts_to_delete;
 
  public:
     VulkanEngine(SDL_Window *window) {
@@ -512,6 +556,8 @@ export struct VulkanEngine{
         }
 
         allocator = init_vma_allocator(physical_device, device, vk_instance, api_version);
+ 
+        this->descriptor_pool = create_descriptor_pool(device, 1000, 200);
     };
 
     Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
@@ -565,6 +611,56 @@ export struct VulkanEngine{
         vkDestroyDevice(device, nullptr);
         vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
         vkDestroyInstance(vk_instance, nullptr);
+    }
+
+    void register_for_deletion(VkDescriptorSetLayout layout){
+        layouts_to_delete.push_back(layout);
+    }
+
+    DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout){
+        return {device, layout, descriptor_pool};
+    }
+
+    void update_descriptor_set(DescriptorSet set, VulkanImage image){
+        
+    }
+};
+
+// This is what you're meant to use instead of Layouts and Layout Bindings. You can
+// keep using build as many times as you want just like you would with a Layout.
+export struct DescriptorSetBuilder{
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    VkDescriptorSetLayout layout;
+    bool finalized = false;
+
+    consteval DescriptorSetBuilder& bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits stage_flags = VK_SHADER_STAGE_ALL){
+        finalized = false;
+        VkDescriptorSetLayoutBinding new_bind{
+            .binding = binding,
+            .descriptorType = type,
+            .descriptorCount = 1,
+            .stageFlags = stage_flags,
+            .pImmutableSamplers = nullptr,
+        };
+        bindings.push_back(new_bind);
+        return *this;
+    }
+
+    DescriptorSet build(VulkanEngine &engine){
+        if (!finalized){
+            VkDescriptorSetLayoutCreateInfo info = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .bindingCount = static_cast<uint32_t>(bindings.size()),
+                .pBindings = bindings.data(),
+            };
+            VK_CHECK(vkCreateDescriptorSetLayout(engine.device, &info, nullptr, &layout));
+            engine.register_for_deletion(layout);
+            finalized = true;
+        }
+
+        return engine.allocate_descriptor_set_from_layout(layout);
     }
 };
 
