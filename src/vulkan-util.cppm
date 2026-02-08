@@ -8,6 +8,8 @@ module;
 
 #include <glm/vec2.hpp>
 
+#include <vector>
+#include <span>
 #include <array>
 #include <thread>
 #include <chrono>
@@ -508,7 +510,7 @@ export struct VulkanEngine{
     std::vector<VkCommandPool> created_command_pools;
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
-    std::vector<VkDescriptorSetLayout> layouts_to_delete;
+    std::vector<VkDescriptorSetLayout> layouts_to_delete; // TODO: delete the layouts
 
  public:
     VulkanEngine(SDL_Window *window) {
@@ -583,7 +585,7 @@ export struct VulkanEngine{
         VulkanImage image{
             device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
         };
-        created_images.push_back(ImageTrackingInfo{image.vk_image, image.view, image.allocation});
+        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .view=image.view, .allocation=image.allocation});
         return image;
     }
 
@@ -617,8 +619,34 @@ export struct VulkanEngine{
         layouts_to_delete.push_back(layout);
     }
 
-    DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout){
+    DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout) const{
         return {device, layout, descriptor_pool};
+    }
+
+    void update_storage_image_descriptor(VkDescriptorSet set, std::span<VulkanImage> images, uint32_t bind){
+        std::vector<VkDescriptorImageInfo> img_infos;
+        for (auto image : images){
+            img_infos.push_back({
+                .sampler{},
+                .imageView = image.view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            });
+        }
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = set,
+            .dstBinding = bind,
+            .dstArrayElement{},
+            .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .pImageInfo = img_infos.data(),
+            .pBufferInfo{},
+            .pTexelBufferView{},
+        };
+
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
     void update_descriptor_set(DescriptorSet set, VulkanImage image){
@@ -633,13 +661,13 @@ export struct DescriptorSetBuilder{
     VkDescriptorSetLayout layout;
     bool finalized = false;
 
-    consteval DescriptorSetBuilder& bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits stage_flags = VK_SHADER_STAGE_ALL){
+    consteval DescriptorSetBuilder& bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL){
         finalized = false;
         VkDescriptorSetLayoutBinding new_bind{
             .binding = binding,
             .descriptorType = type,
             .descriptorCount = 1,
-            .stageFlags = stage_flags,
+            .stageFlags = accessible_stages_flags,
             .pImmutableSamplers = nullptr,
         };
         bindings.push_back(new_bind);
@@ -671,21 +699,6 @@ struct FrameData {
     VkCommandPool command_pool;
     VkCommandBuffer main_command_buffer;
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
