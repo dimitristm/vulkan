@@ -623,7 +623,7 @@ export struct VulkanEngine{
         return {device, layout, descriptor_pool};
     }
 
-    void update_storage_image_descriptor(VkDescriptorSet set, std::span<VulkanImage> images, uint32_t bind){
+    void update_storage_image_descriptor(DescriptorSet set, std::span<VulkanImage> images, uint32_t bind){
         std::vector<VkDescriptorImageInfo> img_infos;
         for (auto image : images){
             img_infos.push_back({
@@ -636,7 +636,7 @@ export struct VulkanEngine{
         VkWriteDescriptorSet write{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = nullptr,
-            .dstSet = set,
+            .dstSet = set.set,
             .dstBinding = bind,
             .dstArrayElement{},
             .descriptorCount = static_cast<uint32_t>(img_infos.size()),
@@ -649,8 +649,8 @@ export struct VulkanEngine{
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
-    void update_descriptor_set(DescriptorSet set, VulkanImage image){
-        
+    void update_descriptor_set(DescriptorSet set, VulkanImage image, uint32_t bind){
+        update_storage_image_descriptor(set, std::span<VulkanImage>(&image, 1), bind);
     }
 };
 
