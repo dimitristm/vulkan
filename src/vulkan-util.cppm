@@ -498,6 +498,7 @@ export struct VulkanEngine{
     VmaAllocator allocator;
     VkDescriptorPool descriptor_pool;
     APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
+    const uint64_t timeout_length = 3000000000;
 
  private:
     // These are used in the destructor to delete everything this engine made.
@@ -510,7 +511,7 @@ export struct VulkanEngine{
     std::vector<VkCommandPool> created_command_pools;
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
-    std::vector<VkDescriptorSetLayout> layouts_to_delete; // TODO: delete the layouts
+    std::vector<VkDescriptorSetLayout> layouts_to_delete;
 
  public:
     VulkanEngine(SDL_Window *window) {
@@ -562,36 +563,13 @@ export struct VulkanEngine{
         this->descriptor_pool = create_descriptor_pool(device, 1000, 200);
     };
 
-    Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
-        assert((created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
-
-        glm::ivec2 size;
-        SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
-        Swapchain swapchain{
-            physical_device, device, surface, size, present_mode
-        };
-        created_swapchains.push_back({swapchain.swapchain, swapchain.image_views});
-        return swapchain;
-    }
-
-    VulkanImage create_image(
-        VkExtent3D extent,
-        VkFormat format,
-        VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags,
-        VmaAllocator allocator,
-        VkImageLayout layout)
-    {
-        VulkanImage image{
-            device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
-        };
-        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .view=image.view, .allocation=image.allocation});
-        return image;
-    }
-
     ~VulkanEngine(){
         vkDeviceWaitIdle(device);
 
+        vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+        for(auto &layout : layouts_to_delete){
+            vkDestroyDescriptorSetLayout(device, layout, nullptr);
+        }
         for(auto &command_pool : created_command_pools){
             vkDestroyCommandPool(device, command_pool, nullptr);
         }
@@ -619,11 +597,38 @@ export struct VulkanEngine{
         layouts_to_delete.push_back(layout);
     }
 
+    Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
+        assert((created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
+
+        glm::ivec2 size;
+        SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
+        Swapchain swapchain{
+            physical_device, device, surface, size, present_mode
+        };
+        created_swapchains.push_back({swapchain.swapchain, swapchain.image_views});
+        return swapchain;
+    }
+
+    VulkanImage create_image(
+        VkExtent3D extent,
+        VkFormat format,
+        VkImageUsageFlags image_usage_flags,
+        VkMemoryPropertyFlagBits memory_property_flags,
+        VmaAllocator allocator,
+        VkImageLayout layout)
+    {
+        VulkanImage image{
+            device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
+        };
+        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .view=image.view, .allocation=image.allocation});
+        return image;
+    }
+
     DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout) const{
         return {device, layout, descriptor_pool};
     }
 
-    void update_storage_image_descriptor(DescriptorSet set, std::span<VulkanImage> images, uint32_t bind){
+    void update_storage_image_descriptor(DescriptorSet set, std::span<VulkanImage> images, uint32_t bind) const{
         std::vector<VkDescriptorImageInfo> img_infos;
         for (auto image : images){
             img_infos.push_back({
@@ -649,9 +654,88 @@ export struct VulkanEngine{
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
-    void update_descriptor_set(DescriptorSet set, VulkanImage image, uint32_t bind){
+    void update_storage_image_descriptor(DescriptorSet &set, VulkanImage &image, uint32_t bind) const{
         update_storage_image_descriptor(set, std::span<VulkanImage>(&image, 1), bind);
     }
+
+    void wait(GpuFence &fence) const{
+        VK_CHECK(vkWaitForFences(device, 1, &fence.fence, (VkBool32)true, timeout_length));
+        VK_CHECK(vkResetFences(device, 1, &fence.fence));
+    }
+
+    // Returns the index of the next image in the swapchain
+    [[nodiscard]] uint32_t acquire_next_image(const Swapchain &swapchain, GpuSemaphore wait_sema) const{
+        uint32_t swapchain_image_index;
+        VK_CHECK(vkAcquireNextImageKHR(device, swapchain.swapchain, timeout_length, wait_sema.semaphore, nullptr, &swapchain_image_index));
+        return swapchain_image_index;
+    }
+
+    void restart_buffer(CommandBuffer cmd_buffer, bool one_time_submit){
+        VK_CHECK(vkResetCommandBuffer(cmd_buffer.buffer, 0));
+        VkCommandBufferBeginInfo begin_info = struct_makers::command_buffer_begin_info(
+            one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
+        );
+	    VK_CHECK(vkBeginCommandBuffer(cmd_buffer.buffer, &begin_info));
+    }
+
+    void transition(
+        const CommandBuffer &cmd_buffer,
+        const VulkanImage &img,
+        VkImageLayout new_layout,
+        VkPipelineStageFlags2 src_stage_mask,
+        VkAccessFlags2 src_access_mask,
+        VkPipelineStageFlags2 dst_stage_mask,
+        VkAccessFlags2 dst_access_mask)
+    {
+        VkImageMemoryBarrier2 imageBarrier {};
+        imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        imageBarrier.pNext = nullptr;
+        imageBarrier.srcStageMask = src_stage_mask;
+        imageBarrier.srcAccessMask = src_access_mask;
+        imageBarrier.dstStageMask = dst_stage_mask;
+        imageBarrier.dstAccessMask = dst_access_mask;
+        imageBarrier.oldLayout = img.layout;
+        imageBarrier.newLayout = new_layout;
+        VkImageAspectFlags aspectMask = (new_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;//todo think more about this
+        imageBarrier.subresourceRange = struct_makers::image_subresource_range(aspectMask);
+        imageBarrier.image = img.vk_image;
+
+        VkDependencyInfo depInfo {};
+        depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        depInfo.pNext = nullptr;
+        depInfo.imageMemoryBarrierCount = 1; //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
+        depInfo.pImageMemoryBarriers = &imageBarrier;
+
+        vkCmdPipelineBarrier2(cmd_buffer.buffer, &depInfo);
+    }
+
+    void submit_commands(
+        CommandBuffer cmd_buffer,
+        GpuSemaphore wait_sema,//todo: use std::optional for cases where we don't signal/wait
+        VkPipelineStageFlagBits2 wait_stage_mask,
+        GpuSemaphore signal_sema,
+        VkPipelineStageFlagBits2 signal_stage_mask,
+        GpuFence signal_fence) const
+    {
+        VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer.buffer);
+        VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(wait_stage_mask, wait_sema.semaphore);
+        VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(signal_stage_mask, signal_sema.semaphore);
+	    VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
+        VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, signal_fence.fence));
+    }
+
+    void present(const Swapchain& swapchain, GpuSemaphore wait_sema, uint32_t swapchain_image_index) const{
+        VkPresentInfoKHR present_info = {};
+        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        present_info.pNext = nullptr;
+        present_info.pSwapchains = &swapchain.swapchain;
+        present_info.swapchainCount = 1;
+        present_info.pWaitSemaphores = &wait_sema.semaphore;
+        present_info.waitSemaphoreCount = 1;
+        present_info.pImageIndices = &swapchain_image_index;
+        VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
+    }
+
 };
 
 // This is what you're meant to use instead of Layouts and Layout Bindings. You can
