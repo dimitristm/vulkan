@@ -476,7 +476,11 @@ export struct CommandBuffer{
 
 export struct DescriptorSet{
     VkDescriptorSet set;
-    DescriptorSet(VkDevice device, VkDescriptorSetLayout layout, VkDescriptorPool pool){
+    VkDescriptorSetLayout layout;
+
+    DescriptorSet(VkDevice device, VkDescriptorSetLayout layout, VkDescriptorPool pool)
+    :layout(layout)
+    {
         VkDescriptorSetAllocateInfo alloc_info = {};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         alloc_info.pNext = nullptr;
@@ -484,6 +488,104 @@ export struct DescriptorSet{
         alloc_info.descriptorSetCount = 1;
         alloc_info.pSetLayouts = &layout;
         VK_CHECK(vkAllocateDescriptorSets(device, &alloc_info, &set));
+    }
+};
+
+export struct ShaderModule{
+    VkShaderModule module;
+
+ private:
+    VkShaderModule load_shader_module(VkDevice device, const std::string_view filepath){
+        assert(filepath[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
+        // open the file. With cursor at the end
+        std::ifstream file(filepath.data(), std::ios::ate | std::ios::binary);
+
+        if (!file.is_open()) {
+            std::println("Error: could not open file {}", filepath);
+            abort();
+        }
+
+        // find what the size of the file is by looking up the location of the cursor
+        // because the cursor is at the end, it gives the size directly in bytes
+        size_t fileSize = (size_t)file.tellg();
+        std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+        file.seekg(0);
+        file.read((char*)buffer.data(), fileSize);
+        file.close();
+
+        // create a new shader module, using the buffer we loaded
+        VkShaderModuleCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.codeSize = buffer.size() * sizeof(uint32_t);
+        createInfo.pCode = buffer.data();
+
+        VkShaderModule shader_module;
+        if (vkCreateShaderModule(device, &createInfo, nullptr, &shader_module) != VK_SUCCESS) {
+            std::println("Error: could not create shader module for shader {}", filepath);
+            abort();
+        }
+        return shader_module;
+    }
+ public:
+
+    ShaderModule(VkDevice device, const std::string_view filepath)
+    :module(load_shader_module(device, filepath))
+    {}
+
+    ShaderModule(VkShaderModule module)
+    :module(module)
+    {}
+};
+
+export struct ComputePipeline{
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+
+
+    void init_compute_pipeline(VkDevice device, std::span<DescriptorSet> descriptors, ShaderModule shader_module){
+        // The max this function supports, not the max the machine supprts. That must be queried independently.
+        const int max_descriptor_sets_in_shader = 32;
+        if(descriptors.size() <= max_descriptor_sets_in_shader){
+            std::println("Error: Too many descriptor sets in one shader.");
+        }
+
+        std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> layouts;
+        for (int i = 0; i < descriptors.size(); ++i) {
+          layouts.at(i) = descriptors[i].layout;
+        }
+
+        VkPipelineLayoutCreateInfo computeLayout{};
+        computeLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        computeLayout.pNext = nullptr;
+        computeLayout.pSetLayouts = layouts.data();
+        computeLayout.setLayoutCount = layouts.size();
+        VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
+
+        VkShaderModule compute_shader = shader_module.module;
+        VkPipelineShaderStageCreateInfo stageinfo{};
+        stageinfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageinfo.pNext = nullptr;
+        stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageinfo.module = compute_shader;
+        stageinfo.pName = "main";
+
+        VkComputePipelineCreateInfo computePipelineCreateInfo{};
+        computePipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        computePipelineCreateInfo.pNext = nullptr;
+        computePipelineCreateInfo.layout = layout;
+        computePipelineCreateInfo.stage = stageinfo;
+        VK_CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
+    }
+
+    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, ShaderModule shader_module){
+        init_compute_pipeline(device, descriptors, shader_module);
+    }
+
+    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, std::string_view shader_filepath){
+        ShaderModule shader_module = ShaderModule(device, shader_filepath);
+        init_compute_pipeline(device, descriptors, shader_module);
+        vkDestroyShaderModule(device, shader_module.module, nullptr);
     }
 };
 
@@ -624,6 +726,24 @@ export struct VulkanEngine{
         return image;
     }
 
+    CommandPool create_pool(){
+        CommandPool pool(device, graphics_queue_family);
+        created_command_pools.push_back(pool.pool);
+        return pool;
+    }
+
+    GpuFence create_fence(bool signaled){
+        GpuFence fence(device, signaled);
+        created_fences.push_back(fence.fence);
+        return fence;
+    }
+
+    GpuSemaphore create_semaphore(){
+        GpuSemaphore sema(device);
+        created_semaphores.push_back(sema.semaphore);
+        return sema;
+    }
+
     DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout) const{
         return {device, layout, descriptor_pool};
     }
@@ -725,15 +845,21 @@ export struct VulkanEngine{
     }
 
     void present(const Swapchain& swapchain, GpuSemaphore wait_sema, uint32_t swapchain_image_index) const{
-        VkPresentInfoKHR present_info = {};
-        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.pNext = nullptr;
-        present_info.pSwapchains = &swapchain.swapchain;
-        present_info.swapchainCount = 1;
-        present_info.pWaitSemaphores = &wait_sema.semaphore;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pImageIndices = &swapchain_image_index;
+        VkPresentInfoKHR present_info = {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &wait_sema.semaphore,
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain.swapchain,
+            .pImageIndices = &swapchain_image_index,
+            .pResults{},
+        };
         VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
+    }
+
+    void create_pipeline(){
+
     }
 
 };
