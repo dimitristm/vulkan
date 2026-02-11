@@ -385,15 +385,25 @@ export struct Swapchain{
     }
 };
 
-export struct VulkanImage{
+export enum class ImageAspects:VkImageAspectFlags{
+    COLOR = VK_IMAGE_ASPECT_COLOR_BIT,
+    DEPTH = VK_IMAGE_ASPECT_DEPTH_BIT,
+    STENCIL = VK_IMAGE_ASPECT_STENCIL_BIT,
+    DEPTH_STENCIL = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+};
+
+export struct Image{
     VkImage vk_image;
     VkImageView view;
     VmaAllocation allocation;
     VkExtent3D extent;
     VkFormat format;
+
+    // Important to remember that this isn't the layout the image is currently in, but is instead
+    // the layout that the latest recorded image barrier command (transition command) has transitioned it to
     VkImageLayout layout;
 
-    VulkanImage(
+    Image(
         VkDevice device,
         VkExtent3D extent,
         VkFormat format,
@@ -436,6 +446,12 @@ export struct GpuFence{
 };
 
 export struct GpuSemaphore{
+
+    GpuSemaphore(const GpuSemaphore&) = default;
+    GpuSemaphore(GpuSemaphore&&) noexcept = default;
+    GpuSemaphore& operator=(const GpuSemaphore&) = default;
+    GpuSemaphore& operator=(GpuSemaphore&&) noexcept = default;
+
     VkSemaphore semaphore;
     GpuSemaphore(VkDevice device){
         VkSemaphoreCreateInfo semaphore_create_info{
@@ -457,20 +473,6 @@ export struct CommandPool{
             .queueFamilyIndex = graphics_queue_family,
         };
         VK_CHECK(vkCreateCommandPool(device, &command_pool_info, nullptr, &pool));
-    }
-};
-
-export struct CommandBuffer{
-    VkCommandBuffer buffer;
-    CommandBuffer(VkDevice device, VkCommandPool pool){
-        VkCommandBufferAllocateInfo alloc_info{
-            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext              = nullptr,
-            .commandPool        = pool,
-            .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
     }
 };
 
@@ -542,7 +544,6 @@ export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
 
-
     void init_compute_pipeline(VkDevice device, std::span<DescriptorSet> descriptors, ShaderModule shader_module){
         // The max this function supports, not the max the machine supprts. That must be queried independently.
         const int max_descriptor_sets_in_shader = 32;
@@ -589,6 +590,133 @@ export struct ComputePipeline{
     }
 };
 
+export struct CommandBuffer{
+    VkCommandBuffer buffer;
+    CommandBuffer(VkDevice device, VkCommandPool pool){
+        VkCommandBufferAllocateInfo alloc_info{
+            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext              = nullptr,
+            .commandPool        = pool,
+            .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
+    }
+
+    void transition(
+        const Image &img,
+        VkImageLayout new_layout,
+        VkPipelineStageFlags2 src_stage_mask,
+        VkAccessFlags2 src_access_mask,
+        VkPipelineStageFlags2 dst_stage_mask,
+        VkAccessFlags2 dst_access_mask) const
+    {
+        VkImageMemoryBarrier2 image_barrier {};
+        image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        image_barrier.pNext = nullptr;
+        image_barrier.srcStageMask = src_stage_mask;
+        image_barrier.srcAccessMask = src_access_mask;
+        image_barrier.dstStageMask = dst_stage_mask;
+        image_barrier.dstAccessMask = dst_access_mask;
+        image_barrier.oldLayout = img.layout;
+        image_barrier.newLayout = new_layout;
+        VkImageAspectFlags aspectMask = (new_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;//todo think more about this
+        image_barrier.subresourceRange = struct_makers::image_subresource_range(aspectMask);
+        image_barrier.image = img.vk_image;
+
+        VkDependencyInfo dep_info {};
+        dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep_info.pNext = nullptr;
+        dep_info.imageMemoryBarrierCount = 1; //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
+        dep_info.pImageMemoryBarriers = &image_barrier;
+
+        vkCmdPipelineBarrier2(this->buffer, &dep_info);
+    }
+
+    void blit(
+        Image source,
+        Image destination,
+        glm::ivec2 src_top_left,
+        glm::ivec2 src_bottom_right,
+        glm::ivec2 dst_top_left,
+        glm::ivec2 dst_bottom_right,
+        ImageAspects aspects) const // should use VkCmdCopyImage instead? check best practices
+    {
+        assert(source.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL for performance reasons.");
+        assert(destination.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for performance reasons.");
+
+        VkImageBlit2 blit_region{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
+            .pNext = nullptr,
+
+            .srcSubresource{
+                .aspectMask = static_cast<VkImageAspectFlags>(aspects),
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .srcOffsets{
+                {src_top_left.x, src_top_left.y, 0},
+                {src_bottom_right.x, src_bottom_right.y, 1},
+            },
+
+            .dstSubresource{
+                .aspectMask = static_cast<VkImageAspectFlags>(aspects),
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+
+            },
+            .dstOffsets{
+                {dst_top_left.x, dst_top_left.y, 0},
+                {dst_bottom_right.x, dst_bottom_right.y, 1},
+            },
+        };
+        VkBlitImageInfo2 blit_info{
+            .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
+            .pNext = nullptr,
+            .srcImage = source.vk_image,
+            .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            .dstImage = destination.vk_image,
+            .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .regionCount = 1,
+            .pRegions = &blit_region,
+            .filter = VK_FILTER_LINEAR,
+        };
+        vkCmdBlitImage2(this->buffer, &blit_info);
+    }
+
+    void blit_entire_images(Image source, Image destination, ImageAspects aspects) const    {
+        blit(source, destination, {0,0}, {source.extent.width, source.extent.height}, {0,0}, {destination.extent.width, destination.extent.height}, aspects);
+    }
+
+    void bind_pipeline(ComputePipeline pipeline) const{
+        vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    }
+
+    void bind_descriptor_sets(ComputePipeline pipeline, std::span<DescriptorSet> sets) const{
+        const int max_sets = 32;
+        if (sets.size() <= max_sets){
+            std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
+            abort();
+        };
+        VkDescriptorSet vk_sets[max_sets];
+        for(int i = 0; i < sets.size(); ++i){
+            vk_sets[i] = sets[i].set;
+        }
+
+	vkCmdBindDescriptorSets(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout, 0, sets.size(), vk_sets, 0, nullptr);
+    }
+    void bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet sets) const{
+        bind_descriptor_sets(pipeline, std::span<DescriptorSet>(&sets, 1));
+    }
+
+    void dispatch(uint32_t x, uint32_t y, uint32_t z) const{
+	vkCmdDispatch(this->buffer, x, y, z);
+    }
+
+};
+
 export struct VulkanEngine{
     VkInstance vk_instance;
     VkDebugUtilsMessengerEXT debug_messenger;
@@ -614,8 +742,14 @@ export struct VulkanEngine{
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
     std::vector<VkDescriptorSetLayout> layouts_to_delete;
+    std::vector<ComputePipeline> created_compute_pipelines;
 
  public:
+    VulkanEngine(const VulkanEngine &) = delete;
+    VulkanEngine(VulkanEngine &&) = delete;
+    VulkanEngine &operator=(const VulkanEngine &) = delete;
+    VulkanEngine &operator=(VulkanEngine &&) = delete;
+
     VulkanEngine(SDL_Window *window) {
         vkb::InstanceBuilder builder;
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
@@ -668,6 +802,13 @@ export struct VulkanEngine{
     ~VulkanEngine(){
         vkDeviceWaitIdle(device);
 
+        for(auto &compute_pipeline : created_compute_pipelines){
+            vkDestroyPipelineLayout(device, compute_pipeline.layout, nullptr);
+        }
+        for(auto &compute_pipeline : created_compute_pipelines){
+            vkDestroyPipeline(device, compute_pipeline.pipeline, nullptr);
+        }
+
         vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
         for(auto &layout : layouts_to_delete){
             vkDestroyDescriptorSetLayout(device, layout, nullptr);
@@ -711,7 +852,7 @@ export struct VulkanEngine{
         return swapchain;
     }
 
-    VulkanImage create_image(
+    Image create_image(
         VkExtent3D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
@@ -719,7 +860,7 @@ export struct VulkanEngine{
         VmaAllocator allocator,
         VkImageLayout layout)
     {
-        VulkanImage image{
+        Image image{
             device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
         };
         created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .view=image.view, .allocation=image.allocation});
@@ -744,11 +885,35 @@ export struct VulkanEngine{
         return sema;
     }
 
-    DescriptorSet allocate_descriptor_set_from_layout(VkDescriptorSetLayout layout) const{
+    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, ShaderModule module){
+        ComputePipeline pipeline(device, descriptors, module);
+        created_compute_pipelines.push_back(pipeline);
+        return pipeline;
+    }
+
+    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, std::string_view filepath){
+        ComputePipeline pipeline(device, descriptors, filepath);
+        created_compute_pipelines.push_back(pipeline);
+        return pipeline;
+    }
+
+    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, ShaderModule module){
+        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), module);
+    }
+
+    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, std::string_view filepath){
+        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), filepath);
+    }
+
+    [[nodiscard]] CommandBuffer create_command_buffer(CommandPool pool) const{
+        return {device, pool.pool};
+    }
+
+    DescriptorSet allocate_descriptor_set(VkDescriptorSetLayout layout) const{
         return {device, layout, descriptor_pool};
     }
 
-    void update_storage_image_descriptor(DescriptorSet set, std::span<VulkanImage> images, uint32_t bind) const{
+    void update_storage_image_descriptor(DescriptorSet set, std::span<Image> images, uint32_t bind) const{
         std::vector<VkDescriptorImageInfo> img_infos;
         for (auto image : images){
             img_infos.push_back({
@@ -774,8 +939,8 @@ export struct VulkanEngine{
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
-    void update_storage_image_descriptor(DescriptorSet &set, VulkanImage &image, uint32_t bind) const{
-        update_storage_image_descriptor(set, std::span<VulkanImage>(&image, 1), bind);
+    void update_storage_image_descriptor(DescriptorSet &set, Image &image, uint32_t bind) const{
+        update_storage_image_descriptor(set, std::span<Image>(&image, 1), bind);
     }
 
     void wait(GpuFence &fence) const{
@@ -790,43 +955,12 @@ export struct VulkanEngine{
         return swapchain_image_index;
     }
 
-    void restart_buffer(CommandBuffer cmd_buffer, bool one_time_submit){
+    static void restart_buffer(CommandBuffer cmd_buffer, bool one_time_submit){
         VK_CHECK(vkResetCommandBuffer(cmd_buffer.buffer, 0));
         VkCommandBufferBeginInfo begin_info = struct_makers::command_buffer_begin_info(
             one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
         );
 	    VK_CHECK(vkBeginCommandBuffer(cmd_buffer.buffer, &begin_info));
-    }
-
-    void transition(
-        const CommandBuffer &cmd_buffer,
-        const VulkanImage &img,
-        VkImageLayout new_layout,
-        VkPipelineStageFlags2 src_stage_mask,
-        VkAccessFlags2 src_access_mask,
-        VkPipelineStageFlags2 dst_stage_mask,
-        VkAccessFlags2 dst_access_mask)
-    {
-        VkImageMemoryBarrier2 imageBarrier {};
-        imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        imageBarrier.pNext = nullptr;
-        imageBarrier.srcStageMask = src_stage_mask;
-        imageBarrier.srcAccessMask = src_access_mask;
-        imageBarrier.dstStageMask = dst_stage_mask;
-        imageBarrier.dstAccessMask = dst_access_mask;
-        imageBarrier.oldLayout = img.layout;
-        imageBarrier.newLayout = new_layout;
-        VkImageAspectFlags aspectMask = (new_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;//todo think more about this
-        imageBarrier.subresourceRange = struct_makers::image_subresource_range(aspectMask);
-        imageBarrier.image = img.vk_image;
-
-        VkDependencyInfo depInfo {};
-        depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        depInfo.pNext = nullptr;
-        depInfo.imageMemoryBarrierCount = 1; //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
-        depInfo.pImageMemoryBarriers = &imageBarrier;
-
-        vkCmdPipelineBarrier2(cmd_buffer.buffer, &depInfo);
     }
 
     void submit_commands(
@@ -840,7 +974,7 @@ export struct VulkanEngine{
         VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer.buffer);
         VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(wait_stage_mask, wait_sema.semaphore);
         VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(signal_stage_mask, signal_sema.semaphore);
-	    VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
+        VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, signal_fence.fence));
     }
 
@@ -856,10 +990,6 @@ export struct VulkanEngine{
             .pResults{},
         };
         VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
-    }
-
-    void create_pipeline(){
-
     }
 
 };
@@ -898,16 +1028,24 @@ export struct DescriptorSetBuilder{
             finalized = true;
         }
 
-        return engine.allocate_descriptor_set_from_layout(layout);
+        return engine.allocate_descriptor_set(layout);
     }
 };
 
 struct FrameData {
-    VkSemaphore swapchain_semaphore;
-    VkSemaphore render_semaphore;
-    VkFence render_fence;
-    VkCommandPool command_pool;
-    VkCommandBuffer main_command_buffer;
+    GpuSemaphore swapchain_semaphore;
+    GpuSemaphore render_semaphore;
+    GpuFence render_fence;
+    CommandPool command_pool;
+    CommandBuffer main_command_buffer;
+
+    FrameData(VulkanEngine &engine)
+    :swapchain_semaphore(engine.create_semaphore()),
+     render_semaphore(engine.create_semaphore()),
+     render_fence(engine.create_fence(true)),
+     command_pool(engine.create_pool()),
+     main_command_buffer(engine.create_command_buffer(this->command_pool))
+    { }
 };
 
 

@@ -57,6 +57,7 @@ find_package(glm CONFIG REQUIRED)
 add_executable(vulkan-prog
     src/main.cpp
     src/vulkan-renderer.cppm
+    src/vulkan-renderer2.cppm
     src/vulkan-util.cppm
     vendored/vma_compilation_unit.cpp
     vendored/imgui.cpp
@@ -83,6 +84,7 @@ target_sources(vulkan-prog
         PRIVATE
         FILE_SET CXX_MODULES FILES
         src/vulkan-renderer.cppm
+        src/vulkan-renderer2.cppm
         src/vulkan-util.cppm
 )
 
