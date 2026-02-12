@@ -47,15 +47,26 @@ export module vulkanRenderer2;
 
 import vulkanUtil;
 
+static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
+    glm::ivec2 size;
+    SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
+    return size;
+}
+
 export class Renderer2{
 public:
     SDL_Window *window;
+    glm::ivec2 window_size;
     VulkanEngine vk;
-    glm::ivec2 window_size{};
+
+    Image draw_image;
 
     Renderer2(SDL_Window *window)
     :window(window),
-     vk(window)
+     window_size(get_window_size_in_pixels(window)),
+     vk(window),
+     draw_image(vk.create_image({window_size.x, window_size.y, 1}, ))
+     
     {
         SDL_GetWindowSizeInPixels(window, &window_size.x, &window_size.y);
     }

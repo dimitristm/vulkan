@@ -1,3 +1,4 @@
+#include <unordered_set>
 module;
 
 #include <SDL3/SDL.h>
@@ -394,7 +395,7 @@ export enum class ImageAspects:VkImageAspectFlags{
 
 export struct Image{
     VkImage vk_image;
-    VkImageView view;
+    //VkImageView view;
     VmaAllocation allocation;
     VkExtent3D extent;
     VkFormat format;
@@ -423,13 +424,39 @@ export struct Image{
         VmaAllocation allocation{};
         vmaCreateImage(allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
 
-        VkImageViewCreateInfo view_info = struct_makers::imageview_create_info(format, image, VK_IMAGE_ASPECT_COLOR_BIT);
-        VkImageView view{};
-        VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
-
         this->vk_image = image;
-        this->view = view;
         this->allocation = allocation;
+    }
+};
+
+export struct ImageView{
+    VkImageView view;
+
+    ImageView(
+        VkDevice device,
+        const Image &img,
+        ImageAspects aspects,
+        uint32_t base_mip_level,
+        uint32_t mip_level_count)
+    {
+        // todo add asserts that make sure the aspect you gave makes sense
+         VkImageViewCreateInfo view_info{
+            .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext            = nullptr,
+            .flags{},
+            .image            = img.vk_image,
+            .viewType         = VK_IMAGE_VIEW_TYPE_2D,
+            .format           = img.format,
+            .components{},
+            .subresourceRange = {
+                .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
+                .baseMipLevel   = base_mip_level,
+                .levelCount     = mip_level_count,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+        };
+        VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
     }
 };
 
@@ -603,7 +630,7 @@ export struct CommandBuffer{
         VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
     }
 
-    void transition(
+    void barrier(
         const Image &img,
         VkImageLayout new_layout,
         VkPipelineStageFlags2 src_stage_mask,
@@ -634,8 +661,8 @@ export struct CommandBuffer{
     }
 
     void blit(
-        Image source,
-        Image destination,
+        const Image &source,
+        const Image &destination,
         glm::ivec2 src_top_left,
         glm::ivec2 src_bottom_right,
         glm::ivec2 dst_top_left,
@@ -686,15 +713,15 @@ export struct CommandBuffer{
         vkCmdBlitImage2(this->buffer, &blit_info);
     }
 
-    void blit_entire_images(Image source, Image destination, ImageAspects aspects) const    {
+    void blit_entire_images(const Image &source, const Image &destination, ImageAspects aspects) const    {
         blit(source, destination, {0,0}, {source.extent.width, source.extent.height}, {0,0}, {destination.extent.width, destination.extent.height}, aspects);
     }
 
-    void bind_pipeline(ComputePipeline pipeline) const{
+    void bind_pipeline(const ComputePipeline &pipeline) const{
         vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
-    void bind_descriptor_sets(ComputePipeline pipeline, std::span<DescriptorSet> sets) const{
+    void bind_descriptor_sets(const ComputePipeline &pipeline, std::span<DescriptorSet> sets) const{
         const int max_sets = 32;
         if (sets.size() <= max_sets){
             std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
@@ -736,8 +763,9 @@ export struct VulkanEngine{
     // Maybe I'll get around to deleting individual elements
     struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
-    struct ImageTrackingInfo{VkImage image; VkImageView view; VmaAllocation allocation;};
+    struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
     std::vector<ImageTrackingInfo> created_images;
+    std::unordered_set<VkImageView> created_image_views;
     std::vector<VkCommandPool> created_command_pools;
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
@@ -822,8 +850,10 @@ export struct VulkanEngine{
         for(auto &sema : created_semaphores){
             vkDestroySemaphore(device, sema, nullptr);
         }
+        for(auto &img_view : created_image_views){
+            vkDestroyImageView(device, img_view, nullptr);
+        }
         for(auto &image : created_images){
-            vkDestroyImageView(device, image.view, nullptr);
             vmaDestroyImage(allocator, image.image, image.allocation);
         }
         for(auto &swapchain : created_swapchains){
@@ -857,14 +887,24 @@ export struct VulkanEngine{
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags,
-        VmaAllocator allocator,
         VkImageLayout layout)
     {
         Image image{
             device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
         };
-        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .view=image.view, .allocation=image.allocation});
+        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .allocation=image.allocation});
         return image;
+    }
+
+    ImageView create_image_view(
+        const Image &img,
+        ImageAspects aspects,
+        uint32_t base_mip_level,
+        uint32_t mip_level_count)
+    {
+        ImageView view(device, img, aspects, base_mip_level, mip_level_count);
+        created_image_views.insert(view.view);
+        return view;
     }
 
     CommandPool create_pool(){
@@ -913,12 +953,12 @@ export struct VulkanEngine{
         return {device, layout, descriptor_pool};
     }
 
-    void update_storage_image_descriptor(DescriptorSet set, std::span<Image> images, uint32_t bind) const{
+    void update_storage_image_descriptor(DescriptorSet set, std::span<ImageView> views, uint32_t bind) const{
         std::vector<VkDescriptorImageInfo> img_infos;
-        for (auto image : images){
+        for (auto image_view : views){
             img_infos.push_back({
                 .sampler{},
-                .imageView = image.view,
+                .imageView = image_view.view,
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
             });
         }
@@ -939,8 +979,8 @@ export struct VulkanEngine{
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
-    void update_storage_image_descriptor(DescriptorSet &set, Image &image, uint32_t bind) const{
-        update_storage_image_descriptor(set, std::span<Image>(&image, 1), bind);
+    void update_storage_image_descriptor(DescriptorSet &set, ImageView &view, uint32_t bind) const{
+        update_storage_image_descriptor(set, std::span<ImageView>(&view, 1), bind);
     }
 
     void wait(GpuFence &fence) const{
