@@ -1,4 +1,3 @@
-#include <unordered_set>
 module;
 
 #include <SDL3/SDL.h>
@@ -12,13 +11,9 @@ module;
 #include <vector>
 #include <span>
 #include <array>
-#include <thread>
-#include <chrono>
-#include <cmath>
 #include <print>
 #include <fstream>
-#include <functional>
-#include <tuple>
+#include <unordered_set>
 
 
 #include "imgui.h"
@@ -72,44 +67,6 @@ struct APIVersionVulkan{
 
 
 namespace struct_makers {
-
-static VkCommandPoolCreateInfo command_pool_create_info(
-    uint32_t queueFamilyIndex,
-    VkCommandPoolCreateFlags flags)
-{
-    return VkCommandPoolCreateInfo{
-        .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .pNext            = nullptr,
-        .flags            = flags,
-        .queueFamilyIndex = queueFamilyIndex,
-    };
-}
-
-static VkCommandBufferAllocateInfo command_buffer_allocate_info( VkCommandPool pool, uint32_t count){
-    return VkCommandBufferAllocateInfo{
-        .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext              = nullptr,
-        .commandPool        = pool,
-        .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = count,
-    };
-}
-
-static VkFenceCreateInfo fence_create_info(VkFenceCreateFlags flags){
-    return VkFenceCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = flags,
-    };
-}
-
-static VkSemaphoreCreateInfo semaphore_create_info(VkSemaphoreCreateFlags flags){
-    return VkSemaphoreCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = flags,
-    };
-}
 
 static VkCommandBufferBeginInfo command_buffer_begin_info(VkCommandBufferUsageFlags flags){
     return VkCommandBufferBeginInfo{
@@ -397,7 +354,7 @@ export struct Image{
     VkImage vk_image;
     //VkImageView view;
     VmaAllocation allocation;
-    VkExtent3D extent;
+    VkExtent2D extent;
     VkFormat format;
 
     // Important to remember that this isn't the layout the image is currently in, but is instead
@@ -405,18 +362,16 @@ export struct Image{
     VkImageLayout layout;
 
     Image(
-        VkDevice device,
-        VkExtent3D extent,
+        VmaAllocator allocator,
+        VkExtent2D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags,
-        VmaAllocator allocator,
-        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED)
+        VkMemoryPropertyFlagBits memory_property_flags)
     :extent(extent),
      format(format),
-     layout(layout)
+     layout(VK_IMAGE_LAYOUT_UNDEFINED)
     {
-        VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, extent, layout);
+        VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, {extent.width, extent.height, 1}, VK_IMAGE_LAYOUT_UNDEFINED);
         VmaAllocationCreateInfo img_alloc_info = {};
         img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
         img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
@@ -883,15 +838,14 @@ export struct VulkanEngine{
     }
 
     Image create_image(
-        VkExtent3D extent,
+        glm::uvec2 extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags,
-        VkImageLayout layout)
+        VkMemoryPropertyFlagBits memory_property_flags)
     {
-        Image image{
-            device, extent, format, image_usage_flags, memory_property_flags, allocator, layout
-        };
+        Image image(
+            allocator, {extent.x, extent.y}, format, image_usage_flags, memory_property_flags
+        );
         created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .allocation=image.allocation});
         return image;
     }
@@ -1072,7 +1026,7 @@ export struct DescriptorSetBuilder{
     }
 };
 
-struct FrameData {
+export struct FrameData {
     GpuSemaphore swapchain_semaphore;
     GpuSemaphore render_semaphore;
     GpuFence render_fence;

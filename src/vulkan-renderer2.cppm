@@ -53,21 +53,40 @@ static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     return size;
 }
 
+DescriptorSetBuilder asdf(){
+    DescriptorSetBuilder b;
+    b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    return b;
+}
+
 export class Renderer2{
 public:
+    static constexpr int FRAMES_IN_FLIGHT = 2;
+
     SDL_Window *window;
     glm::ivec2 window_size;
     VulkanEngine vk;
-
+    Swapchain swapchain;
     Image draw_image;
+    ImageView draw_image_view;
+    std::array<FrameData, FRAMES_IN_FLIGHT> frames;
+    DescriptorSetBuilder ds_builder;
+    DescriptorSet set;
 
     Renderer2(SDL_Window *window)
     :window(window),
      window_size(get_window_size_in_pixels(window)),
      vk(window),
-     draw_image(vk.create_image({window_size.x, window_size.y, 1}, ))
-     
-    {
-        SDL_GetWindowSizeInPixels(window, &window_size.x, &window_size.y);
-    }
+     swapchain(vk.create_swapchain(window, VK_PRESENT_MODE_FIFO_KHR)),
+     draw_image(vk.create_image(window_size,
+                                VK_FORMAT_R16G16B16A16_SFLOAT,
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                                | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                                | VK_IMAGE_USAGE_STORAGE_BIT
+                                | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)),
+     draw_image_view(vk.create_image_view(draw_image, ImageAspects::COLOR, 0, 1)),
+     frames({FrameData(vk), FrameData(vk)}),
+     ds_builder([]{DescriptorSetBuilder b; b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE); return b;}),
+    {}
 };
