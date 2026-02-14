@@ -273,76 +273,6 @@ static VmaAllocator init_vma_allocator(
     return allocator;
 }
 
-static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
-    for(auto &swapchain_image_view : swapchain_image_views){
-        vkDestroyImageView(device, swapchain_image_view, nullptr);
-    }
-}
-
-export struct Swapchain{
-    VkSwapchainKHR swapchain{};
-    VkFormat image_format = VK_FORMAT_B8G8R8A8_UNORM;
-    VkExtent2D extent{};
-    std::vector<VkImage> images;
-    std::vector<VkImageView> image_views;
-
-    Swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
-    {
-        build_swapchain(physical_device, device, surface, size, present_mode);
-    }
-    Swapchain() = default;
-
- private:
-    void build_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 &size,
-        VkPresentModeKHR present_mode)
-    {
-        vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
-        vkb::Swapchain vkb_swapchain = swapchain_builder
-            // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
-            // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
-            // as the last thing before blitting to swapchain and presenting.
-            .set_desired_format(VkSurfaceFormatKHR{ .format = image_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-            .set_desired_present_mode(present_mode)
-            .set_desired_extent(size.x, size.y)
-            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-            .build()
-            .value();
-
-        this->extent = vkb_swapchain.extent;
-        this->swapchain = vkb_swapchain.swapchain;
-        this->images = vkb_swapchain.get_images().value();
-        this->image_views = vkb_swapchain.get_image_views().value();
-    }
-
- public:
-    // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
-    // VulkanInstanceInfo that made it.
-    void destroy_this_swapchain(VkDevice device){
-        destroy_swapchain(swapchain, device, image_views);
-    }
-
-    void rebuild_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
-    {
-        destroy_this_swapchain(device);
-        build_swapchain(physical_device, device, surface, size, present_mode);
-    }
-};
-
 export enum class ImageAspects:VkImageAspectFlags{
     COLOR = VK_IMAGE_ASPECT_COLOR_BIT,
     DEPTH = VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -352,14 +282,12 @@ export enum class ImageAspects:VkImageAspectFlags{
 
 export struct Image{
     VkImage vk_image;
-    //VkImageView view;
     VmaAllocation allocation;
     VkExtent2D extent;
     VkFormat format;
-
     // Important to remember that this isn't the layout the image is currently in, but is instead
     // the layout that the latest recorded image barrier command (transition command) has transitioned it to
-    VkImageLayout layout;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     Image(
         VmaAllocator allocator,
@@ -368,8 +296,7 @@ export struct Image{
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags)
     :extent(extent),
-     format(format),
-     layout(VK_IMAGE_LAYOUT_UNDEFINED)
+     format(format)
     {
         VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, {extent.width, extent.height, 1}, VK_IMAGE_LAYOUT_UNDEFINED);
         VmaAllocationCreateInfo img_alloc_info = {};
@@ -382,6 +309,10 @@ export struct Image{
         this->vk_image = image;
         this->allocation = allocation;
     }
+
+    Image(VkImage img, VkExtent2D extent, VkFormat format)
+    :vk_image(img), allocation(nullptr), extent(extent), format(format)
+    {}
 };
 
 export struct ImageView{
@@ -412,6 +343,85 @@ export struct ImageView{
             },
         };
         VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
+    }
+};
+
+
+static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    for(auto &swapchain_image_view : swapchain_image_views){
+        vkDestroyImageView(device, swapchain_image_view, nullptr);
+    }
+}
+
+export struct Swapchain{
+    VkSwapchainKHR swapchain{};
+    VkFormat image_format{};
+    VkExtent2D extent{};
+    std::vector<Image> images;
+    std::vector<VkImageView> image_views;
+
+    std::vector<Image> &get_images(){ return images; }
+
+    Swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 size,
+        VkPresentModeKHR present_mode)
+    {
+        build_swapchain(physical_device, device, surface, size, present_mode);
+    }
+    Swapchain() = default;
+
+
+ private:
+    void build_swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 &size,
+        VkPresentModeKHR present_mode)
+    {
+        vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
+        vkb::Swapchain vkb_swapchain = swapchain_builder
+            // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
+            // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
+            // as the last thing before blitting to swapchain and presenting.
+            .set_desired_format(VkSurfaceFormatKHR{ .format = image_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+            .set_desired_present_mode(present_mode)
+            .set_desired_extent(size.x, size.y)
+            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .build()
+            .value();
+
+        this->extent = vkb_swapchain.extent;
+        this->swapchain = vkb_swapchain.swapchain;
+
+        std::vector<VkImage> vk_images = vkb_swapchain.get_images().value();
+        for (const auto &vk_img : vk_images){
+            this->images.emplace_back(vk_img, vkb_swapchain.extent, vkb_swapchain.image_format);
+        }
+        this->image_views = vkb_swapchain.get_image_views().value();
+        this->image_format = vkb_swapchain.image_format;
+    }
+
+ public:
+    // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
+    // VulkanInstanceInfo that made it.
+    void destroy_this_swapchain(VkDevice device){
+        destroy_swapchain(swapchain, device, image_views);
+    }
+
+    void rebuild_swapchain(
+        VkPhysicalDevice physical_device,
+        VkDevice device,
+        VkSurfaceKHR surface,
+        glm::uvec2 size,
+        VkPresentModeKHR present_mode)
+    {
+        destroy_this_swapchain(device);
+        build_swapchain(physical_device, device, surface, size, present_mode);
     }
 };
 
@@ -585,32 +595,53 @@ export struct CommandBuffer{
         VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
     }
 
+
+    void restart(bool one_time_submit) const{
+        VK_CHECK(vkResetCommandBuffer(buffer, 0));
+        VkCommandBufferBeginInfo begin_info = struct_makers::command_buffer_begin_info(
+            one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
+        );
+        VK_CHECK(vkBeginCommandBuffer(buffer, &begin_info));
+    }
+
     void barrier(
         const Image &img,
+        bool discard_current_data,
         VkImageLayout new_layout,
         VkPipelineStageFlags2 src_stage_mask,
         VkAccessFlags2 src_access_mask,
         VkPipelineStageFlags2 dst_stage_mask,
-        VkAccessFlags2 dst_access_mask) const
+        VkAccessFlags2 dst_access_mask,
+        ImageAspects aspects,
+        uint32_t base_mip_level  = 0,
+        uint32_t mip_level_count = VK_REMAINING_MIP_LEVELS) const
     {
-        VkImageMemoryBarrier2 image_barrier {};
-        image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        image_barrier.pNext = nullptr;
-        image_barrier.srcStageMask = src_stage_mask;
-        image_barrier.srcAccessMask = src_access_mask;
-        image_barrier.dstStageMask = dst_stage_mask;
-        image_barrier.dstAccessMask = dst_access_mask;
-        image_barrier.oldLayout = img.layout;
-        image_barrier.newLayout = new_layout;
-        VkImageAspectFlags aspectMask = (new_layout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;//todo think more about this
-        image_barrier.subresourceRange = struct_makers::image_subresource_range(aspectMask);
-        image_barrier.image = img.vk_image;
+        VkImageMemoryBarrier2 image_barrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = src_stage_mask,
+            .srcAccessMask = src_access_mask,
+            .dstStageMask = dst_stage_mask,
+            .dstAccessMask = dst_access_mask,
+            .oldLayout = discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout,
+            .newLayout = new_layout,
+            .image = img.vk_image,
+            .subresourceRange = {
+                .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
+                .baseMipLevel   = base_mip_level,
+                .levelCount     = mip_level_count,
+                .baseArrayLayer = 0,
+                .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+            },
+        };
 
-        VkDependencyInfo dep_info {};
-        dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep_info.pNext = nullptr;
-        dep_info.imageMemoryBarrierCount = 1; //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
-        dep_info.pImageMemoryBarriers = &image_barrier;
+
+        VkDependencyInfo dep_info {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .imageMemoryBarrierCount = 1, //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
+            .pImageMemoryBarriers = &image_barrier,
+        };
 
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
     }
@@ -949,14 +980,6 @@ export struct VulkanEngine{
         return swapchain_image_index;
     }
 
-    static void restart_buffer(CommandBuffer cmd_buffer, bool one_time_submit){
-        VK_CHECK(vkResetCommandBuffer(cmd_buffer.buffer, 0));
-        VkCommandBufferBeginInfo begin_info = struct_makers::command_buffer_begin_info(
-            one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
-        );
-	    VK_CHECK(vkBeginCommandBuffer(cmd_buffer.buffer, &begin_info));
-    }
-
     void submit_commands(
         CommandBuffer cmd_buffer,
         GpuSemaphore wait_sema,//todo: use std::optional for cases where we don't signal/wait
@@ -992,10 +1015,10 @@ export struct VulkanEngine{
 // keep using build as many times as you want just like you would with a Layout.
 export struct DescriptorSetBuilder{
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    VkDescriptorSetLayout layout;
+    VkDescriptorSetLayout layout{};
     bool finalized = false;
 
-    consteval DescriptorSetBuilder& bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL){
+    DescriptorSetBuilder &bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL){
         finalized = false;
         VkDescriptorSetLayoutBinding new_bind{
             .binding = binding,

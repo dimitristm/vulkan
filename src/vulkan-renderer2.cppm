@@ -53,12 +53,6 @@ static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     return size;
 }
 
-DescriptorSetBuilder asdf(){
-    DescriptorSetBuilder b;
-    b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-    return b;
-}
-
 export class Renderer2{
 public:
     static constexpr int FRAMES_IN_FLIGHT = 2;
@@ -66,12 +60,18 @@ public:
     SDL_Window *window;
     glm::ivec2 window_size;
     VulkanEngine vk;
+
     Swapchain swapchain;
     Image draw_image;
     ImageView draw_image_view;
     std::array<FrameData, FRAMES_IN_FLIGHT> frames;
+
     DescriptorSetBuilder ds_builder;
-    DescriptorSet set;
+    DescriptorSet desc_set;
+
+    ComputePipeline gradient_pipeline;
+
+    uint32_t frame_count{};
 
     Renderer2(SDL_Window *window)
     :window(window),
@@ -87,6 +87,72 @@ public:
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)),
      draw_image_view(vk.create_image_view(draw_image, ImageAspects::COLOR, 0, 1)),
      frames({FrameData(vk), FrameData(vk)}),
-     ds_builder([]{DescriptorSetBuilder b; b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE); return b;}),
+     ds_builder([&] -> DescriptorSetBuilder{
+            DescriptorSetBuilder b;
+            b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+            return b;
+     }()),
+     desc_set(ds_builder.build(vk)),
+     gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv"))
     {}
+
+    FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
+
+    void draw(){
+        FrameData &frame_data = get_current_frame();
+        vk.wait(frame_data.render_fence);
+        uint32_t swapchain_img_idx = vk.acquire_next_image(swapchain, frame_data.swapchain_semaphore);
+
+        CommandBuffer &cmd_buffer = frame_data.main_command_buffer;
+        cmd_buffer.restart(true);
+        cmd_buffer.barrier(draw_image,
+                           true,
+                           VK_IMAGE_LAYOUT_GENERAL,
+                           VK_PIPELINE_STAGE_2_NONE,
+                           0,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                           ImageAspects::COLOR
+        );
+
+        cmd_buffer.bind_pipeline(gradient_pipeline);
+        cmd_buffer.bind_descriptor_sets(gradient_pipeline, desc_set);
+        cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
+
+        cmd_buffer.barrier(draw_image,
+                           false,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT,
+                           ImageAspects::COLOR
+        );
+
+        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
+                           true,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_NONE,
+                           0,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           ImageAspects::COLOR
+        );
+
+        cmd_buffer.blit_entire_images(draw_image,
+                                      swapchain.get_images()[swapchain_img_idx],
+                                      ImageAspects::COLOR
+        );
+
+        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
+                           false,
+                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_NONE,
+                           0,
+                           ImageAspects::COLOR
+        );
+
+    }
 };
