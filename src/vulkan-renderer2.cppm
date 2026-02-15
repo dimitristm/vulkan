@@ -98,12 +98,13 @@ public:
 
     void draw(){
         FrameData &frame_data = get_current_frame();
+
         vk.wait(frame_data.render_fence);
         uint32_t swapchain_img_idx = vk.acquire_next_image(swapchain, frame_data.swapchain_semaphore);
 
         CommandBuffer &cmd_buffer = frame_data.main_command_buffer;
         cmd_buffer.restart(true);
-        cmd_buffer.img_memory_barrier(draw_image,
+        cmd_buffer.barrier(draw_image,
                            true,
                            VK_IMAGE_LAYOUT_GENERAL,
                            VK_PIPELINE_STAGE_2_NONE,
@@ -117,7 +118,7 @@ public:
         cmd_buffer.bind_descriptor_sets(gradient_pipeline, desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
-        cmd_buffer.img_memory_barrier(draw_image,
+        cmd_buffer.barrier(draw_image,
                            false,
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -127,7 +128,7 @@ public:
                            ImageAspects::COLOR
         );
 
-        cmd_buffer.img_memory_barrier(swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
                            true,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            VK_PIPELINE_STAGE_2_NONE,
@@ -142,7 +143,7 @@ public:
                                       ImageAspects::COLOR
         );
 
-        cmd_buffer.img_memory_barrier(swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
                            false,
                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,

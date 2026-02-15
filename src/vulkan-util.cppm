@@ -606,7 +606,7 @@ export struct CommandBuffer{
         VK_CHECK(vkBeginCommandBuffer(buffer, &begin_info));
     }
 
-    void img_memory_barrier(
+    void barrier(
         Image &img,
         bool discard_current_data,
         VkImageLayout new_layout,
