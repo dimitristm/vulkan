@@ -876,8 +876,10 @@ void init_imgui() {
 
 
         VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer);
-        VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,get_current_frame().swapchain_semaphore);
-        VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame().render_semaphore);
+        VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,get_current_frame().swapchain_semaphore);
+        VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(
+            VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame().render_semaphore);
 	VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, get_current_frame().render_fence));
 

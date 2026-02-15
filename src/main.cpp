@@ -1,5 +1,5 @@
 #include <SDL3/SDL_init.h>
-import vulkanRenderer;
+//import vulkanRenderer;
 import vulkanRenderer2;
 //import vulkanUtil;
 
@@ -16,7 +16,14 @@ int main(){
         window_flags
     );
 
-    Renderer renderer{};
-    renderer.run();
+    Renderer2 renderer{window};
+    SDL_Event event;
+    bool quit = false;
+    while (!quit){
+        while(SDL_PollEvent(&event)){
+            if (event.type == SDL_EVENT_QUIT) { quit = true; }
+        }
+        renderer.draw();
+    }
     return 0;
 }

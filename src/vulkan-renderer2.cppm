@@ -9,12 +9,8 @@ module;
 #include <vulkan/vk_enum_string_helper.h>
 
 #include <array>
-#include <thread>
-#include <chrono>
 #include <cmath>
 #include <print>
-#include <fstream>
-#include <functional>
 
 #include <glm/vec2.hpp>
 
@@ -94,7 +90,9 @@ public:
      }()),
      desc_set(ds_builder.build(vk)),
      gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv"))
-    {}
+    {
+        vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
+    }
 
     FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
 
@@ -105,7 +103,7 @@ public:
 
         CommandBuffer &cmd_buffer = frame_data.main_command_buffer;
         cmd_buffer.restart(true);
-        cmd_buffer.barrier(draw_image,
+        cmd_buffer.img_memory_barrier(draw_image,
                            true,
                            VK_IMAGE_LAYOUT_GENERAL,
                            VK_PIPELINE_STAGE_2_NONE,
@@ -119,7 +117,7 @@ public:
         cmd_buffer.bind_descriptor_sets(gradient_pipeline, desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
-        cmd_buffer.barrier(draw_image,
+        cmd_buffer.img_memory_barrier(draw_image,
                            false,
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -129,7 +127,7 @@ public:
                            ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.img_memory_barrier(swapchain.get_images()[swapchain_img_idx],
                            true,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            VK_PIPELINE_STAGE_2_NONE,
@@ -144,7 +142,7 @@ public:
                                       ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.img_memory_barrier(swapchain.get_images()[swapchain_img_idx],
                            false,
                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
@@ -153,6 +151,18 @@ public:
                            0,
                            ImageAspects::COLOR
         );
+
+        cmd_buffer.end();
+
+        vk.submit_commands(cmd_buffer,
+                           frame_data.swapchain_semaphore,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           frame_data.render_semaphore,
+                           VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                           frame_data.render_fence
+        );
+
+        vk.present(swapchain, frame_data.render_semaphore, swapchain_img_idx);
 
     }
 };

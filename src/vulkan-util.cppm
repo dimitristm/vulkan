@@ -219,7 +219,8 @@ static VkRenderingInfo rendering_info(
 
 
 static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
-    VkDescriptorPoolSize sizes[] = {
+    const int poolsize_count = 11;
+    VkDescriptorPoolSize sizes[poolsize_count] = {
         { VK_DESCRIPTOR_TYPE_SAMPLER,                pool_size },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, pool_size },
         { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          pool_size },
@@ -238,7 +239,7 @@ static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_si
         .pNext = nullptr,
         .flags = 0,
         .maxSets = max_sets,
-        .poolSizeCount = 1,
+        .poolSizeCount = poolsize_count, //todo turn sizes[] into a std::array
         .pPoolSizes = sizes,
     };
 
@@ -287,7 +288,7 @@ export struct Image{
     VkFormat format;
     // Important to remember that this isn't the layout the image is currently in, but is instead
     // the layout that the latest recorded image barrier command (transition command) has transitioned it to
-    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageLayout layout;
 
     Image(
         VmaAllocator allocator,
@@ -296,7 +297,8 @@ export struct Image{
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags)
     :extent(extent),
-     format(format)
+     format(format),
+     layout(VK_IMAGE_LAYOUT_UNDEFINED)
     {
         VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, {extent.width, extent.height, 1}, VK_IMAGE_LAYOUT_UNDEFINED);
         VmaAllocationCreateInfo img_alloc_info = {};
@@ -311,7 +313,7 @@ export struct Image{
     }
 
     Image(VkImage img, VkExtent2D extent, VkFormat format)
-    :vk_image(img), allocation(nullptr), extent(extent), format(format)
+    :vk_image(img), allocation(nullptr), extent(extent), format(format), layout(VK_IMAGE_LAYOUT_UNDEFINED)
     {}
 };
 
@@ -348,10 +350,10 @@ export struct ImageView{
 
 
 static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
     for(auto &swapchain_image_view : swapchain_image_views){
         vkDestroyImageView(device, swapchain_image_view, nullptr);
     }
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
 }
 
 export struct Swapchain{
@@ -388,7 +390,7 @@ export struct Swapchain{
             // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
             // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
             // as the last thing before blitting to swapchain and presenting.
-            .set_desired_format(VkSurfaceFormatKHR{ .format = image_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+            .set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_UNORM, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
             .set_desired_present_mode(present_mode)
             .set_desired_extent(size.x, size.y)
             .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
@@ -490,7 +492,7 @@ export struct ShaderModule{
 
  private:
     VkShaderModule load_shader_module(VkDevice device, const std::string_view filepath){
-        assert(filepath[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
+        assert(filepath.data()[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
         // open the file. With cursor at the end
         std::ifstream file(filepath.data(), std::ios::ate | std::ios::binary);
 
@@ -536,23 +538,23 @@ export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
 
-    void init_compute_pipeline(VkDevice device, std::span<DescriptorSet> descriptors, ShaderModule shader_module){
+    void init_compute_pipeline(VkDevice device, std::span<DescriptorSet> descriptor_sets, ShaderModule shader_module){
         // The max this function supports, not the max the machine supprts. That must be queried independently.
         const int max_descriptor_sets_in_shader = 32;
-        if(descriptors.size() <= max_descriptor_sets_in_shader){
+        if(descriptor_sets.size() > max_descriptor_sets_in_shader){
             std::println("Error: Too many descriptor sets in one shader.");
         }
 
         std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> layouts;
-        for (int i = 0; i < descriptors.size(); ++i) {
-          layouts.at(i) = descriptors[i].layout;
+        for (int i = 0; i < descriptor_sets.size(); ++i) {
+          layouts.at(i) = descriptor_sets[i].layout;
         }
 
         VkPipelineLayoutCreateInfo computeLayout{};
         computeLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         computeLayout.pNext = nullptr;
         computeLayout.pSetLayouts = layouts.data();
-        computeLayout.setLayoutCount = layouts.size();
+        computeLayout.setLayoutCount = descriptor_sets.size();
         VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
 
         VkShaderModule compute_shader = shader_module.module;
@@ -604,8 +606,8 @@ export struct CommandBuffer{
         VK_CHECK(vkBeginCommandBuffer(buffer, &begin_info));
     }
 
-    void barrier(
-        const Image &img,
+    void img_memory_barrier(
+        Image &img,
         bool discard_current_data,
         VkImageLayout new_layout,
         VkPipelineStageFlags2 src_stage_mask,
@@ -644,6 +646,8 @@ export struct CommandBuffer{
         };
 
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
+
+        img.layout = new_layout;
     }
 
     void blit(
@@ -709,7 +713,7 @@ export struct CommandBuffer{
 
     void bind_descriptor_sets(const ComputePipeline &pipeline, std::span<DescriptorSet> sets) const{
         const int max_sets = 32;
-        if (sets.size() <= max_sets){
+        if (sets.size() > max_sets){
             std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
             abort();
         };
@@ -726,6 +730,10 @@ export struct CommandBuffer{
 
     void dispatch(uint32_t x, uint32_t y, uint32_t z) const{
 	vkCmdDispatch(this->buffer, x, y, z);
+    }
+
+    void end() const{
+	VK_CHECK(vkEndCommandBuffer(this->buffer));
     }
 
 };
@@ -916,8 +924,8 @@ export struct VulkanEngine{
         return pipeline;
     }
 
-    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, std::string_view filepath){
-        ComputePipeline pipeline(device, descriptors, filepath);
+    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, std::string_view shader_filepath){
+        ComputePipeline pipeline(device, descriptors, shader_filepath);
         created_compute_pipelines.push_back(pipeline);
         return pipeline;
     }
@@ -926,8 +934,8 @@ export struct VulkanEngine{
         return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), module);
     }
 
-    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, std::string_view filepath){
-        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), filepath);
+    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, std::string_view shader_filepath){
+        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), shader_filepath);
     }
 
     [[nodiscard]] CommandBuffer create_command_buffer(CommandPool pool) const{
@@ -983,9 +991,9 @@ export struct VulkanEngine{
     void submit_commands(
         CommandBuffer cmd_buffer,
         GpuSemaphore wait_sema,//todo: use std::optional for cases where we don't signal/wait
-        VkPipelineStageFlagBits2 wait_stage_mask,
-        GpuSemaphore signal_sema,
-        VkPipelineStageFlagBits2 signal_stage_mask,
+        VkPipelineStageFlagBits2 wait_stage_mask, // Commands in cmd_buffer that use these stages will not run until wait_sema is signaled
+        GpuSemaphore signal_sema, // Will be signaled when every command in cmd_buffer is complete
+        VkPipelineStageFlagBits2 signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in cmd_buffer (other stages will have outdated cached data, causing errors)
         GpuFence signal_fence) const
     {
         VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer.buffer);
