@@ -982,9 +982,9 @@ export struct VulkanEngine{
     }
 
     // Returns the index of the next image in the swapchain
-    [[nodiscard]] uint32_t acquire_next_image(const Swapchain &swapchain, GpuSemaphore wait_sema) const{
+    [[nodiscard]] uint32_t acquire_next_image(const Swapchain &swapchain, GpuSemaphore signal_sema) const{
         uint32_t swapchain_image_index;
-        VK_CHECK(vkAcquireNextImageKHR(device, swapchain.swapchain, timeout_length, wait_sema.semaphore, nullptr, &swapchain_image_index));
+        VK_CHECK(vkAcquireNextImageKHR(device, swapchain.swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index));
         return swapchain_image_index;
     }
 
