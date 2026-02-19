@@ -309,7 +309,7 @@ static void copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage des
 }
 
 struct FrameData {
-    VkSemaphore swapchain_semaphore, render_semaphore;
+    VkSemaphore swapchain_img_ready_sema, rendering_done_sema;
     VkFence render_fence;
 
     VkCommandPool command_pool;
@@ -759,8 +759,8 @@ void init_imgui() {
         VkSemaphoreCreateInfo semaphore_create_info = struct_makers::semaphore_create_info(0);
 	for (auto &frame : frames) {
             VK_CHECK(vkCreateFence(device, &fence_create_info, nullptr, &frame.render_fence));
-            VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.swapchain_semaphore));
-            VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.render_semaphore));
+            VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.swapchain_img_ready_sema));
+            VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &frame.rendering_done_sema));
 	}
 
         // immediate submit initialization
@@ -790,8 +790,8 @@ void init_imgui() {
         for (auto & frame : frames) {
             vkDestroyCommandPool(device, frame.command_pool, nullptr);
             vkDestroyFence(device, frame.render_fence, nullptr);
-            vkDestroySemaphore(device, frame.render_semaphore, nullptr);
-            vkDestroySemaphore(device ,frame.swapchain_semaphore, nullptr);
+            vkDestroySemaphore(device, frame.rendering_done_sema, nullptr);
+            vkDestroySemaphore(device ,frame.swapchain_img_ready_sema, nullptr);
         }
         vkDestroyImageView(device, draw_image.image_view, nullptr);
         vmaDestroyImage(allocator, draw_image.image, draw_image.allocation);
@@ -846,7 +846,7 @@ void init_imgui() {
         VK_CHECK(vkResetFences(device, 1, &render_fence));
 
         uint32_t swapchain_image_index{};
-        VK_CHECK(vkAcquireNextImageKHR(device, swapchain, 1000000000, get_current_frame().swapchain_semaphore, nullptr, &swapchain_image_index));
+        VK_CHECK(vkAcquireNextImageKHR(device, swapchain, 1000000000, get_current_frame().swapchain_img_ready_sema, nullptr, &swapchain_image_index));
 
         VkCommandBuffer cmd_buffer = get_current_frame().main_command_buffer;
         VK_CHECK(vkResetCommandBuffer(cmd_buffer, 0));
@@ -877,9 +877,9 @@ void init_imgui() {
 
         VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer);
         VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,get_current_frame().swapchain_semaphore);
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,get_current_frame().swapchain_img_ready_sema);
         VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(
-            VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame().render_semaphore);
+            VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame().rendering_done_sema);
 	VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, get_current_frame().render_fence));
 
@@ -888,7 +888,7 @@ void init_imgui() {
         present_info.pNext = nullptr;
         present_info.pSwapchains = &swapchain;
         present_info.swapchainCount = 1;
-        present_info.pWaitSemaphores = &get_current_frame().render_semaphore;
+        present_info.pWaitSemaphores = &get_current_frame().rendering_done_sema;
         present_info.waitSemaphoreCount = 1;
         present_info.pImageIndices = &swapchain_image_index;
         VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));

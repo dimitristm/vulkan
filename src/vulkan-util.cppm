@@ -456,12 +456,6 @@ export struct GpuFence{
 };
 
 export struct GpuSemaphore{
-
-    GpuSemaphore(const GpuSemaphore&) = default;
-    GpuSemaphore(GpuSemaphore&&) noexcept = default;
-    GpuSemaphore& operator=(const GpuSemaphore&) = default;
-    GpuSemaphore& operator=(GpuSemaphore&&) noexcept = default;
-
     VkSemaphore semaphore;
     GpuSemaphore(VkDevice device){
         VkSemaphoreCreateInfo semaphore_create_info{
@@ -1122,15 +1116,15 @@ export struct DescriptorSetBuilder{
 };
 
 export struct FrameData {
-    GpuSemaphore swapchain_semaphore;
-    GpuSemaphore render_semaphore;
+    GpuSemaphore swapchain_img_ready_sema;
+    GpuSemaphore rendering_done_sema;
     GpuFence render_fence;
     CommandPool command_pool;
     CommandBuffer main_command_buffer;
 
     FrameData(VulkanEngine &engine)
-    :swapchain_semaphore(engine.create_semaphore()),
-     render_semaphore(engine.create_semaphore()),
+    :swapchain_img_ready_sema(engine.create_semaphore()),
+     rendering_done_sema(engine.create_semaphore()),
      render_fence(engine.create_fence(true)),
      command_pool(engine.create_command_pool()),
      main_command_buffer(engine.create_command_buffer(this->command_pool))

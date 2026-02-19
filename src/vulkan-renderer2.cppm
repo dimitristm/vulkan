@@ -69,8 +69,8 @@ public:
     ComputePipeline gradient_pipeline;
 
     GpuFence immediate_submit_fence;
-    CommandPool immediate_command_pool;
-    CommandBuffer immediate_command_buffer;
+    CommandPool immediate_cmd_pool;
+    CommandBuffer immediate_cmd_buffer;
 
     uint32_t frame_count{};
 
@@ -96,8 +96,8 @@ public:
      desc_set(ds_builder.build(vk)),
      gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv")),
      immediate_submit_fence(vk.create_fence(true)),
-     immediate_command_pool(vk.create_command_pool()),
-     immediate_command_buffer(vk.create_command_buffer(immediate_command_pool))
+     immediate_cmd_pool(vk.create_command_pool()),
+     immediate_cmd_buffer(vk.create_command_buffer(immediate_cmd_pool))
     {
         vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
         vk.init_imgui(window, swapchain);
@@ -106,13 +106,13 @@ public:
     FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
 
     void immediate_submit(std::function<void()>&& function){
-        immediate_command_buffer.restart(true);
+        immediate_cmd_buffer.restart(true);
 
         function();
 
-        immediate_command_buffer.end();
+        immediate_cmd_buffer.end();
 
-        vk.submit_commands(immediate_command_buffer, immediate_submit_fence);
+        vk.submit_commands(immediate_cmd_buffer, immediate_submit_fence);
 
         vk.wait(immediate_submit_fence);
     }
@@ -121,7 +121,7 @@ public:
         FrameData &frame_data = get_current_frame();
 
         vk.wait(frame_data.render_fence);
-        uint32_t swapchain_img_idx = vk.acquire_next_image(swapchain, frame_data.swapchain_semaphore);
+        uint32_t swapchain_img_idx = vk.acquire_next_image(swapchain, frame_data.swapchain_img_ready_sema);
 
         CommandBuffer &cmd_buffer = frame_data.main_command_buffer;
         cmd_buffer.restart(true);
@@ -170,7 +170,7 @@ public:
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                            ImageAspects::COLOR);
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
@@ -188,14 +188,15 @@ public:
         cmd_buffer.end();
 
         vk.submit_commands(cmd_buffer,
-                           frame_data.swapchain_semaphore,
+                           frame_data.swapchain_img_ready_sema,
+                           VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           frame_data.rendering_done_sema,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           frame_data.render_semaphore,
-                           VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
                            frame_data.render_fence
         );
 
-        vk.present(swapchain, frame_data.render_semaphore, swapchain_img_idx);
+        vk.present(swapchain, frame_data.rendering_done_sema, swapchain_img_idx);
 
+        ++frame_count;
     }
 };
