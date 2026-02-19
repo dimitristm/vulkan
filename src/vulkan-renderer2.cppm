@@ -111,7 +111,7 @@ public:
                            VK_PIPELINE_STAGE_2_NONE,
                            0,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                           0,
                            ImageAspects::COLOR
         );
 
@@ -135,7 +135,7 @@ public:
                            VK_PIPELINE_STAGE_2_NONE,
                            0,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
-                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           0,
                            ImageAspects::COLOR
         );
 
@@ -150,7 +150,7 @@ public:
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
                            ImageAspects::COLOR);
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
