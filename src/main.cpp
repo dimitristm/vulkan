@@ -1,3 +1,5 @@
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
 //import vulkanRenderer;
 import vulkanRenderer2;
@@ -23,6 +25,14 @@ int main(){
         while(SDL_PollEvent(&event)){
             if (event.type == SDL_EVENT_QUIT) { quit = true; }
         }
+        ImGui_ImplSDL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::ShowDemoWindow();
+
+        ImGui::Render();
+
         renderer.draw();
     }
     return 0;

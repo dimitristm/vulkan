@@ -346,7 +346,17 @@ export struct ImageView{
         };
         VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
     }
+
+    ImageView(VkImageView vk_view):view(vk_view){}
 };
+
+
+static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<ImageView> &swapchain_image_views){
+    for(auto &swapchain_image_view : swapchain_image_views){
+        vkDestroyImageView(device, swapchain_image_view.view, nullptr);
+    }
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+}
 
 
 static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
@@ -361,9 +371,11 @@ export struct Swapchain{
     VkFormat image_format{};
     VkExtent2D extent{};
     std::vector<Image> images;
-    std::vector<VkImageView> image_views;
+    std::vector<ImageView> image_views;
 
-    std::vector<Image> &get_images(){ return images; }
+    [[nodiscard]] std::vector<Image> &get_images() { return images; }
+    [[nodiscard]] std::vector<ImageView> &get_image_views() { return image_views; }
+    [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
 
     Swapchain(
         VkPhysicalDevice physical_device,
@@ -404,8 +416,11 @@ export struct Swapchain{
         for (const auto &vk_img : vk_images){
             this->images.emplace_back(vk_img, vkb_swapchain.extent, vkb_swapchain.image_format);
         }
-        this->image_views = vkb_swapchain.get_image_views().value();
         this->image_format = vkb_swapchain.image_format;
+
+        for(VkImageView vk_view : vkb_swapchain.get_image_views().value()){
+            this->image_views.emplace_back(vk_view);
+        }
     }
 
  public:
@@ -598,6 +613,17 @@ export struct CommandBuffer{
     }
 
 
+    void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{
+        VkRenderingAttachmentInfo colorAttachment = struct_makers::attachment_info(target_image_view.view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo renderInfo = struct_makers::rendering_info(draw_extent, &colorAttachment, nullptr);
+
+        vkCmdBeginRendering(this->buffer, &renderInfo);
+
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), this->buffer);
+
+        vkCmdEndRendering(this->buffer);
+    }
+
     void restart(bool one_time_submit) const{
         VK_CHECK(vkResetCommandBuffer(buffer, 0));
         VkCommandBufferBeginInfo begin_info = struct_makers::command_buffer_begin_info(
@@ -755,7 +781,7 @@ export struct VulkanEngine{
     // These are used in the destructor to delete everything this engine made.
     // Might also be used in asserts in debug mode to ensure this is the engine that made them.
     // Maybe I'll get around to deleting individual elements
-    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
+    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<ImageView> image_views;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
     struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
     std::vector<ImageTrackingInfo> created_images;
@@ -858,6 +884,33 @@ export struct VulkanEngine{
         vkDestroyDevice(device, nullptr);
         vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
         vkDestroyInstance(vk_instance, nullptr);
+    }
+
+
+    void init_imgui(SDL_Window *window, const Swapchain &swapchain) const{
+        ImGui::CreateContext();
+        ImGui_ImplSDL3_InitForVulkan(window);
+
+        // this initializes imgui for Vulkan
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        init_info.ApiVersion = api_version.to_vk_enum();
+        init_info.Instance = vk_instance;
+        init_info.PhysicalDevice = physical_device;
+        init_info.Device = device;
+        init_info.Queue = graphics_queue;
+        init_info.QueueFamily = graphics_queue_family;
+        init_info.DescriptorPool = nullptr;
+        init_info.DescriptorPoolSize = 1000; // Probably overkill
+        init_info.MinImageCount = 3;
+        init_info.ImageCount = 3;
+        init_info.UseDynamicRendering = true;
+        //init_info.MinAllocationSize = 1024*1024; would stop best practices validation warning and waste some memory
+        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pNext = nullptr;
+        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &swapchain.image_format;
+        init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        ImGui_ImplVulkan_Init(&init_info);
     }
 
     void register_for_deletion(VkDescriptorSetLayout layout){

@@ -92,6 +92,7 @@ public:
      gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv"))
     {
         vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
+        vk.init_imgui(window, swapchain);
     }
 
     FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
@@ -145,9 +146,20 @@ public:
 
         cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
                            false,
-                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                           ImageAspects::COLOR);
+
+        cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
+
+        cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
+                           false,
+                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_NONE,
                            0,
                            ImageAspects::COLOR
