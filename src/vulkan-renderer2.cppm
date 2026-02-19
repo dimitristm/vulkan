@@ -1,6 +1,7 @@
 module;
 
 
+#include <functional>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL_events.h>
@@ -67,6 +68,10 @@ public:
 
     ComputePipeline gradient_pipeline;
 
+    GpuFence immediate_submit_fence;
+    CommandPool immediate_command_pool;
+    CommandBuffer immediate_command_buffer;
+
     uint32_t frame_count{};
 
     Renderer2(SDL_Window *window)
@@ -89,7 +94,10 @@ public:
             return b;
      }()),
      desc_set(ds_builder.build(vk)),
-     gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv"))
+     gradient_pipeline(vk.create_compute_pipeline(desc_set, "shaders/compiled/gradient.comp.spv")),
+     immediate_submit_fence(vk.create_fence(true)),
+     immediate_command_pool(vk.create_command_pool()),
+     immediate_command_buffer(vk.create_command_buffer(immediate_command_pool))
     {
         vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
         vk.init_imgui(window, swapchain);
@@ -97,8 +105,19 @@ public:
 
     FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
 
+    void immediate_submit(std::function<void()>&& function){
+        immediate_command_buffer.restart(true);
+
+        function();
+
+        immediate_command_buffer.end();
+
+        vk.submit_commands(immediate_command_buffer, immediate_submit_fence);
+
+        vk.wait(immediate_submit_fence);
+    }
+
     void draw(){
-        std::println("dff");
         FrameData &frame_data = get_current_frame();
 
         vk.wait(frame_data.render_fence);

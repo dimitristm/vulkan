@@ -14,6 +14,7 @@ module;
 #include <print>
 #include <fstream>
 #include <unordered_set>
+#include <optional>
 
 
 #include "imgui.h"
@@ -953,7 +954,7 @@ export struct VulkanEngine{
         return view;
     }
 
-    CommandPool create_pool(){
+    CommandPool create_command_pool(){
         CommandPool pool(device, graphics_queue_family);
         created_command_pools.push_back(pool.pool);
         return pool;
@@ -1043,17 +1044,27 @@ export struct VulkanEngine{
 
     void submit_commands(
         CommandBuffer cmd_buffer,
-        GpuSemaphore wait_sema,//todo: use std::optional for cases where we don't signal/wait
-        VkPipelineStageFlagBits2 wait_stage_mask, // Commands in cmd_buffer that use these stages will not run until wait_sema is signaled
-        GpuSemaphore signal_sema, // Will be signaled when every command in cmd_buffer is complete
-        VkPipelineStageFlagBits2 signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in cmd_buffer (other stages will have outdated cached data, causing errors)
+        std::optional<GpuSemaphore> wait_sema,
+        std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in cmd_buffer that use these stages will not run until wait_sema is signaled
+        std::optional<GpuSemaphore> signal_sema, // Will be signaled when every command in cmd_buffer is complete
+        std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in cmd_buffer (other stages will have outdated cached data, causing errors)
         GpuFence signal_fence) const
     {
+        assert(wait_sema.has_value() == wait_stage_mask.has_value() && "You can't have a wait sema without a wait stage mask or the other way around");
+        assert(signal_sema.has_value() == signal_stage_mask.has_value() && "You can't have a signal sema without a signal stage mask or the other way around");
+
         VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer.buffer);
-        VkSemaphoreSubmitInfo wait_info = struct_makers::semaphore_submit_info(wait_stage_mask, wait_sema.semaphore);
-        VkSemaphoreSubmitInfo signal_info = struct_makers::semaphore_submit_info(signal_stage_mask, signal_sema.semaphore);
-        VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,&signal_info,&wait_info);
+        VkSemaphoreSubmitInfo wait_info = wait_sema.has_value() ? struct_makers::semaphore_submit_info(*wait_stage_mask, wait_sema->semaphore) : VkSemaphoreSubmitInfo{};
+        VkSemaphoreSubmitInfo signal_info = signal_sema.has_value() ? struct_makers::semaphore_submit_info(*signal_stage_mask, signal_sema->semaphore) : VkSemaphoreSubmitInfo{};
+        VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,
+                                                               signal_sema.has_value() ? &signal_info : nullptr,
+                                                               wait_sema.has_value() ? &wait_info : nullptr);
+
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, signal_fence.fence));
+    }
+
+    void submit_commands(CommandBuffer cmd_buffer, GpuFence signal_fence) const{
+        submit_commands(cmd_buffer, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
     }
 
     void present(const Swapchain& swapchain, GpuSemaphore wait_sema, uint32_t swapchain_image_index) const{
@@ -1121,7 +1132,7 @@ export struct FrameData {
     :swapchain_semaphore(engine.create_semaphore()),
      render_semaphore(engine.create_semaphore()),
      render_fence(engine.create_fence(true)),
-     command_pool(engine.create_pool()),
+     command_pool(engine.create_command_pool()),
      main_command_buffer(engine.create_command_buffer(this->command_pool))
     { }
 };
