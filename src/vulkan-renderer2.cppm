@@ -98,6 +98,7 @@ public:
     FrameData &get_current_frame(){ return frames[frame_count % FRAMES_IN_FLIGHT]; }
 
     void draw(){
+        std::println("dff");
         FrameData &frame_data = get_current_frame();
 
         vk.wait(frame_data.render_fence);
