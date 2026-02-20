@@ -308,7 +308,7 @@ static void copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage des
     vkCmdBlitImage2(cmd, &blit_info);
 }
 
-struct FrameData {
+struct SwapchainImageSync {
     VkSemaphore swapchain_img_ready_sema, rendering_done_sema;
     VkFence render_fence;
 
@@ -482,7 +482,7 @@ public:
     std::vector<VkImage> swapchain_images;
     std::vector<VkImageView> swapchain_image_views;
 
-    FrameData frames[FRAME_OVERLAP]{};
+    SwapchainImageSync frames[FRAME_OVERLAP]{};
     u_int32_t frame_number = 0;
 
     VmaAllocator allocator = nullptr;
@@ -804,7 +804,7 @@ void init_imgui() {
         SDL_DestroyWindow(window);
     }
 
-    FrameData& get_current_frame() { return frames[frame_number % FRAME_OVERLAP]; }
+    SwapchainImageSync& get_current_frame() { return frames[frame_number % FRAME_OVERLAP]; }
 
 
     void draw_imgui(VkCommandBuffer cmd, VkImageView targetImageView) const{

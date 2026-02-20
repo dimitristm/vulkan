@@ -407,6 +407,7 @@ export struct Swapchain{
             .set_desired_present_mode(present_mode)
             .set_desired_extent(size.x, size.y)
             .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING)
             .build()
             .value();
 
@@ -548,48 +549,60 @@ export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
 
-    void init_compute_pipeline(VkDevice device, std::span<DescriptorSet> descriptor_sets, ShaderModule shader_module){
+    void init_compute_pipeline(VkDevice device,
+                               std::span<DescriptorSet> descriptor_sets,
+                               const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+                               ShaderModule shader_module){
         // The max this function supports, not the max the machine supprts. That must be queried independently.
         const int max_descriptor_sets_in_shader = 32;
-        if(descriptor_sets.size() > max_descriptor_sets_in_shader){
-            std::println("Error: Too many descriptor sets in one shader.");
-        }
+        assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: Too many descriptor sets in one shader.");
 
-        std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> layouts;
+        std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
         for (int i = 0; i < descriptor_sets.size(); ++i) {
-          layouts.at(i) = descriptor_sets[i].layout;
+          desc_set_layouts.at(i) = descriptor_sets[i].layout;
         }
 
-        VkPipelineLayoutCreateInfo computeLayout{};
-        computeLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        computeLayout.pNext = nullptr;
-        computeLayout.pSetLayouts = layouts.data();
-        computeLayout.setLayoutCount = descriptor_sets.size();
+        VkPipelineLayoutCreateInfo computeLayout{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .setLayoutCount = static_cast<uint32_t>(descriptor_sets.size()),
+            .pSetLayouts = desc_set_layouts.data(),
+            .pushConstantRangeCount = push_constants.has_value() ? static_cast<uint32_t>(push_constants->size()) : 0,
+            .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
+        };
         VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
 
         VkShaderModule compute_shader = shader_module.module;
-        VkPipelineShaderStageCreateInfo stageinfo{};
-        stageinfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stageinfo.pNext = nullptr;
-        stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        stageinfo.module = compute_shader;
-        stageinfo.pName = "main";
+        VkPipelineShaderStageCreateInfo stageinfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = compute_shader,
+            .pName = "main",
+            .pSpecializationInfo{},
+        };
 
-        VkComputePipelineCreateInfo computePipelineCreateInfo{};
-        computePipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        computePipelineCreateInfo.pNext = nullptr;
-        computePipelineCreateInfo.layout = layout;
-        computePipelineCreateInfo.stage = stageinfo;
+        VkComputePipelineCreateInfo computePipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .stage = stageinfo,
+            .layout = this->layout,
+            .basePipelineHandle{},
+            .basePipelineIndex{},
+        };
         VK_CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
     }
 
-    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, ShaderModule shader_module){
-        init_compute_pipeline(device, descriptors, shader_module);
+    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, const std::optional<std::vector<VkPushConstantRange>> &push_constants, ShaderModule shader_module){
+        init_compute_pipeline(device, descriptors, push_constants, shader_module);
     }
 
-    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, std::string_view shader_filepath){
+    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, const std::optional<std::vector<VkPushConstantRange>> &push_constants, std::string_view shader_filepath){
         ShaderModule shader_module = ShaderModule(device, shader_filepath);
-        init_compute_pipeline(device, descriptors, shader_module);
+        init_compute_pipeline(device, descriptors, push_constants, shader_module);
         vkDestroyShaderModule(device, shader_module.module, nullptr);
     }
 };
@@ -648,6 +661,8 @@ export struct CommandBuffer{
             .dstAccessMask = dst_access_mask,
             .oldLayout = discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout,
             .newLayout = new_layout,
+            .srcQueueFamilyIndex{},
+            .dstQueueFamilyIndex{},
             .image = img.vk_image,
             .subresourceRange = {
                 .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
@@ -662,6 +677,11 @@ export struct CommandBuffer{
         VkDependencyInfo dep_info {
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
             .pNext = nullptr,
+            .dependencyFlags{},
+            .memoryBarrierCount{},
+            .pMemoryBarriers{},
+            .bufferMemoryBarrierCount{},
+            .pBufferMemoryBarriers{},
             .imageMemoryBarrierCount = 1, //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
             .pImageMemoryBarriers = &image_barrier,
         };
@@ -749,6 +769,14 @@ export struct CommandBuffer{
         bind_descriptor_sets(pipeline, std::span<DescriptorSet>(&sets, 1));
     }
 
+    template <typename T>
+    void update_push_constants(
+        ComputePipeline pipeline,
+        T &obj)
+    {
+
+    }
+
     void dispatch(uint32_t x, uint32_t y, uint32_t z) const{
 	vkCmdDispatch(this->buffer, x, y, z);
     }
@@ -787,6 +815,8 @@ export struct VulkanEngine{
     std::vector<VkDescriptorSetLayout> layouts_to_delete;
     std::vector<ComputePipeline> created_compute_pipelines;
 
+    bool imgui_is_initialized = false;
+
  public:
     VulkanEngine(const VulkanEngine &) = delete;
     VulkanEngine(VulkanEngine &&) = delete;
@@ -797,6 +827,10 @@ export struct VulkanEngine{
         vkb::InstanceBuilder builder;
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
             .request_validation_layers(use_validation_layers)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
             .use_default_debug_messenger()
             .require_api_version(api_version.major, api_version.minor, api_version.patch)
             .build()
@@ -845,6 +879,12 @@ export struct VulkanEngine{
     ~VulkanEngine(){
         vkDeviceWaitIdle(device);
 
+        if (imgui_is_initialized){
+            ImGui_ImplVulkan_Shutdown();
+            ImGui_ImplSDL3_Shutdown();
+            ImGui::DestroyContext();
+        }
+
         for(auto &compute_pipeline : created_compute_pipelines){
             vkDestroyPipelineLayout(device, compute_pipeline.layout, nullptr);
         }
@@ -882,30 +922,47 @@ export struct VulkanEngine{
     }
 
 
-    void init_imgui(SDL_Window *window, const Swapchain &swapchain) const{
+    void init_imgui(SDL_Window *window, const Swapchain &swapchain) {
         ImGui::CreateContext();
         ImGui_ImplSDL3_InitForVulkan(window);
 
         // this initializes imgui for Vulkan
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.ApiVersion = api_version.to_vk_enum();
-        init_info.Instance = vk_instance;
-        init_info.PhysicalDevice = physical_device;
-        init_info.Device = device;
-        init_info.Queue = graphics_queue;
-        init_info.QueueFamily = graphics_queue_family;
-        init_info.DescriptorPool = nullptr;
-        init_info.DescriptorPoolSize = 1000; // Probably overkill
-        init_info.MinImageCount = 3;
-        init_info.ImageCount = 3;
-        init_info.UseDynamicRendering = true;
-        //init_info.MinAllocationSize = 1024*1024; would stop best practices validation warning and waste some memory
-        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
-        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pNext = nullptr;
-        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-        init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &swapchain.image_format;
-        init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        ImGui_ImplVulkan_InitInfo init_info = {
+            .ApiVersion = api_version.to_vk_enum(),
+            .Instance = vk_instance,
+            .PhysicalDevice = physical_device,
+            .Device = device,
+            .QueueFamily = graphics_queue_family,
+            .Queue = graphics_queue,
+            .DescriptorPool = nullptr,
+            .DescriptorPoolSize = 1000, // Probably overkill
+            .MinImageCount = 3,
+            .ImageCount = 3,
+            .PipelineCache{},
+            .PipelineInfoMain{
+                .RenderPass{},
+                .Subpass{},
+                .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+                .PipelineRenderingCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
+                    .pNext = nullptr,
+                    .viewMask{},
+                    .colorAttachmentCount = 1,
+                    .pColorAttachmentFormats = &swapchain.image_format,
+                    .depthAttachmentFormat{},
+                    .stencilAttachmentFormat{},
+                },
+            },
+            .UseDynamicRendering = true,
+            .Allocator{},
+            .CheckVkResultFn{},
+            .MinAllocationSize{},
+            .CustomShaderVertCreateInfo{},
+            .CustomShaderFragCreateInfo{},
+        };
+        //.MinAllocationSize = 1024*1024; would stop best practices validation warning and waste some memory
         ImGui_ImplVulkan_Init(&init_info);
+        this->imgui_is_initialized = true;
     }
 
     void register_for_deletion(VkDescriptorSetLayout layout){
@@ -966,24 +1023,40 @@ export struct VulkanEngine{
         return sema;
     }
 
-    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, ShaderModule module){
-        ComputePipeline pipeline(device, descriptors, module);
+    ComputePipeline create_compute_pipeline(
+        const std::span<DescriptorSet> descriptors,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        ShaderModule module)
+    {
+        ComputePipeline pipeline(device, descriptors, push_constants, module);
         created_compute_pipelines.push_back(pipeline);
         return pipeline;
     }
 
-    ComputePipeline create_compute_pipeline(const std::span<DescriptorSet> descriptors, std::string_view shader_filepath){
-        ComputePipeline pipeline(device, descriptors, shader_filepath);
+    ComputePipeline create_compute_pipeline(
+        const std::span<DescriptorSet> descriptors,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        std::string_view shader_filepath)
+    {
+        ComputePipeline pipeline(device, descriptors, push_constants, shader_filepath);
         created_compute_pipelines.push_back(pipeline);
         return pipeline;
     }
 
-    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, ShaderModule module){
-        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), module);
+    ComputePipeline create_compute_pipeline(
+        DescriptorSet descriptors,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        ShaderModule module)
+    {
+        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), push_constants, module);
     }
 
-    ComputePipeline create_compute_pipeline(DescriptorSet descriptors, std::string_view shader_filepath){
-        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), shader_filepath);
+    ComputePipeline create_compute_pipeline(
+        DescriptorSet descriptors,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        std::string_view shader_filepath)
+    {
+        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), push_constants, shader_filepath);
     }
 
     [[nodiscard]] CommandBuffer create_command_buffer(CommandPool pool) const{
@@ -1114,60 +1187,6 @@ export struct DescriptorSetBuilder{
         return engine.allocate_descriptor_set(layout);
     }
 };
-
-export struct FrameData {
-    GpuSemaphore swapchain_img_ready_sema;
-    GpuSemaphore rendering_done_sema;
-    GpuFence render_fence;
-    CommandPool command_pool;
-    CommandBuffer main_command_buffer;
-
-    FrameData(VulkanEngine &engine)
-    :swapchain_img_ready_sema(engine.create_semaphore()),
-     rendering_done_sema(engine.create_semaphore()),
-     render_fence(engine.create_fence(true)),
-     command_pool(engine.create_command_pool()),
-     main_command_buffer(engine.create_command_buffer(this->command_pool))
-    { }
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
