@@ -150,7 +150,7 @@ public:
         cmd_buffer.barrier(draw_image,
                            true,
                            VK_IMAGE_LAYOUT_GENERAL,
-                           VK_PIPELINE_STAGE_2_NONE,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT,
                            0,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            0,
@@ -174,10 +174,10 @@ public:
         cmd_buffer.barrier(swapchain.get_images()[swapchain_img_idx],
                            true,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           VK_PIPELINE_STAGE_2_NONE,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
                            0,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
-                           0,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            ImageAspects::COLOR
         );
 
@@ -192,7 +192,7 @@ public:
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
                            ImageAspects::COLOR);
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
@@ -211,9 +211,9 @@ public:
 
         vk.submit_commands(cmd_buffer,
                            frame_in_flight.swapchain_img_ready_sema,
-                           VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_2_BLIT_BIT,
                            swapchain_render_done_semas[swapchain_img_idx],
-                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, // All commands to make sure transitions are complete when we signal to the present engine that it can take the image, can we make this scope smaller?
                            frame_in_flight.rendering_done_fence
         );
 

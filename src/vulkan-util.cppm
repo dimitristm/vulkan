@@ -39,7 +39,6 @@ module;
 #  pragma GCC diagnostic pop
 #endif
 
-//TODO: enable VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT
 
 export module vulkanUtil;
 
@@ -827,10 +826,12 @@ export struct VulkanEngine{
         vkb::InstanceBuilder builder;
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
             .request_validation_layers(use_validation_layers)
+            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_MAX_ENUM_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
             .use_default_debug_messenger()
             .require_api_version(api_version.major, api_version.minor, api_version.patch)
             .build()
