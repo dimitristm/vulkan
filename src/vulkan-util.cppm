@@ -216,6 +216,65 @@ static VkRenderingInfo rendering_info(
 
 } // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
 
+template <typename T>
+struct PushConstant {
+    static_assert(std::is_trivially_copyable_v<T>, "Push constant type must be trivially copyable");
+
+    const uint32_t offset;
+    const uint32_t size;
+    const VkShaderStageFlags shader_stages;
+    T data;
+
+    PushConstant(uint32_t offset, VkShaderStageFlags shader_stages, const T& data = {})
+    :
+    offset(offset),
+    size(sizeof(T)),
+    shader_stages(shader_stages),
+    data(data)
+    {}
+};
+
+class PushConstantsBuilder{
+    uint32_t current_last_byte_used = 0;
+    std::vector<VkPushConstantRange> ranges;
+
+    static bool range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags){
+        for (const auto &range : old){
+            if ((bool)(range.stageFlags & new_flags)){
+                // todo print which stage we're talking about
+                std::println("Assert failed: specified multiple push constant ranges for the same shader stage. Are you trying to make push constants for multiple pipelines? You'll have to use a PushConstantsBuilder for each pipeline that has unique push constant ranges.");
+                return false;
+            }
+        }
+        return true;
+    }
+
+public:
+    PushConstantsBuilder() = default;
+
+    template <typename T>
+    PushConstant<T> add(VkShaderStageFlags shader_stages){
+        static_assert(sizeof(T) % 4 == 0, "Size of push constant must be multiple of 4");
+        assert(range_stages_do_not_overlap(ranges, shader_stages));
+
+        VkPushConstantRange range{
+            .stageFlags = shader_stages,
+            .offset = current_last_byte_used,
+            .size = sizeof(T),
+        };
+
+        ranges.push_back(range);
+
+        current_last_byte_used += sizeof(T);
+
+        assert(current_last_byte_used <= 128 && "Assert failed: used more push constant space than is guaranteed to exist");
+    }
+
+    [[nodiscard]] const std::vector<VkPushConstantRange>& get_ranges() const{
+        return ranges;
+    }
+};
+
 
 
 static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
@@ -239,7 +298,7 @@ static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_si
         .pNext = nullptr,
         .flags = 0,
         .maxSets = max_sets,
-        .poolSizeCount = poolsize_count, //todo turn sizes[] into a std::array
+        .poolSizeCount = poolsize_count,
         .pPoolSizes = sizes,
     };
 
@@ -544,6 +603,36 @@ export struct ShaderModule{
     {}
 };
 
+static bool push_constants_valid(const std::optional<std::vector<VkPushConstantRange>> &push_constants){
+    const int max_push_constant_size_bytes = 128;
+    if (push_constants.has_value()){
+        for (const auto &pconstant : push_constants.value()){
+            if (pconstant.offset + pconstant.size > max_push_constant_size_bytes){
+                std::println("Assert failed: push constants go beyond the {} byte limit, making them invalid on some hardware.", max_push_constant_size_bytes);
+                std::println("The push constant range in question had an offset of {} and a size of {}, thus writing up to byte {}", pconstant.offset, pconstant.size, pconstant.size + pconstant.offset);
+                return false;
+            }
+            if (pconstant.offset % 4 != 0){
+                std::println("Assert failed: a push constant had an offset of {}, which isn't a multiple of 4.", pconstant.offset);
+                return false;
+            }
+            if (pconstant.size % 4 != 0){
+                std::println("Assert failed: a push constant had a size of {}, which isn't a multiple of 4.", pconstant.size);
+                return false;
+            }
+            if (pconstant.offset < 1){
+                std::println("Assert failed: a push constant had an offset of {}", pconstant.offset);
+                return false;
+            }
+            if (pconstant.size < 1){
+                std::println("Assert failed: a push constant had a size of {}", pconstant.size);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
@@ -551,13 +640,15 @@ export struct ComputePipeline{
     void init_compute_pipeline(VkDevice device,
                                std::span<DescriptorSet> descriptor_sets,
                                const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-                               ShaderModule shader_module){
-        // The max this function supports, not the max the machine supprts. That must be queried independently.
-        const int max_descriptor_sets_in_shader = 32;
-        assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: Too many descriptor sets in one shader.");
+                               ShaderModule shader_module)
+    {
+        // These are the minimums required by vulkan 1.3 for all devices, exceeding them would mean not supporting some devices.
+        const int max_descriptor_sets_in_shader = 4;
+        assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: over 4 descriptor sets bound to one shader. This would make the shader not run on all hardware.");
+        assert(push_constants_valid(push_constants));
 
         std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
-        for (int i = 0; i < descriptor_sets.size(); ++i) {
+        for (int i = 0; i < (int)descriptor_sets.size(); ++i) {
           desc_set_layouts.at(i) = descriptor_sets[i].layout;
         }
 
@@ -771,9 +862,14 @@ export struct CommandBuffer{
     template <typename T>
     void update_push_constants(
         ComputePipeline pipeline,
-        T &obj)
+        const PushConstant<T>& push_constant)
     {
-
+        vkCmdPushConstants(this->buffer,
+                           pipeline.layout,
+                           push_constant.shader_stages,
+                           push_constant.offset,
+                           push_constant.size,
+                           &push_constant.data);
     }
 
     void dispatch(uint32_t x, uint32_t y, uint32_t z) const{

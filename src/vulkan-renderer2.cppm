@@ -110,13 +110,12 @@ public:
     ),
     desc_set(ds_builder.build(vk)),
     gradient_pipeline(vk.create_compute_pipeline(desc_set,
-                                                 // std::vector<VkPushConstantRange>{{
-                                                 //     .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                 //     .offset = 0,
-                                                 //     .size = sizeof(PushConstData),
-                                                 // }},
-                                                 std::nullopt,
-                                                 "shaders/compiled/gradient.comp.spv")),
+                                                 std::vector<VkPushConstantRange>{{
+                                                     .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                     .offset = 0,
+                                                     .size = sizeof(PushConstData),
+                                                 }},
+                                                 "shaders/compiled/gradient_color.comp.spv")),
     immediate_submit_fence(vk.create_fence(true)),
     immediate_cmd_pool(vk.create_command_pool()),
     immediate_cmd_buffer(vk.create_command_buffer(immediate_cmd_pool))
@@ -153,7 +152,7 @@ public:
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            0,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           0,
+                           0, // todo: do i really not need to make visible this transition to the compute stage?
                            ImageAspects::COLOR
         );
 
