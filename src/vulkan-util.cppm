@@ -651,7 +651,7 @@ export struct ComputePipeline{
 
         std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
         for (int i = 0; i < (int)descriptor_sets.size(); ++i) {
-          desc_set_layouts.at(i) = descriptor_sets[i].layout;
+            desc_set_layouts.at(i) = descriptor_sets[i].layout;
         }
 
         VkPipelineLayoutCreateInfo computeLayout{
@@ -665,13 +665,12 @@ export struct ComputePipeline{
         };
         VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
 
-        VkShaderModule compute_shader = shader_module.module;
         VkPipelineShaderStageCreateInfo stageinfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = nullptr,
             .flags{},
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = compute_shader,
+            .module = shader_module.module,
             .pName = "main",
             .pSpecializationInfo{},
         };
