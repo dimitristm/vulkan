@@ -216,7 +216,7 @@ static VkRenderingInfo rendering_info(
 
 } // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
 
-template <typename T>
+export template <typename T>
 struct PushConstant {
     static_assert(std::is_trivially_copyable_v<T>, "Push constant type must be trivially copyable");
 
@@ -234,7 +234,7 @@ struct PushConstant {
     {}
 };
 
-class PushConstantsBuilder{
+export class PushConstantsBuilder{
     uint32_t current_last_byte_used = 0;
     std::vector<VkPushConstantRange> ranges;
 
@@ -268,6 +268,8 @@ public:
         current_last_byte_used += sizeof(T);
 
         assert(current_last_byte_used <= 128 && "Assert failed: used more push constant space than is guaranteed to exist");
+
+        return PushConstant<T>{range.offset, range.stageFlags};
     }
 
     [[nodiscard]] const std::vector<VkPushConstantRange>& get_ranges() const{
@@ -566,7 +568,7 @@ export struct ShaderModule{
         std::ifstream file(filepath.data(), std::ios::ate | std::ios::binary);
 
         if (!file.is_open()) {
-            std::println("Error: could not open file {}", filepath);
+            std::println("Error: could not open file {}. Did you misspell the filepath? Do you have the permissions for it?", filepath); // todo: have the program find if it's a name or permission issue
             abort();
         }
 
@@ -620,7 +622,7 @@ static bool push_constants_valid(const std::optional<std::vector<VkPushConstantR
                 std::println("Assert failed: a push constant had a size of {}, which isn't a multiple of 4.", pconstant.size);
                 return false;
             }
-            if (pconstant.offset < 1){
+            if (pconstant.offset < 0){
                 std::println("Assert failed: a push constant had an offset of {}", pconstant.offset);
                 return false;
             }
@@ -712,6 +714,8 @@ export struct CommandBuffer{
 
 
     void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{
+        ImGui::Render(); // todo performance: maybe we should call this on another thread while other things are going on
+
         VkRenderingAttachmentInfo colorAttachment = struct_makers::attachment_info(target_image_view.view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingInfo renderInfo = struct_makers::rendering_info(draw_extent, &colorAttachment, nullptr);
 
@@ -720,6 +724,10 @@ export struct CommandBuffer{
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), this->buffer);
 
         vkCmdEndRendering(this->buffer);
+
+        ImGui_ImplSDL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
     }
 
     void restart(bool one_time_submit) const{
@@ -843,7 +851,7 @@ export struct CommandBuffer{
     }
 
     void bind_descriptor_sets(const ComputePipeline &pipeline, std::span<DescriptorSet> sets) const{
-        const int max_sets = 32;
+        const int max_sets = 4;
         if (sets.size() > max_sets){
             std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
             abort();
@@ -923,10 +931,9 @@ export struct VulkanEngine{
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
             .request_validation_layers(use_validation_layers)
             .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_MAX_ENUM_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
             .use_default_debug_messenger()
             .require_api_version(api_version.major, api_version.minor, api_version.patch)
@@ -1053,12 +1060,16 @@ export struct VulkanEngine{
             .UseDynamicRendering = true,
             .Allocator{},
             .CheckVkResultFn{},
-            .MinAllocationSize{},
+            .MinAllocationSize = 1024L * 1024L, // todo: might be a waste of memory according to imgui devs, but validation layers are unreadable without this here
             .CustomShaderVertCreateInfo{},
             .CustomShaderFragCreateInfo{},
         };
-        //.MinAllocationSize = 1024*1024; would stop best practices validation warning and waste some memory
         ImGui_ImplVulkan_Init(&init_info);
+
+        ImGui_ImplSDL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
         this->imgui_is_initialized = true;
     }
 

@@ -36,11 +36,19 @@ struct FrameInFlightData{
     GpuFence rendering_done_fence;
 
     FrameInFlightData(VulkanEngine &engine)
-    :swapchain_img_ready_sema(engine.create_semaphore()),
-     cmd_pool(engine.create_command_pool()),
-     main_cmd_buffer(engine.create_command_buffer(this->cmd_pool)),
-     rendering_done_fence(engine.create_fence(true))
-    { }
+    :
+    swapchain_img_ready_sema(engine.create_semaphore()),
+    cmd_pool(engine.create_command_pool()),
+    main_cmd_buffer(engine.create_command_buffer(this->cmd_pool)),
+    rendering_done_fence(engine.create_fence(true))
+    {}
+};
+
+struct ShaderData{
+    glm::vec4 a;
+    glm::vec4 b;
+    glm::vec4 c;
+    glm::vec4 d;
 };
 
 export class Renderer2{
@@ -60,20 +68,18 @@ public:
     DescriptorSetBuilder ds_builder;
     DescriptorSet desc_set;
 
+    PushConstantsBuilder pc_builder;
+    PushConstant<ShaderData> push_const;
+
+    int selected_compute_pipeline = 0;
     ComputePipeline gradient_pipeline;
+    ComputePipeline sky_pipeline;
 
     GpuFence immediate_submit_fence;
     CommandPool immediate_cmd_pool;
     CommandBuffer immediate_cmd_buffer;
 
     uint32_t frame_count{};
-
-    struct PushConstData{
-        glm::vec4 a;
-        glm::vec4 b;
-        glm::vec4 c;
-        glm::vec4 d;
-    };
 
     Renderer2(SDL_Window *window)
     :
@@ -109,22 +115,35 @@ public:
         }()
     ),
     desc_set(ds_builder.build(vk)),
+    push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
     gradient_pipeline(vk.create_compute_pipeline(desc_set,
-                                                 std::vector<VkPushConstantRange>{{
-                                                     .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                     .offset = 0,
-                                                     .size = sizeof(PushConstData),
-                                                 }},
+                                                 pc_builder.get_ranges(),
                                                  "shaders/compiled/gradient_color.comp.spv")),
+    sky_pipeline(vk.create_compute_pipeline(desc_set,
+                                            pc_builder.get_ranges(),
+                                            "shaders/compiled/sky.comp.spv")),
     immediate_submit_fence(vk.create_fence(true)),
     immediate_cmd_pool(vk.create_command_pool()),
     immediate_cmd_buffer(vk.create_command_buffer(immediate_cmd_pool))
     {
         vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
         vk.init_imgui(window, swapchain);
+        push_const.data.a += glm::vec4(1, 0, 0, 1);
+        push_const.data.b += glm::vec4(0, 0, 1, 1);
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
+
+    ComputePipeline &get_selected_compute_pipeline(){
+        switch (selected_compute_pipeline){
+            case 0: return this->gradient_pipeline;
+            case 1: return this->sky_pipeline;
+            default: {
+                std::println("Error: Invalid compute pipeline of selected_compute_pipeline={}, aborting", selected_compute_pipeline);
+                abort();
+            }
+        }
+    }
 
     void immediate_submit(std::function<void()>& function){
         immediate_cmd_buffer.restart(true);
@@ -139,6 +158,18 @@ public:
     }
 
     void draw(){
+		ImGui::Begin("Background customizer");
+
+        const char *comp_pipeline_names[] = {"Gradient", "Sky"};
+        ImGui::Combo("Compute Pipeline", &selected_compute_pipeline, comp_pipeline_names, IM_ARRAYSIZE(comp_pipeline_names));
+        ImGui::InputFloat4("data a",(float*)& push_const.data.a);
+        ImGui::InputFloat4("data b",(float*)& push_const.data.b);
+        ImGui::InputFloat4("data c",(float*)& push_const.data.c);
+        ImGui::InputFloat4("data d",(float*)& push_const.data.d);
+		
+		ImGui::End();
+
+
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
 
         vk.wait(frame_in_flight.rendering_done_fence);
@@ -156,8 +187,10 @@ public:
                            ImageAspects::COLOR
         );
 
-        cmd_buffer.bind_pipeline(gradient_pipeline);
-        cmd_buffer.bind_descriptor_sets(gradient_pipeline, desc_set);
+        cmd_buffer.update_push_constants(get_selected_compute_pipeline(), push_const);
+
+        cmd_buffer.bind_pipeline(get_selected_compute_pipeline());
+        cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
         cmd_buffer.barrier(draw_image,
@@ -192,7 +225,8 @@ public:
                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-                           ImageAspects::COLOR);
+                           ImageAspects::COLOR
+        );
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
 

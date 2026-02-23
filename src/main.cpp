@@ -26,14 +26,8 @@ int main(){
             if (event.type == SDL_EVENT_QUIT) { quit = true; }
             ImGui_ImplSDL3_ProcessEvent(&event);
         }
-        ImGui_ImplSDL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
 
         ImGui::ShowDemoWindow();
-
-        ImGui::Render();
-
         renderer.draw();
     }
     return 0;
