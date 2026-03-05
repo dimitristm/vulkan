@@ -1,9 +1,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
-//import vulkanRenderer;
-import vulkanRenderer2;
-//import vulkanUtil;
+import vulkanRenderer;
 
 int main(){
     SDL_Init(SDL_INIT_VIDEO);
@@ -18,7 +16,7 @@ int main(){
         window_flags
     );
 
-    Renderer2 renderer{window};
+    Renderer renderer{window};
     SDL_Event event;
     bool quit = false;
     while (!quit){
