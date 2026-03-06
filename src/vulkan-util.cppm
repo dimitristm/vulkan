@@ -635,6 +635,48 @@ static bool push_constants_valid(const std::optional<std::vector<VkPushConstantR
     return true;
 }
 
+static VkPipelineLayout make_pipeline_layout(
+    VkDevice device,
+    std::span<DescriptorSet> descriptor_sets,
+    const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+{
+    VkPipelineLayout layout;
+    // These are the minimums required by vulkan 1.3 for all devices, exceeding them would mean not supporting some devices.
+    const int max_descriptor_sets_in_shader = 4;
+    assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: over 4 descriptor sets bound to one shader. This would make the shader not run on all hardware.");
+    assert(push_constants_valid(push_constants));
+
+    std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
+    for (int i = 0; i < (int)descriptor_sets.size(); ++i) {
+        desc_set_layouts.at(i) = descriptor_sets[i].layout;
+    }
+
+    VkPipelineLayoutCreateInfo computeLayout{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags{},
+        .setLayoutCount = static_cast<uint32_t>(descriptor_sets.size()),
+        .pSetLayouts = desc_set_layouts.data(),
+        .pushConstantRangeCount = push_constants.has_value() ? static_cast<uint32_t>(push_constants->size()) : 0,
+        .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
+    };
+    VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
+    return layout;
+}
+
+static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(ShaderModule shader_module, VkShaderStageFlagBits stage){
+    return VkPipelineShaderStageCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags{},
+        .stage = stage,
+        .module = shader_module.module,
+        .pName = "main",
+        .pSpecializationInfo{},
+    };
+}
+
+
 export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
@@ -644,36 +686,9 @@ export struct ComputePipeline{
                                const std::optional<std::vector<VkPushConstantRange>> &push_constants,
                                ShaderModule shader_module)
     {
-        // These are the minimums required by vulkan 1.3 for all devices, exceeding them would mean not supporting some devices.
-        const int max_descriptor_sets_in_shader = 4;
-        assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: over 4 descriptor sets bound to one shader. This would make the shader not run on all hardware.");
-        assert(push_constants_valid(push_constants));
+        this->layout = make_pipeline_layout(device, descriptor_sets, push_constants);
 
-        std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
-        for (int i = 0; i < (int)descriptor_sets.size(); ++i) {
-            desc_set_layouts.at(i) = descriptor_sets[i].layout;
-        }
-
-        VkPipelineLayoutCreateInfo computeLayout{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags{},
-            .setLayoutCount = static_cast<uint32_t>(descriptor_sets.size()),
-            .pSetLayouts = desc_set_layouts.data(),
-            .pushConstantRangeCount = push_constants.has_value() ? static_cast<uint32_t>(push_constants->size()) : 0,
-            .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
-
-        VkPipelineShaderStageCreateInfo stageinfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags{},
-            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = shader_module.module,
-            .pName = "main",
-            .pSpecializationInfo{},
-        };
+        auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT);
 
         VkComputePipelineCreateInfo computePipelineCreateInfo{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -697,6 +712,230 @@ export struct ComputePipeline{
         vkDestroyShaderModule(device, shader_module.module, nullptr);
     }
 };
+
+enum class MSAALevel : std::uint8_t{
+    //todo: check physical device limits, they might not support one of these
+    OFF = VK_SAMPLE_COUNT_1_BIT,
+    X2 = VK_SAMPLE_COUNT_2_BIT,
+    X4 = VK_SAMPLE_COUNT_4_BIT,
+    X8 = VK_SAMPLE_COUNT_8_BIT,
+};
+
+static size_t vertex_format_size(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_R8_UNORM:
+        case VK_FORMAT_R8_SNORM:
+        case VK_FORMAT_R8_UINT:
+        case VK_FORMAT_R8_SINT:
+            return 1;
+
+        case VK_FORMAT_R8G8_UNORM:
+        case VK_FORMAT_R8G8_SNORM:
+        case VK_FORMAT_R8G8_UINT:
+        case VK_FORMAT_R8G8_SINT:
+            return 2;
+
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SNORM:
+        case VK_FORMAT_R8G8B8A8_UINT:
+        case VK_FORMAT_R8G8B8A8_SINT:
+            return 4;
+
+        case VK_FORMAT_R16_UNORM:
+        case VK_FORMAT_R16_SNORM:
+        case VK_FORMAT_R16_UINT:
+        case VK_FORMAT_R16_SINT:
+        case VK_FORMAT_R16_SFLOAT:
+            return 2;
+
+        case VK_FORMAT_R16G16_UNORM:
+        case VK_FORMAT_R16G16_SNORM:
+        case VK_FORMAT_R16G16_UINT:
+        case VK_FORMAT_R16G16_SINT:
+        case VK_FORMAT_R16G16_SFLOAT:
+            return 4;
+
+        case VK_FORMAT_R16G16B16A16_UNORM:
+        case VK_FORMAT_R16G16B16A16_SNORM:
+        case VK_FORMAT_R16G16B16A16_UINT:
+        case VK_FORMAT_R16G16B16A16_SINT:
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            return 8;
+
+        case VK_FORMAT_R32_UINT:
+        case VK_FORMAT_R32_SINT:
+        case VK_FORMAT_R32_SFLOAT:
+            return 4;
+
+        case VK_FORMAT_R32G32_UINT:
+        case VK_FORMAT_R32G32_SINT:
+        case VK_FORMAT_R32G32_SFLOAT:
+            return 8;
+
+        case VK_FORMAT_R32G32B32_UINT:
+        case VK_FORMAT_R32G32B32_SINT:
+        case VK_FORMAT_R32G32B32_SFLOAT:
+            return 12;
+
+        case VK_FORMAT_R32G32B32A32_UINT:
+        case VK_FORMAT_R32G32B32A32_SINT:
+        case VK_FORMAT_R32G32B32A32_SFLOAT:
+            return 16;
+
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+        case VK_FORMAT_A2B10G10R10_SINT_PACK32:
+            return 4;
+
+        default:
+            assert(false && "Unsupported vertex attribute format");
+
+        abort();
+    }
+}
+export struct VertexBuffer{
+    VkBuffer buffer;
+    VmaAllocation allocation;
+    uint32_t size_in_bytes;
+    uint32_t element_size_in_bytes;
+    const std::vector<VkFormat> attribute_formats;
+    VertexBuffer(VmaAllocator allocator, const std::vector<VkFormat> &attribute_formats, int elements)
+    :attribute_formats(attribute_formats)
+    {
+        assert(attribute_formats.size() <= 16);
+        element_size_in_bytes = 0;
+        for (const auto &format : attribute_formats){
+            element_size_in_bytes += vertex_format_size(format);
+        }
+        size_in_bytes = element_size_in_bytes * elements;
+
+        VkBufferCreateInfo buf_info{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .size = size_in_bytes,
+            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount{},
+            .pQueueFamilyIndices{},
+        };
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        vmaCreateBuffer(allocator, &buf_info, &alloc_info, &buffer, &allocation, nullptr);
+    }
+};
+
+struct GraphicsPipeline{
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+    GraphicsPipeline(
+        VkDevice device,
+        ShaderModule vert_shader,
+        ShaderModule frag_shader,
+        std::span<DescriptorSet> descriptor_sets,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        const VertexBuffer &vertex_buffer,
+        VkFormat color_attachment_format,
+        VkFormat depth_attachment_format,
+        VkFormat stencil_attachment_format,
+        MSAALevel msaa_level,
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+    :
+    layout(make_pipeline_layout(device, descriptor_sets, push_constants))
+    {
+        assert(
+            topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
+            topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
+            topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        );
+        VkPipelineShaderStageCreateInfo shader_stage_infos[2];
+        shader_stage_infos[0] = make_pipeline_shader_stage_info(vert_shader, VK_SHADER_STAGE_VERTEX_BIT);
+        shader_stage_infos[1] = make_pipeline_shader_stage_info(frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+        VkPipelineRenderingCreateInfo pipeline_rendering_create_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = nullptr,
+            .viewMask{},
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &color_attachment_format,
+            .depthAttachmentFormat = depth_attachment_format,
+            .stencilAttachmentFormat = stencil_attachment_format,
+        };
+
+        VkVertexInputBindingDescription vertex_binding_description{
+            .binding = 0,
+            .stride = vertex_buffer.element_size_in_bytes,
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+
+        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions;
+        vertex_attribute_descriptions.reserve(16);
+        uint32_t curr_location = 0;
+        uint32_t curr_offset = 0;
+        for(const auto &format : vertex_buffer.attribute_formats){
+            vertex_attribute_descriptions.push_back({.location = curr_location, .binding = 0, .format = format, .offset = curr_offset,});
+            ++curr_location;
+            curr_offset += vertex_format_size(format);
+        }
+
+        VkPipelineVertexInputStateCreateInfo vert_input_state_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &vertex_binding_description,
+            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_attribute_descriptions.size()),
+            .pVertexAttributeDescriptions = vertex_attribute_descriptions.data(),
+        };
+
+        VkPipelineInputAssemblyStateCreateInfo assembly{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .topology = topology,
+            .primitiveRestartEnable = static_cast<VkBool32>(false),
+        };
+
+        VkPipelineViewportStateCreateInfo viewport_state = {};
+        viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewport_state.viewportCount = 1;
+        viewport_state.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo raster_state{};
+        raster_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster_state.cullMode = VK_CULL_MODE_BACK_BIT;
+        raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        raster_state.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo ms_state{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .rasterizationSamples = static_cast<VkSampleCountFlagBits>(msaa_level),
+            .sampleShadingEnable = false, //true = ssaa, false = msaa
+            .minSampleShading{},
+            .pSampleMask = nullptr,
+            .alphaToCoverageEnable{},
+            .alphaToOneEnable{}
+        };
+
+        VkGraphicsPipelineCreateInfo graphics_pipeline_create_info{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &pipeline_rendering_create_info,
+            .flags{},
+            .stageCount = 2,
+            .pStages = shader_stage_infos,
+            .pVertexInputState = &vert_input_state_info,
+            .pInputAssemblyState = &assembly,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &raster_state,
+            .pMultisampleState = &ms_state,
+        };
+    }
+};
+
 
 export struct CommandBuffer{
     VkCommandBuffer buffer;
