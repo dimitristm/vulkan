@@ -75,6 +75,9 @@ public:
     ComputePipeline gradient_pipeline;
     ComputePipeline sky_pipeline;
 
+    VertexBuffer vertex_buffer;
+    GraphicsPipeline graphics_pipeline;
+
     GpuFence immediate_submit_fence;
     CommandPool immediate_cmd_pool;
     CommandBuffer immediate_cmd_buffer;
