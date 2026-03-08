@@ -841,7 +841,7 @@ export struct GraphicsPipeline{
         MSAALevel msaa_level,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
-    layout(make_pipeline_layout(device, descriptor_sets, push_constants))
+    layout(make_pipeline_layout(device, descriptor_sets, push_constants)) // todo make pipeline layouts into exported structs to reuse them
     {
         assert(
             topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
@@ -1216,6 +1216,9 @@ export struct VulkanEngine{
     std::vector<VkSemaphore> created_semaphores;
     std::vector<VkDescriptorSetLayout> layouts_to_delete;
     std::vector<ComputePipeline> created_compute_pipelines;
+    std::vector<GraphicsPipeline> created_graphics_pipelines;
+    struct BufferTrackingInfo{VkBuffer buffer; VmaAllocation allocation;};
+    std::vector<BufferTrackingInfo> created_buffers;
 
     bool imgui_is_initialized = false;
 
@@ -1290,9 +1293,15 @@ export struct VulkanEngine{
 
         for(auto &compute_pipeline : created_compute_pipelines){
             vkDestroyPipelineLayout(device, compute_pipeline.layout, nullptr);
-        }
-        for(auto &compute_pipeline : created_compute_pipelines){
             vkDestroyPipeline(device, compute_pipeline.pipeline, nullptr);
+        }
+        for(auto &graphics_pipeline : created_graphics_pipelines){
+            vkDestroyPipelineLayout(device, graphics_pipeline.layout, nullptr);
+            vkDestroyPipeline(device, graphics_pipeline.pipeline, nullptr);
+        }
+
+        for(auto &created_buffer : created_buffers){
+            vmaDestroyBuffer(allocator, created_buffer.buffer, created_buffer.allocation);
         }
 
         vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
@@ -1464,6 +1473,29 @@ export struct VulkanEngine{
         std::string_view shader_filepath)
     {
         return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), push_constants, shader_filepath);
+    }
+
+    GraphicsPipeline create_graphics_pipeline(
+        VkDevice device,
+        ShaderModule vert_shader,
+        ShaderModule frag_shader,
+        std::span<DescriptorSet> descriptor_sets,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        const VertexBuffer &vertex_buffer,
+        VkFormat color_attachment_format,
+        VkFormat depth_attachment_format,
+        MSAALevel msaa_level,
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+    {
+        GraphicsPipeline pip(device, vert_shader, frag_shader, descriptor_sets, push_constants, vertex_buffer, color_attachment_format, depth_attachment_format, msaa_level, topology);
+        created_graphics_pipelines.push_back(pip);
+        return pip;
+    }
+    
+    VertexBuffer create_vertex_buffer(const std::vector<VkFormat> &attribute_formats, int elements){
+        VertexBuffer buf(allocator, attribute_formats, elements);
+        created_buffers.push_back({buf.buffer, buf.allocation});
+        return buf;
     }
 
     [[nodiscard]] CommandBuffer create_command_buffer(CommandPool pool) const{
