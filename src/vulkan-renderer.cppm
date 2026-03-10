@@ -164,11 +164,11 @@ public:
         push_const.data.a += glm::vec4(1, 0, 0, 1);
         push_const.data.b += glm::vec4(0, 0, 1, 1);
         std::array<Vertex, 3> vertices = {{
-            {.pos={1.0f, 1.0f, 0.0f}, .color={1.0f, 0.0f, 0.0f}},
-            {.pos={-1.0f, 1.0f, 0.0f}, .color={0.0f, 1.0f, 0.0f}},
-            {.pos={0.0f, -1.0f, 0.0f}, .color={0.0f, 0.0f, 1.0f}},
+            {.pos={1.0f, 1.0f, 0.5f}, .color={1.0f, 0.0f, 0.0f}},
+            {.pos={0.0f, -1.0f, 0.5f}, .color={0.0f, 0.0f, 1.0f}},
+            {.pos={-1.0f, 1.0f, 0.5f}, .color={0.0f, 1.0f, 0.0f}},
         }};
-        memcpy(staging_buffer.get_mapped_data(), vertices.data(), vertices.size());
+        memcpy(staging_buffer.get_mapped_data(), vertices.data(), vertices.size() * sizeof(Vertex));
         immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, vertex_buffer);});
     }
 
