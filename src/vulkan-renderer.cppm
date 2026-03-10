@@ -13,6 +13,7 @@ module;
 #include <print>
 
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 #include "imgui.h"
@@ -51,6 +52,11 @@ struct ShaderData{
     glm::vec4 d;
 };
 
+struct Vertex{
+    glm::vec3 pos;
+    glm::vec3 color;
+};
+
 export class Renderer{
 public:
     static constexpr int FRAMES_IN_FLIGHT = 2;
@@ -75,7 +81,12 @@ public:
     ComputePipeline gradient_pipeline;
     ComputePipeline sky_pipeline;
 
+    ShaderModule vert_shader;
+    ShaderModule frag_shader;
+    DescriptorSetBuilder graphics_desc_set_builder;
+    DescriptorSet graphics_desc_set;
     VertexBuffer vertex_buffer;
+    StagingBuffer staging_buffer;
     GraphicsPipeline graphics_pipeline;
 
     GpuFence immediate_submit_fence;
@@ -83,6 +94,18 @@ public:
     CommandBuffer immediate_cmd_buffer;
 
     uint32_t frame_count{};
+
+    void immediate_submit(std::function<void()>&& function){
+        immediate_cmd_buffer.restart(true);
+
+        function();
+
+        immediate_cmd_buffer.end();
+
+        vk.submit_commands(immediate_cmd_buffer, immediate_submit_fence);
+
+        vk.wait(immediate_submit_fence);
+    }
 
     Renderer(SDL_Window *window)
     :
@@ -125,7 +148,14 @@ public:
     sky_pipeline(vk.create_compute_pipeline(desc_set,
                                             pc_builder.get_ranges(),
                                             "shaders/compiled/sky.comp.spv")),
-    immediate_submit_fence(vk.create_fence(true)),
+    vert_shader(vk.create_shader_module("shaders/compiled/colored-triangle.vert.spv")),
+    frag_shader(vk.create_shader_module("shaders/compiled/colored-triangle.frag.spv")),
+    graphics_desc_set_builder(),
+    graphics_desc_set(graphics_desc_set_builder.build(vk)),
+    vertex_buffer(vk.create_vertex_buffer({VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16)),
+    staging_buffer(vk.create_staging_buffer(sizeof(Vertex) * 16)),
+    graphics_pipeline(vk.create_graphics_pipeline(vert_shader, frag_shader, std::span(&graphics_desc_set, 1), std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF)),
+    immediate_submit_fence(vk.create_fence(false)),
     immediate_cmd_pool(vk.create_command_pool()),
     immediate_cmd_buffer(vk.create_command_buffer(immediate_cmd_pool))
     {
@@ -133,6 +163,13 @@ public:
         vk.init_imgui(window, swapchain);
         push_const.data.a += glm::vec4(1, 0, 0, 1);
         push_const.data.b += glm::vec4(0, 0, 1, 1);
+        std::array<Vertex, 3> vertices = {{
+            {.pos={1.0f, 1.0f, 0.0f}, .color={1.0f, 0.0f, 0.0f}},
+            {.pos={-1.0f, 1.0f, 0.0f}, .color={0.0f, 1.0f, 0.0f}},
+            {.pos={0.0f, -1.0f, 0.0f}, .color={0.0f, 0.0f, 1.0f}},
+        }};
+        memcpy(staging_buffer.get_mapped_data(), vertices.data(), vertices.size());
+        immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, vertex_buffer);});
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
@@ -148,20 +185,8 @@ public:
         }
     }
 
-    void immediate_submit(std::function<void()>& function){
-        immediate_cmd_buffer.restart(true);
-
-        function();
-
-        immediate_cmd_buffer.end();
-
-        vk.submit_commands(immediate_cmd_buffer, immediate_submit_fence);
-
-        vk.wait(immediate_submit_fence);
-    }
-
     void draw(){
-		ImGui::Begin("Background customizer");
+	ImGui::Begin("Background customizer");
 
         const char *comp_pipeline_names[] = {"Gradient", "Sky"};
         ImGui::Combo("Compute Pipeline", &selected_compute_pipeline, comp_pipeline_names, IM_ARRAYSIZE(comp_pipeline_names));
@@ -169,8 +194,8 @@ public:
         ImGui::InputFloat4("data b",(float*)& push_const.data.b);
         ImGui::InputFloat4("data c",(float*)& push_const.data.c);
         ImGui::InputFloat4("data d",(float*)& push_const.data.d);
-		
-		ImGui::End();
+	
+        ImGui::End();
 
 
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
@@ -198,9 +223,23 @@ public:
 
         cmd_buffer.barrier(draw_image,
                            false,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                           ImageAspects::COLOR
+        );
+
+        cmd_buffer.draw(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer);
+
+        // check everything after this for needed changes
+
+        cmd_buffer.barrier(draw_image,
+                           false,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            VK_ACCESS_2_TRANSFER_READ_BIT,
                            ImageAspects::COLOR

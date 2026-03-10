@@ -651,7 +651,7 @@ static VkPipelineLayout make_pipeline_layout(
         desc_set_layouts.at(i) = descriptor_sets[i].layout;
     }
 
-    VkPipelineLayoutCreateInfo computeLayout{
+    VkPipelineLayoutCreateInfo layout_create_info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags{},
@@ -660,7 +660,7 @@ static VkPipelineLayout make_pipeline_layout(
         .pushConstantRangeCount = push_constants.has_value() ? static_cast<uint32_t>(push_constants->size()) : 0,
         .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
     };
-    VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &layout));
+    VK_CHECK(vkCreatePipelineLayout(device, &layout_create_info, nullptr, &layout));
     return layout;
 }
 
@@ -713,7 +713,7 @@ export struct ComputePipeline{
     }
 };
 
-enum class MSAALevel : std::uint8_t{
+export enum class MSAALevel : std::uint8_t{
     //todo: check physical device limits, they might not support one of these
     OFF = VK_SAMPLE_COUNT_1_BIT,
     X2 = VK_SAMPLE_COUNT_2_BIT,
@@ -794,13 +794,17 @@ static size_t vertex_format_size(VkFormat format) {
         abort();
     }
 }
-export struct VertexBuffer{
+
+struct VulkanBuffer{
     VkBuffer buffer;
-    VmaAllocation allocation;
     uint32_t size_in_bytes;
+};
+
+export struct VertexBuffer : public VulkanBuffer{
+    VmaAllocation allocation;
     uint32_t element_size_in_bytes;
     const std::vector<VkFormat> attribute_formats;
-    VertexBuffer(VmaAllocator allocator, const std::vector<VkFormat> &attribute_formats, int elements)
+    VertexBuffer(VmaAllocator allocator, const std::vector<VkFormat> &attribute_formats, int element_count)
     :attribute_formats(attribute_formats)
     {
         assert(attribute_formats.size() <= 16);
@@ -808,14 +812,14 @@ export struct VertexBuffer{
         for (const auto &format : attribute_formats){
             element_size_in_bytes += vertex_format_size(format);
         }
-        size_in_bytes = element_size_in_bytes * elements;
+        size_in_bytes = element_size_in_bytes * element_count;
 
         VkBufferCreateInfo buf_info{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = nullptr,
             .flags{},
             .size = size_in_bytes,
-            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount{},
             .pQueueFamilyIndices{},
@@ -906,6 +910,7 @@ export struct GraphicsPipeline{
         raster_state.cullMode = VK_CULL_MODE_BACK_BIT;
         raster_state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         raster_state.lineWidth = 1.0f;
+        raster_state.polygonMode = VK_POLYGON_MODE_FILL;
 
         VkPipelineMultisampleStateCreateInfo ms_state{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
@@ -997,6 +1002,39 @@ export struct GraphicsPipeline{
     }
 };
 
+export struct StagingBuffer : public VulkanBuffer{
+    VmaAllocation allocation;
+private:
+    void *mapped_data;
+public:
+    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
+
+    StagingBuffer(VmaAllocator allocator, uint64_t size_in_bytes){
+        this->size_in_bytes = size_in_bytes;
+        VkBufferCreateInfo buf_create_info{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags{},
+            .size = size_in_bytes,
+            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount{},
+            .pQueueFamilyIndices{},
+        };
+
+        VmaAllocationCreateInfo alloc_create_info{
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .usage = VMA_MEMORY_USAGE_AUTO,
+            .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        };
+
+        VmaAllocationInfo alloc_info;
+        vmaCreateBuffer(allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
+        mapped_data = alloc_info.pMappedData;
+    }
+
+};
+
 
 export struct CommandBuffer{
     VkCommandBuffer buffer;
@@ -1035,6 +1073,66 @@ export struct CommandBuffer{
             one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
         );
         VK_CHECK(vkBeginCommandBuffer(buffer, &begin_info));
+    }
+
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy> ranges) const{
+        vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, ranges.size(), ranges.data());
+    }
+
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy range) const{
+        vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
+    }
+
+    void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const{
+        assert(dst.size_in_bytes >= src.size_in_bytes);
+        VkBufferCopy range{
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = src.size_in_bytes,
+        };
+        vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
+    }
+
+    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer& vertex_buffer) const{
+        VkRenderingAttachmentInfo color_render_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = color_attachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode{},
+            .resolveImageView{},
+            .resolveImageLayout{},
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{},
+        };
+
+        VkRenderingInfo rendering_info = struct_makers::rendering_info(draw_extent, &color_render_attachment_info, nullptr);
+
+        vkCmdBeginRendering(buffer, &rendering_info);
+
+        VkDeviceSize offsets = 0;
+        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
+        vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+
+        VkViewport viewport = {
+            .x = 0,
+            .y = 0,
+            .width = static_cast<float>(draw_extent.width),
+            .height = static_cast<float>(draw_extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+        vkCmdSetViewport(buffer, 0, 1, &viewport);
+
+        VkRect2D scissor{
+            .offset{.x = 0, .y = 0},
+            .extent{draw_extent},
+        };
+        vkCmdSetScissor(buffer, 0, 1, &scissor);
+
+        vkCmdDraw(buffer, 3, 1, 0, 0);
+        vkCmdEndRendering(buffer);
     }
 
     void barrier(
@@ -1204,7 +1302,15 @@ export struct VulkanEngine{
 
  private:
     // These are used in the destructor to delete everything this engine made.
-    // Might also be used in asserts in debug mode to ensure this is the engine that made them.
+
+    // The reason why we need to do this instead of just adding destructors is that this way we
+    // can ensure that they are destroyed in the correct order, thus the user of the objects does
+    // not need to be careful about the order in which they declare the objects. While this usually isn't
+    // a concern when they are just declaring them on the stack one by one as the fact that default constructors do not exist for these objects prevents them from initializing
+    // an object before they initialize the objects they depend on, they could still call the destructors in the wrong order if they use something like a vector, as those
+    // don't need to contain an initialized member.
+
+    // Might also use these in asserts in debug mode to ensure this is the engine that made them.
     // Maybe I'll get around to deleting individual elements
     struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<ImageView> image_views;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
@@ -1215,6 +1321,7 @@ export struct VulkanEngine{
     std::vector<VkFence> created_fences;
     std::vector<VkSemaphore> created_semaphores;
     std::vector<VkDescriptorSetLayout> layouts_to_delete;
+    std::vector<VkShaderModule> created_shader_modules;
     std::vector<ComputePipeline> created_compute_pipelines;
     std::vector<GraphicsPipeline> created_graphics_pipelines;
     struct BufferTrackingInfo{VkBuffer buffer; VmaAllocation allocation;};
@@ -1233,7 +1340,7 @@ export struct VulkanEngine{
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
             .request_validation_layers(use_validation_layers)
             .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
-            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
@@ -1298,6 +1405,10 @@ export struct VulkanEngine{
         for(auto &graphics_pipeline : created_graphics_pipelines){
             vkDestroyPipelineLayout(device, graphics_pipeline.layout, nullptr);
             vkDestroyPipeline(device, graphics_pipeline.pipeline, nullptr);
+        }
+
+        for(auto &shader_module : created_shader_modules){
+            vkDestroyShaderModule(device, shader_module, nullptr);
         }
 
         for(auto &created_buffer : created_buffers){
@@ -1476,7 +1587,6 @@ export struct VulkanEngine{
     }
 
     GraphicsPipeline create_graphics_pipeline(
-        VkDevice device,
         ShaderModule vert_shader,
         ShaderModule frag_shader,
         std::span<DescriptorSet> descriptor_sets,
@@ -1491,9 +1601,21 @@ export struct VulkanEngine{
         created_graphics_pipelines.push_back(pip);
         return pip;
     }
-    
-    VertexBuffer create_vertex_buffer(const std::vector<VkFormat> &attribute_formats, int elements){
-        VertexBuffer buf(allocator, attribute_formats, elements);
+
+    ShaderModule create_shader_module(std::string_view shader_filepath){
+        ShaderModule module(device, shader_filepath);
+        created_shader_modules.push_back(module.module);
+        return module;
+    }
+ 
+    VertexBuffer create_vertex_buffer(const std::vector<VkFormat> &attribute_formats, int element_count){
+        VertexBuffer buf(allocator, attribute_formats, element_count);
+        created_buffers.push_back({buf.buffer, buf.allocation});
+        return buf;
+    }
+
+    StagingBuffer create_staging_buffer(uint64_t buffer_size){
+        StagingBuffer buf(allocator, buffer_size);
         created_buffers.push_back({buf.buffer, buf.allocation});
         return buf;
     }
