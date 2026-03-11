@@ -36,12 +36,12 @@ struct FrameInFlightData{
     CommandBuffer main_cmd_buffer;
     GpuFence rendering_done_fence;
 
-    FrameInFlightData(VulkanEngine &engine)
+    FrameInFlightData(VulkanEngine &vk)
     :
-    swapchain_img_ready_sema(engine.create_semaphore()),
-    cmd_pool(engine.create_command_pool()),
-    main_cmd_buffer(engine.create_command_buffer(this->cmd_pool)),
-    rendering_done_fence(engine.create_fence(true))
+    swapchain_img_ready_sema(vk),
+    cmd_pool(vk),
+    main_cmd_buffer(vk, this->cmd_pool),
+    rendering_done_fence(vk, true)
     {}
 };
 
@@ -102,9 +102,9 @@ public:
 
         immediate_cmd_buffer.end();
 
-        vk.submit_commands(immediate_cmd_buffer, immediate_submit_fence);
+        immediate_cmd_buffer.submit(vk, immediate_submit_fence);
 
-        vk.wait(immediate_submit_fence);
+        immediate_submit_fence.wait(vk);
     }
 
     Renderer(SDL_Window *window)
@@ -112,22 +112,23 @@ public:
     window(window),
     window_size(get_window_size_in_pixels(window)),
     vk(window),
-    swapchain(vk.create_swapchain(window, VK_PRESENT_MODE_FIFO_KHR)),
-    draw_image(vk.create_image(window_size,
-                               VK_FORMAT_R16G16B16A16_SFLOAT,
-                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-                               | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                               | VK_IMAGE_USAGE_STORAGE_BIT
-                               | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)),
-    draw_image_view(vk.create_image_view(draw_image, ImageAspects::COLOR, 0, 1)),
+    swapchain(vk, window, VK_PRESENT_MODE_FIFO_KHR),
+    draw_image(vk,
+               {static_cast<uint32_t>(window_size.x), static_cast<uint32_t>(window_size.y)},
+               VK_FORMAT_R16G16B16A16_SFLOAT,
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+               | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+               | VK_IMAGE_USAGE_STORAGE_BIT
+               | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    draw_image_view(vk, draw_image, ImageAspects::COLOR, 0, 1),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
             std::vector<GpuSemaphore> semas;
             int sema_count = (int)swapchain.get_images().size();
             semas.reserve(sema_count);
             for (int i = 0; i <sema_count; ++i){
-                semas.push_back(vk.create_semaphore());
+                semas.emplace_back(vk);
             }
             return semas;
         }()
@@ -142,25 +143,21 @@ public:
     ),
     desc_set(ds_builder.build(vk)),
     push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
-    gradient_pipeline(vk.create_compute_pipeline(desc_set,
-                                                 pc_builder.get_ranges(),
-                                                 "shaders/compiled/gradient_color.comp.spv")),
-    sky_pipeline(vk.create_compute_pipeline(desc_set,
-                                            pc_builder.get_ranges(),
-                                            "shaders/compiled/sky.comp.spv")),
-    vert_shader(vk.create_shader_module("shaders/compiled/colored-triangle.vert.spv")),
-    frag_shader(vk.create_shader_module("shaders/compiled/colored-triangle.frag.spv")),
+    gradient_pipeline(vk, ShaderModule(vk, "shaders/compiled/gradient_color.comp.spv"), desc_set, pc_builder.get_ranges()),
+    sky_pipeline(vk, ShaderModule(vk, "shaders/compiled/sky.comp.spv"), desc_set, pc_builder.get_ranges()),
+    vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
+    frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set_builder(),
     graphics_desc_set(graphics_desc_set_builder.build(vk)),
-    vertex_buffer(vk.create_vertex_buffer({VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16)),
-    staging_buffer(vk.create_staging_buffer(sizeof(Vertex) * 16)),
-    graphics_pipeline(vk.create_graphics_pipeline(vert_shader, frag_shader, std::span(&graphics_desc_set, 1), std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF)),
-    immediate_submit_fence(vk.create_fence(false)),
-    immediate_cmd_pool(vk.create_command_pool()),
-    immediate_cmd_buffer(vk.create_command_buffer(immediate_cmd_pool))
+    vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
+    staging_buffer(vk, sizeof(Vertex) * 16),
+    graphics_pipeline(vk, vert_shader, frag_shader, std::span(&graphics_desc_set, 1), std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    immediate_submit_fence(vk, false),
+    immediate_cmd_pool(vk),
+    immediate_cmd_buffer(vk,immediate_cmd_pool)
     {
-        vk.update_storage_image_descriptor(desc_set, draw_image_view, 0);
-        vk.init_imgui(window, swapchain);
+        desc_set.update(vk, 0, draw_image_view);
+        vk.init_imgui(window, swapchain.get_format());
         push_const.data.a += glm::vec4(1, 0, 0, 1);
         push_const.data.b += glm::vec4(0, 0, 1, 1);
         std::array<Vertex, 3> vertices = {{
@@ -200,8 +197,8 @@ public:
 
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
 
-        vk.wait(frame_in_flight.rendering_done_fence);
-        uint32_t swapchain_img_idx = vk.acquire_next_image(swapchain, frame_in_flight.swapchain_img_ready_sema);
+        frame_in_flight.rendering_done_fence.wait(vk);
+        uint32_t swapchain_img_idx = swapchain.acquire_next_image(vk, frame_in_flight.swapchain_img_ready_sema);
 
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
@@ -284,7 +281,7 @@ public:
 
         cmd_buffer.end();
 
-        vk.submit_commands(cmd_buffer,
+        cmd_buffer.submit(vk,
                            frame_in_flight.swapchain_img_ready_sema,
                            VK_PIPELINE_STAGE_2_BLIT_BIT,
                            swapchain_render_done_semas[swapchain_img_idx],
@@ -292,7 +289,7 @@ public:
                            frame_in_flight.rendering_done_fence
         );
 
-        vk.present(swapchain, swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
+        swapchain.present(vk, swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
 
         ++frame_count;
     }

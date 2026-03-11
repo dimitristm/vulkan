@@ -44,7 +44,7 @@ export module vulkanUtil;
 
 static inline void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){
-        std::print("Vulkan error: {}", string_VkResult(result));
+        std::println("Vulkan error: {}", string_VkResult(result));
         abort();
     }
 }
@@ -56,15 +56,25 @@ static inline void VK_CHECK(VkResult result){
 #endif
 
 struct APIVersionVulkan{
-    u_int32_t major;
-    u_int32_t minor;
-    u_int32_t patch;
+    uint32_t major;
+    uint32_t minor;
+    uint32_t patch;
 
     [[nodiscard]] uint32_t to_vk_enum()const{
         return VK_MAKE_VERSION(major, minor, patch);
     }
 };
 
+
+const uint64_t timeout_length = 3000000000;
+
+export enum class MSAALevel : std::uint8_t{
+    //todo: check physical device limits, they might not support one of these
+    OFF = VK_SAMPLE_COUNT_1_BIT,
+    X2 = VK_SAMPLE_COUNT_2_BIT,
+    X4 = VK_SAMPLE_COUNT_4_BIT,
+    X8 = VK_SAMPLE_COUNT_8_BIT,
+};
 
 namespace struct_makers {
 
@@ -74,16 +84,6 @@ static VkCommandBufferBeginInfo command_buffer_begin_info(VkCommandBufferUsageFl
         .pNext            = nullptr,
         .flags            = flags,
         .pInheritanceInfo = nullptr,
-    };
-}
-
-static VkImageSubresourceRange image_subresource_range(VkImageAspectFlags aspectMask){
-    return VkImageSubresourceRange{
-        .aspectMask     = aspectMask,
-        .baseMipLevel   = 0,
-        .levelCount     = VK_REMAINING_MIP_LEVELS,
-        .baseArrayLayer = 0,
-        .layerCount     = VK_REMAINING_ARRAY_LAYERS,
     };
 }
 
@@ -150,29 +150,6 @@ static VkImageCreateInfo image_create_info(
         .queueFamilyIndexCount{},
         .pQueueFamilyIndices{},
         .initialLayout = initial_layout,
-    };
-}
-
-static VkImageViewCreateInfo imageview_create_info(
-    VkFormat format,
-    VkImage image,
-    VkImageAspectFlags aspectFlags)
-{
-    return VkImageViewCreateInfo{
-        .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext            = nullptr,
-        .flags{},
-        .image            = image,
-        .viewType         = VK_IMAGE_VIEW_TYPE_2D,
-        .format           = format,
-        .components{},
-        .subresourceRange = {
-            .aspectMask     = aspectFlags,
-            .baseMipLevel   = 0,
-            .levelCount     = 1,
-            .baseArrayLayer = 0,
-            .layerCount     = 1,
-        },
     };
 }
 
@@ -335,6 +312,214 @@ static VmaAllocator init_vma_allocator(
     return allocator;
 }
 
+static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
+    for(auto &swapchain_image_view : swapchain_image_views){
+        vkDestroyImageView(device, swapchain_image_view, nullptr);
+    }
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+}
+
+export struct VulkanEngine{
+    VkInstance vk_instance;
+    VkDebugUtilsMessengerEXT debug_messenger;
+    VkSurfaceKHR surface{};
+    VkPhysicalDevice physical_device;
+    VkDevice device;
+    VkQueue graphics_queue;
+    uint32_t graphics_queue_family;
+    VmaAllocator allocator;
+    VkDescriptorPool descriptor_pool;
+    APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
+
+    // These are used in the destructor to delete everything this engine made.
+
+    // The reason why we need to do this instead of just adding destructors is that this way we
+    // can ensure that they are destroyed in the correct order, thus the user of the objects does
+    // not need to be careful about the order in which they declare the objects. While this usually isn't
+    // a concern when they are just declaring them on the stack one by one as the fact that default constructors do not exist for these objects prevents them from initializing
+    // an object before they initialize the objects they depend on, they could still call the destructors in the wrong order if they use something like a vector, as those
+    // don't need to contain an initialized member.
+
+    // Might also use these in asserts in debug mode to ensure this is the engine that made them.
+    // Maybe I'll get around to deleting individual elements
+    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
+    std::vector<SwapchainTrackingInfo> created_swapchains;
+    struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
+    std::vector<ImageTrackingInfo> created_images;
+    std::unordered_set<VkImageView> created_image_views;
+    std::vector<VkCommandPool> created_command_pools;
+    std::vector<VkFence> created_fences;
+    std::vector<VkSemaphore> created_semaphores;
+    std::vector<VkDescriptorSetLayout> descriptor_set_layouts_to_delete;
+    std::vector<VkShaderModule> created_shader_modules;
+    std::vector<VkPipeline> created_pipelines;
+    std::vector<VkPipelineLayout> created_pipeline_layouts;
+    struct BufferTrackingInfo{VkBuffer buffer; VmaAllocation allocation;};
+    std::vector<BufferTrackingInfo> created_buffers;
+
+    bool imgui_is_initialized = false;
+
+    VulkanEngine(const VulkanEngine &) = delete;
+    VulkanEngine(VulkanEngine &&) = delete;
+    VulkanEngine &operator=(const VulkanEngine &) = delete;
+    VulkanEngine &operator=(VulkanEngine &&) = delete;
+
+    VulkanEngine(SDL_Window *window) {
+        vkb::InstanceBuilder builder;
+        vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
+            .request_validation_layers(use_validation_layers)
+            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
+            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
+            .use_default_debug_messenger()
+            .require_api_version(api_version.major, api_version.minor, api_version.patch)
+            .build()
+            .value();
+        this->vk_instance = vkb_inst.instance;
+        this->debug_messenger = vkb_inst.debug_messenger;
+
+        SDL_Vulkan_CreateSurface(window, vk_instance, nullptr, &surface);
+
+        // Init physical device
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.synchronization2 = (uint)true;
+        features13.dynamicRendering = (uint)true;
+
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        features12.descriptorIndexing = (uint)true;
+        features12.bufferDeviceAddress = (uint)true;
+
+        vkb::PhysicalDeviceSelector selector{vkb_inst};
+        vkb::PhysicalDevice vkb_physical_device = selector
+            .set_minimum_version(api_version.major, api_version.minor)
+            .set_required_features_13(features13)
+            .set_required_features_12(features12)
+            .set_surface(this->surface)
+            .select()
+            .value();
+
+        vkb::DeviceBuilder device_builder{vkb_physical_device};
+        vkb::Device vkb_device = device_builder.build().value();
+        this->physical_device = vkb_physical_device.physical_device;
+        this->device = vkb_device.device;
+        this->graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
+        this->graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+        if (vkb_device.get_queue(vkb::QueueType::present).value() != graphics_queue){
+            std::println("Error: device does not support shared graphics and present queues.");
+        }
+
+        allocator = init_vma_allocator(physical_device, device, vk_instance, api_version);
+ 
+        this->descriptor_pool = create_descriptor_pool(device, 1000, 200);
+    };
+
+    ~VulkanEngine(){
+        vkDeviceWaitIdle(device);
+
+        if (imgui_is_initialized){
+            ImGui_ImplVulkan_Shutdown();
+            ImGui_ImplSDL3_Shutdown();
+            ImGui::DestroyContext();
+        }
+
+        for(auto &pipeline : created_pipelines){
+            vkDestroyPipeline(device, pipeline, nullptr);
+        }
+        for(auto &pipeline_layout : created_pipeline_layouts){
+            vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+        }
+
+        for(auto &shader_module : created_shader_modules){
+            vkDestroyShaderModule(device, shader_module, nullptr);
+        }
+
+        for(auto &created_buffer : created_buffers){
+            vmaDestroyBuffer(allocator, created_buffer.buffer, created_buffer.allocation);
+        }
+
+        vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+        for(auto &layout : descriptor_set_layouts_to_delete){
+            vkDestroyDescriptorSetLayout(device, layout, nullptr);
+        }
+        for(auto &command_pool : created_command_pools){
+            vkDestroyCommandPool(device, command_pool, nullptr);
+        }
+        for(auto &fence : created_fences){
+            vkDestroyFence(device, fence, nullptr);
+        }
+        for(auto &sema : created_semaphores){
+            vkDestroySemaphore(device, sema, nullptr);
+        }
+        for(auto &img_view : created_image_views){
+            vkDestroyImageView(device, img_view, nullptr);
+        }
+        for(auto &image : created_images){
+            vmaDestroyImage(allocator, image.image, image.allocation);
+        }
+        for(auto &swapchain : created_swapchains){
+            destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
+        }
+        vmaDestroyAllocator(allocator);
+        vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
+        vkDestroyDevice(device, nullptr);
+        vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
+        vkDestroyInstance(vk_instance, nullptr);
+    }
+
+
+    void init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level = MSAALevel::OFF) {
+        ImGui::CreateContext();
+        ImGui_ImplSDL3_InitForVulkan(window);
+
+        // this initializes imgui for Vulkan
+        ImGui_ImplVulkan_InitInfo init_info = {
+            .ApiVersion = api_version.to_vk_enum(),
+            .Instance = vk_instance,
+            .PhysicalDevice = physical_device,
+            .Device = device,
+            .QueueFamily = graphics_queue_family,
+            .Queue = graphics_queue,
+            .DescriptorPool = nullptr,
+            .DescriptorPoolSize = 1000, // Probably overkill
+            .MinImageCount = 3,
+            .ImageCount = 3,
+            .PipelineCache{},
+            .PipelineInfoMain{
+                .RenderPass{},
+                .Subpass{},
+                .MSAASamples = static_cast<VkSampleCountFlagBits>(msaa_level),
+                .PipelineRenderingCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
+                    .pNext = nullptr,
+                    .viewMask{},
+                    .colorAttachmentCount = 1,
+                    .pColorAttachmentFormats = &image_format,
+                    .depthAttachmentFormat{},
+                    .stencilAttachmentFormat{},
+                },
+            },
+            .UseDynamicRendering = true,
+            .Allocator{},
+            .CheckVkResultFn{},
+            .MinAllocationSize = 1024L * 1024L, // todo: might be a waste of memory according to imgui devs, but validation layers are unreadable without this here
+            .CustomShaderVertCreateInfo{},
+            .CustomShaderFragCreateInfo{},
+        };
+        ImGui_ImplVulkan_Init(&init_info);
+
+        ImGui_ImplSDL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        this->imgui_is_initialized = true;
+    }
+};
+
 export enum class ImageAspects:VkImageAspectFlags{
     COLOR = VK_IMAGE_ASPECT_COLOR_BIT,
     DEPTH = VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -352,8 +537,8 @@ export struct Image{
     VkImageLayout layout;
 
     Image(
-        VmaAllocator allocator,
-        VkExtent2D extent,
+        VulkanEngine &vk,
+        VkExtent2D extent,// was a glm uvec2
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags)
@@ -367,10 +552,12 @@ export struct Image{
         img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
         VkImage image{};
         VmaAllocation allocation{};
-        vmaCreateImage(allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
+        vmaCreateImage(vk.allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
 
         this->vk_image = image;
         this->allocation = allocation;
+
+        vk.created_images.push_back({.image=vk_image, .allocation=allocation});
     }
 
     Image(VkImage img, VkExtent2D extent, VkFormat format)
@@ -382,7 +569,7 @@ export struct ImageView{
     VkImageView view;
 
     ImageView(
-        VkDevice device,
+        VulkanEngine &vk,
         const Image &img,
         ImageAspects aspects,
         uint32_t base_mip_level,
@@ -405,24 +592,49 @@ export struct ImageView{
                 .layerCount     = 1,
             },
         };
-        VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &view));
+        VK_CHECK(vkCreateImageView(vk.device, &view_info, nullptr, &view));
+
+        vk.created_image_views.insert(view);
     }
 
     ImageView(VkImageView vk_view):view(vk_view){}
+};
+
+export struct GpuFence{
+    VkFence fence;
+    GpuFence(VulkanEngine &vk, bool signaled){
+        VkFenceCreateInfo fence_create_info {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0u,
+        };
+        VK_CHECK(vkCreateFence(vk.device, &fence_create_info, nullptr, &fence));
+        vk.created_fences.push_back(fence);
+    }
+
+    void wait(VulkanEngine &vk){
+        VK_CHECK(vkWaitForFences(vk.device, 1, &fence, (VkBool32)true, timeout_length));
+        VK_CHECK(vkResetFences(vk.device, 1, &fence));
+    }
+};
+
+export struct GpuSemaphore{
+    VkSemaphore semaphore;
+    GpuSemaphore(VulkanEngine &vk){
+        VkSemaphoreCreateInfo semaphore_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+        };
+        VK_CHECK(vkCreateSemaphore(vk.device, &semaphore_create_info, nullptr, &semaphore));
+        vk.created_semaphores.push_back(semaphore);
+    }
 };
 
 
 static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<ImageView> &swapchain_image_views){
     for(auto &swapchain_image_view : swapchain_image_views){
         vkDestroyImageView(device, swapchain_image_view.view, nullptr);
-    }
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
-}
-
-
-static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
-    for(auto &swapchain_image_view : swapchain_image_views){
-        vkDestroyImageView(device, swapchain_image_view, nullptr);
     }
     vkDestroySwapchainKHR(device, swapchain, nullptr);
 }
@@ -437,28 +649,46 @@ export struct Swapchain{
     [[nodiscard]] std::vector<Image> &get_images() { return images; }
     [[nodiscard]] std::vector<ImageView> &get_image_views() { return image_views; }
     [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
+    [[nodiscard]] VkFormat get_format() const { return image_format; }
 
-    Swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
-        VkPresentModeKHR present_mode)
+    Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode)
     {
-        build_swapchain(physical_device, device, surface, size, present_mode);
+        build_swapchain(vk, window, present_mode);
     }
     Swapchain() = default;
 
+    // Returns the index of the next image in the swapchain
+    [[nodiscard]] uint32_t acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
+        uint32_t swapchain_image_index;
+        VK_CHECK(vkAcquireNextImageKHR(vk.device, swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index));
+        return swapchain_image_index;
+    }
+
+    void present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index){
+        VkPresentInfoKHR present_info = {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &wait_sema.semaphore,
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &swapchain_image_index,
+            .pResults{},
+        };
+        VK_CHECK(vkQueuePresentKHR(vk.graphics_queue, &present_info));
+    }
 
  private:
     void build_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 &size,
+        VulkanEngine &vk,
+        SDL_Window *window,
         VkPresentModeKHR present_mode)
     {
-        vkb::SwapchainBuilder swapchain_builder{physical_device, device, surface};
+        assert((vk.created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
+        glm::ivec2 size;
+        SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
+
+        vkb::SwapchainBuilder swapchain_builder{vk.physical_device, vk.device, vk.surface};
         vkb::Swapchain vkb_swapchain = swapchain_builder
             // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
             // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
@@ -480,64 +710,42 @@ export struct Swapchain{
         }
         this->image_format = vkb_swapchain.image_format;
 
-        for(VkImageView vk_view : vkb_swapchain.get_image_views().value()){
+        std::vector<VkImageView> vk_image_views = vkb_swapchain.get_image_views().value();
+        for(VkImageView vk_view : vk_image_views){
             this->image_views.emplace_back(vk_view);
         }
+        vk.created_swapchains.push_back({.swapchain=swapchain, .image_views=vk_image_views});
     }
 
  public:
     // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
     // VulkanInstanceInfo that made it.
     void destroy_this_swapchain(VkDevice device){
+        //TODO: we MUST remove the swapchain from the VulkanEngine too...
         destroy_swapchain(swapchain, device, image_views);
     }
 
     void rebuild_swapchain(
-        VkPhysicalDevice physical_device,
-        VkDevice device,
-        VkSurfaceKHR surface,
-        glm::uvec2 size,
+        VulkanEngine &vk,
+        SDL_Window *window,
         VkPresentModeKHR present_mode)
     {
-        destroy_this_swapchain(device);
-        build_swapchain(physical_device, device, surface, size, present_mode);
-    }
-};
-
-export struct GpuFence{
-    VkFence fence;
-    GpuFence(VkDevice device, bool signaled){
-        VkFenceCreateInfo fence_create_info {
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0u,
-        };
-        VK_CHECK(vkCreateFence(device, &fence_create_info, nullptr, &fence));
-    }
-};
-
-export struct GpuSemaphore{
-    VkSemaphore semaphore;
-    GpuSemaphore(VkDevice device){
-        VkSemaphoreCreateInfo semaphore_create_info{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-        };
-        VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr, &semaphore));
+        destroy_this_swapchain(vk.device);
+        build_swapchain(vk, window, present_mode);
     }
 };
 
 export struct CommandPool{
     VkCommandPool pool;
-    CommandPool(VkDevice device, uint32_t graphics_queue_family){
+    CommandPool(VulkanEngine &vk){
         VkCommandPoolCreateInfo command_pool_info{
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext            = nullptr,
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = graphics_queue_family,
+            .queueFamilyIndex = vk.graphics_queue_family,
         };
-        VK_CHECK(vkCreateCommandPool(device, &command_pool_info, nullptr, &pool));
+        VK_CHECK(vkCreateCommandPool(vk.device, &command_pool_info, nullptr, &pool));
+        vk.created_command_pools.push_back(pool);
     }
 };
 
@@ -545,24 +753,52 @@ export struct DescriptorSet{
     VkDescriptorSet set;
     VkDescriptorSetLayout layout;
 
-    DescriptorSet(VkDevice device, VkDescriptorSetLayout layout, VkDescriptorPool pool)
+    DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
     :layout(layout)
     {
         VkDescriptorSetAllocateInfo alloc_info = {};
         alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         alloc_info.pNext = nullptr;
-        alloc_info.descriptorPool = pool;
+        alloc_info.descriptorPool = vk.descriptor_pool;
         alloc_info.descriptorSetCount = 1;
         alloc_info.pSetLayouts = &layout;
-        VK_CHECK(vkAllocateDescriptorSets(device, &alloc_info, &set));
+        VK_CHECK(vkAllocateDescriptorSets(vk.device, &alloc_info, &set));
+    }
+
+    void update(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
+        std::vector<VkDescriptorImageInfo> img_infos;
+        for (auto image_view : views){
+            img_infos.push_back({
+                .sampler{},
+                .imageView = image_view.view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            });
+        }
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = set,
+            .dstBinding = bind,
+            .dstArrayElement{},
+            .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .pImageInfo = img_infos.data(),
+            .pBufferInfo{},
+            .pTexelBufferView{},
+        };
+        vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    }
+
+    void update(VulkanEngine &vk, uint32_t bind, ImageView &view){
+        update(vk, bind, std::span<ImageView>(&view, 1));
     }
 };
 
 export struct ShaderModule{
     VkShaderModule module;
 
- private:
-    VkShaderModule load_shader_module(VkDevice device, const std::string_view filepath){
+    ShaderModule(VulkanEngine &vk, const std::string_view filepath){
         assert(filepath.data()[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
         // open the file. With cursor at the end
         std::ifstream file(filepath.data(), std::ios::ate | std::ios::binary);
@@ -587,22 +823,12 @@ export struct ShaderModule{
         createInfo.codeSize = buffer.size() * sizeof(uint32_t);
         createInfo.pCode = buffer.data();
 
-        VkShaderModule shader_module;
-        if (vkCreateShaderModule(device, &createInfo, nullptr, &shader_module) != VK_SUCCESS) {
+        if (vkCreateShaderModule(vk.device, &createInfo, nullptr, &module) != VK_SUCCESS) {
             std::println("Error: could not create shader module for shader {}", filepath);
             abort();
         }
-        return shader_module;
+        vk.created_shader_modules.push_back(module);
     }
- public:
-
-    ShaderModule(VkDevice device, const std::string_view filepath)
-    :module(load_shader_module(device, filepath))
-    {}
-
-    ShaderModule(VkShaderModule module)
-    :module(module)
-    {}
 };
 
 static bool push_constants_valid(const std::optional<std::vector<VkPushConstantRange>> &push_constants){
@@ -676,18 +902,17 @@ static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(ShaderMod
     };
 }
 
-
 export struct ComputePipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
 
-    void init_compute_pipeline(VkDevice device,
-                               std::span<DescriptorSet> descriptor_sets,
-                               const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-                               ShaderModule shader_module)
+    ComputePipeline(
+        VulkanEngine &vk,
+        ShaderModule shader_module,
+        std::span<DescriptorSet> descriptor_sets,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+    :layout(make_pipeline_layout(vk.device, descriptor_sets, push_constants))
     {
-        this->layout = make_pipeline_layout(device, descriptor_sets, push_constants);
-
         auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT);
 
         VkComputePipelineCreateInfo computePipelineCreateInfo{
@@ -699,26 +924,13 @@ export struct ComputePipeline{
             .basePipelineHandle{},
             .basePipelineIndex{},
         };
-        VK_CHECK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
+        VK_CHECK(vkCreateComputePipelines(vk.device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
+        vk.created_pipelines.push_back(pipeline);
+        vk.created_pipeline_layouts.push_back(layout);
     }
 
-    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, const std::optional<std::vector<VkPushConstantRange>> &push_constants, ShaderModule shader_module){
-        init_compute_pipeline(device, descriptors, push_constants, shader_module);
-    }
-
-    ComputePipeline(VkDevice device, std::span<DescriptorSet> descriptors, const std::optional<std::vector<VkPushConstantRange>> &push_constants, std::string_view shader_filepath){
-        ShaderModule shader_module = ShaderModule(device, shader_filepath);
-        init_compute_pipeline(device, descriptors, push_constants, shader_module);
-        vkDestroyShaderModule(device, shader_module.module, nullptr);
-    }
-};
-
-export enum class MSAALevel : std::uint8_t{
-    //todo: check physical device limits, they might not support one of these
-    OFF = VK_SAMPLE_COUNT_1_BIT,
-    X2 = VK_SAMPLE_COUNT_2_BIT,
-    X4 = VK_SAMPLE_COUNT_4_BIT,
-    X8 = VK_SAMPLE_COUNT_8_BIT,
+    ComputePipeline(VulkanEngine &vk, ShaderModule shader_module, DescriptorSet descriptor_sets, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+    :ComputePipeline(vk, shader_module, std::span(&descriptor_sets, 1), push_constants){}
 };
 
 static size_t vertex_format_size(VkFormat format) {
@@ -804,7 +1016,7 @@ export struct VertexBuffer : public VulkanBuffer{
     VmaAllocation allocation;
     uint32_t element_size_in_bytes;
     const std::vector<VkFormat> attribute_formats;
-    VertexBuffer(VmaAllocator allocator, const std::vector<VkFormat> &attribute_formats, int element_count)
+    VertexBuffer(VulkanEngine &vk, const std::vector<VkFormat> &attribute_formats, int element_count)
     :attribute_formats(attribute_formats)
     {
         assert(attribute_formats.size() <= 16);
@@ -826,7 +1038,8 @@ export struct VertexBuffer : public VulkanBuffer{
         };
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-        vmaCreateBuffer(allocator, &buf_info, &alloc_info, &buffer, &allocation, nullptr);
+        vmaCreateBuffer(vk.allocator, &buf_info, &alloc_info, &buffer, &allocation, nullptr);
+        vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
     }
 };
 
@@ -834,7 +1047,7 @@ export struct GraphicsPipeline{
     VkPipeline pipeline;
     VkPipelineLayout layout;
     GraphicsPipeline(
-        VkDevice device,
+        VulkanEngine &vk,
         ShaderModule vert_shader,
         ShaderModule frag_shader,
         std::span<DescriptorSet> descriptor_sets,
@@ -845,7 +1058,7 @@ export struct GraphicsPipeline{
         MSAALevel msaa_level,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
-    layout(make_pipeline_layout(device, descriptor_sets, push_constants)) // todo make pipeline layouts into exported structs to reuse them
+    layout(make_pipeline_layout(vk.device, descriptor_sets, push_constants)) // todo make pipeline layouts into exported structs to reuse them
     {
         assert(
             topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
@@ -998,7 +1211,9 @@ export struct GraphicsPipeline{
             .basePipelineHandle{},
             .basePipelineIndex{},
         };
-        VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
+        VK_CHECK(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
+        vk.created_pipelines.push_back(pipeline);
+        vk.created_pipeline_layouts.push_back(layout);
     }
 };
 
@@ -1009,7 +1224,7 @@ private:
 public:
     void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    StagingBuffer(VmaAllocator allocator, uint64_t size_in_bytes){
+    StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes){
         this->size_in_bytes = size_in_bytes;
         VkBufferCreateInfo buf_create_info{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -1022,33 +1237,30 @@ public:
             .pQueueFamilyIndices{},
         };
 
-        VmaAllocationCreateInfo alloc_create_info{
-            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-            .usage = VMA_MEMORY_USAGE_AUTO,
-            .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        };
+        VmaAllocationCreateInfo alloc_create_info{};
+        alloc_create_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc_create_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
         VmaAllocationInfo alloc_info;
-        vmaCreateBuffer(allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
+        vmaCreateBuffer(vk.allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
         mapped_data = alloc_info.pMappedData;
+        vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
     }
-
 };
-
 
 export struct CommandBuffer{
     VkCommandBuffer buffer;
-    CommandBuffer(VkDevice device, VkCommandPool pool){
+    CommandBuffer(const VulkanEngine &vk, const CommandPool &pool){
         VkCommandBufferAllocateInfo alloc_info{
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext              = nullptr,
-            .commandPool        = pool,
+            .commandPool        = pool.pool,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
-        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &buffer));
+        VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, &buffer));
     }
-
 
     void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{
         ImGui::Render(); // todo performance: maybe we should call this on another thread while other things are going on
@@ -1063,7 +1275,6 @@ export struct CommandBuffer{
         vkCmdEndRendering(this->buffer);
 
         ImGui_ImplSDL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
     }
 
@@ -1073,6 +1284,31 @@ export struct CommandBuffer{
             one_time_submit ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0
         );
         VK_CHECK(vkBeginCommandBuffer(buffer, &begin_info));
+    }
+
+    void submit(
+        VulkanEngine &vk,
+        std::optional<GpuSemaphore> wait_sema,
+        std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in the buffer that use these stages will not run until wait_sema is signaled
+        std::optional<GpuSemaphore> signal_sema, // Will be signaled when every command in the buffer is complete
+        std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in the buffer (other stages will have outdated cached data, causing errors)
+        GpuFence signal_fence) const
+    {
+        assert(wait_sema.has_value() == wait_stage_mask.has_value() && "You can't have a wait sema without a wait stage mask or the other way around");
+        assert(signal_sema.has_value() == signal_stage_mask.has_value() && "You can't have a signal sema without a signal stage mask or the other way around");
+
+        VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(buffer);
+        VkSemaphoreSubmitInfo wait_info = wait_sema.has_value() ? struct_makers::semaphore_submit_info(*wait_stage_mask, wait_sema->semaphore) : VkSemaphoreSubmitInfo{};
+        VkSemaphoreSubmitInfo signal_info = signal_sema.has_value() ? struct_makers::semaphore_submit_info(*signal_stage_mask, signal_sema->semaphore) : VkSemaphoreSubmitInfo{};
+        VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,
+                                                               signal_sema.has_value() ? &signal_info : nullptr,
+                                                               wait_sema.has_value() ? &wait_info : nullptr);
+
+        VK_CHECK(vkQueueSubmit2(vk.graphics_queue, 1, &submit_info, signal_fence.fence));
+    }
+
+    void submit(VulkanEngine &vk, GpuFence signal_fence){
+        submit(vk, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
     }
 
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy> ranges) const{
@@ -1156,8 +1392,8 @@ export struct CommandBuffer{
             .dstAccessMask = dst_access_mask,
             .oldLayout = discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout,
             .newLayout = new_layout,
-            .srcQueueFamilyIndex{},
-            .dstQueueFamilyIndex{},
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = img.vk_image,
             .subresourceRange = {
                 .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
@@ -1254,7 +1490,7 @@ export struct CommandBuffer{
             abort();
         };
         VkDescriptorSet vk_sets[max_sets];
-        for(int i = 0; i < sets.size(); ++i){
+        for(int i = 0; i < static_cast<int>(sets.size()); ++i){
             vk_sets[i] = sets[i].set;
         }
 
@@ -1284,431 +1520,6 @@ export struct CommandBuffer{
     void end() const{
 	VK_CHECK(vkEndCommandBuffer(this->buffer));
     }
-
-};
-
-export struct VulkanEngine{
-    VkInstance vk_instance;
-    VkDebugUtilsMessengerEXT debug_messenger;
-    VkSurfaceKHR surface{};
-    VkPhysicalDevice physical_device;
-    VkDevice device;
-    VkQueue graphics_queue;
-    u_int32_t graphics_queue_family;
-    VmaAllocator allocator;
-    VkDescriptorPool descriptor_pool;
-    APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
-    const uint64_t timeout_length = 3000000000;
-
- private:
-    // These are used in the destructor to delete everything this engine made.
-
-    // The reason why we need to do this instead of just adding destructors is that this way we
-    // can ensure that they are destroyed in the correct order, thus the user of the objects does
-    // not need to be careful about the order in which they declare the objects. While this usually isn't
-    // a concern when they are just declaring them on the stack one by one as the fact that default constructors do not exist for these objects prevents them from initializing
-    // an object before they initialize the objects they depend on, they could still call the destructors in the wrong order if they use something like a vector, as those
-    // don't need to contain an initialized member.
-
-    // Might also use these in asserts in debug mode to ensure this is the engine that made them.
-    // Maybe I'll get around to deleting individual elements
-    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<ImageView> image_views;};
-    std::vector<SwapchainTrackingInfo> created_swapchains;
-    struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
-    std::vector<ImageTrackingInfo> created_images;
-    std::unordered_set<VkImageView> created_image_views;
-    std::vector<VkCommandPool> created_command_pools;
-    std::vector<VkFence> created_fences;
-    std::vector<VkSemaphore> created_semaphores;
-    std::vector<VkDescriptorSetLayout> layouts_to_delete;
-    std::vector<VkShaderModule> created_shader_modules;
-    std::vector<ComputePipeline> created_compute_pipelines;
-    std::vector<GraphicsPipeline> created_graphics_pipelines;
-    struct BufferTrackingInfo{VkBuffer buffer; VmaAllocation allocation;};
-    std::vector<BufferTrackingInfo> created_buffers;
-
-    bool imgui_is_initialized = false;
-
- public:
-    VulkanEngine(const VulkanEngine &) = delete;
-    VulkanEngine(VulkanEngine &&) = delete;
-    VulkanEngine &operator=(const VulkanEngine &) = delete;
-    VulkanEngine &operator=(VulkanEngine &&) = delete;
-
-    VulkanEngine(SDL_Window *window) {
-        vkb::InstanceBuilder builder;
-        vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
-            .request_validation_layers(use_validation_layers)
-            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
-            .use_default_debug_messenger()
-            .require_api_version(api_version.major, api_version.minor, api_version.patch)
-            .build()
-            .value();
-        this->vk_instance = vkb_inst.instance;
-        this->debug_messenger = vkb_inst.debug_messenger;
-
-        SDL_Vulkan_CreateSurface(window, vk_instance, nullptr, &surface);
-
-        // Init physical device
-        VkPhysicalDeviceVulkan13Features features13{};
-        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.synchronization2 = (uint)true;
-        features13.dynamicRendering = (uint)true;
-
-        VkPhysicalDeviceVulkan12Features features12{};
-        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.descriptorIndexing = (uint)true;
-        features12.bufferDeviceAddress = (uint)true;
-
-        vkb::PhysicalDeviceSelector selector{vkb_inst};
-        vkb::PhysicalDevice vkb_physical_device = selector
-            .set_minimum_version(api_version.major, api_version.minor)
-            .set_required_features_13(features13)
-            .set_required_features_12(features12)
-            .set_surface(this->surface)
-            .select()
-            .value();
-
-        vkb::DeviceBuilder device_builder{vkb_physical_device};
-        vkb::Device vkb_device = device_builder.build().value();
-        this->physical_device = vkb_physical_device.physical_device;
-        this->device = vkb_device.device;
-        this->graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
-        this->graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
-
-        if (vkb_device.get_queue(vkb::QueueType::present).value() != graphics_queue){
-            std::println("Error: device does not support shared graphics and present queues.");
-        }
-
-        allocator = init_vma_allocator(physical_device, device, vk_instance, api_version);
- 
-        this->descriptor_pool = create_descriptor_pool(device, 1000, 200);
-    };
-
-    ~VulkanEngine(){
-        vkDeviceWaitIdle(device);
-
-        if (imgui_is_initialized){
-            ImGui_ImplVulkan_Shutdown();
-            ImGui_ImplSDL3_Shutdown();
-            ImGui::DestroyContext();
-        }
-
-        for(auto &compute_pipeline : created_compute_pipelines){
-            vkDestroyPipelineLayout(device, compute_pipeline.layout, nullptr);
-            vkDestroyPipeline(device, compute_pipeline.pipeline, nullptr);
-        }
-        for(auto &graphics_pipeline : created_graphics_pipelines){
-            vkDestroyPipelineLayout(device, graphics_pipeline.layout, nullptr);
-            vkDestroyPipeline(device, graphics_pipeline.pipeline, nullptr);
-        }
-
-        for(auto &shader_module : created_shader_modules){
-            vkDestroyShaderModule(device, shader_module, nullptr);
-        }
-
-        for(auto &created_buffer : created_buffers){
-            vmaDestroyBuffer(allocator, created_buffer.buffer, created_buffer.allocation);
-        }
-
-        vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-        for(auto &layout : layouts_to_delete){
-            vkDestroyDescriptorSetLayout(device, layout, nullptr);
-        }
-        for(auto &command_pool : created_command_pools){
-            vkDestroyCommandPool(device, command_pool, nullptr);
-        }
-        for(auto &fence : created_fences){
-            vkDestroyFence(device, fence, nullptr);
-        }
-        for(auto &sema : created_semaphores){
-            vkDestroySemaphore(device, sema, nullptr);
-        }
-        for(auto &img_view : created_image_views){
-            vkDestroyImageView(device, img_view, nullptr);
-        }
-        for(auto &image : created_images){
-            vmaDestroyImage(allocator, image.image, image.allocation);
-        }
-        for(auto &swapchain : created_swapchains){
-            destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
-        }
-        vmaDestroyAllocator(allocator);
-        vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
-        vkDestroyDevice(device, nullptr);
-        vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
-        vkDestroyInstance(vk_instance, nullptr);
-    }
-
-
-    void init_imgui(SDL_Window *window, const Swapchain &swapchain) {
-        ImGui::CreateContext();
-        ImGui_ImplSDL3_InitForVulkan(window);
-
-        // this initializes imgui for Vulkan
-        ImGui_ImplVulkan_InitInfo init_info = {
-            .ApiVersion = api_version.to_vk_enum(),
-            .Instance = vk_instance,
-            .PhysicalDevice = physical_device,
-            .Device = device,
-            .QueueFamily = graphics_queue_family,
-            .Queue = graphics_queue,
-            .DescriptorPool = nullptr,
-            .DescriptorPoolSize = 1000, // Probably overkill
-            .MinImageCount = 3,
-            .ImageCount = 3,
-            .PipelineCache{},
-            .PipelineInfoMain{
-                .RenderPass{},
-                .Subpass{},
-                .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
-                .PipelineRenderingCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
-                    .pNext = nullptr,
-                    .viewMask{},
-                    .colorAttachmentCount = 1,
-                    .pColorAttachmentFormats = &swapchain.image_format,
-                    .depthAttachmentFormat{},
-                    .stencilAttachmentFormat{},
-                },
-            },
-            .UseDynamicRendering = true,
-            .Allocator{},
-            .CheckVkResultFn{},
-            .MinAllocationSize = 1024L * 1024L, // todo: might be a waste of memory according to imgui devs, but validation layers are unreadable without this here
-            .CustomShaderVertCreateInfo{},
-            .CustomShaderFragCreateInfo{},
-        };
-        ImGui_ImplVulkan_Init(&init_info);
-
-        ImGui_ImplSDL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        this->imgui_is_initialized = true;
-    }
-
-    void register_for_deletion(VkDescriptorSetLayout layout){
-        layouts_to_delete.push_back(layout);
-    }
-
-    Swapchain create_swapchain(SDL_Window *window, VkPresentModeKHR present_mode){
-        assert((created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
-
-        glm::ivec2 size;
-        SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
-        Swapchain swapchain{
-            physical_device, device, surface, size, present_mode
-        };
-        created_swapchains.push_back({swapchain.swapchain, swapchain.image_views});
-        return swapchain;
-    }
-
-    Image create_image(
-        glm::uvec2 extent,
-        VkFormat format,
-        VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags)
-    {
-        Image image(
-            allocator, {extent.x, extent.y}, format, image_usage_flags, memory_property_flags
-        );
-        created_images.push_back(ImageTrackingInfo{.image=image.vk_image, .allocation=image.allocation});
-        return image;
-    }
-
-    ImageView create_image_view(
-        const Image &img,
-        ImageAspects aspects,
-        uint32_t base_mip_level,
-        uint32_t mip_level_count)
-    {
-        ImageView view(device, img, aspects, base_mip_level, mip_level_count);
-        created_image_views.insert(view.view);
-        return view;
-    }
-
-    CommandPool create_command_pool(){
-        CommandPool pool(device, graphics_queue_family);
-        created_command_pools.push_back(pool.pool);
-        return pool;
-    }
-
-    GpuFence create_fence(bool signaled){
-        GpuFence fence(device, signaled);
-        created_fences.push_back(fence.fence);
-        return fence;
-    }
-
-    GpuSemaphore create_semaphore(){
-        GpuSemaphore sema(device);
-        created_semaphores.push_back(sema.semaphore);
-        return sema;
-    }
-
-    ComputePipeline create_compute_pipeline(
-        const std::span<DescriptorSet> descriptors,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        ShaderModule module)
-    {
-        ComputePipeline pipeline(device, descriptors, push_constants, module);
-        created_compute_pipelines.push_back(pipeline);
-        return pipeline;
-    }
-
-    ComputePipeline create_compute_pipeline(
-        const std::span<DescriptorSet> descriptors,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        std::string_view shader_filepath)
-    {
-        ComputePipeline pipeline(device, descriptors, push_constants, shader_filepath);
-        created_compute_pipelines.push_back(pipeline);
-        return pipeline;
-    }
-
-    ComputePipeline create_compute_pipeline(
-        DescriptorSet descriptors,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        ShaderModule module)
-    {
-        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), push_constants, module);
-    }
-
-    ComputePipeline create_compute_pipeline(
-        DescriptorSet descriptors,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        std::string_view shader_filepath)
-    {
-        return create_compute_pipeline(std::span<DescriptorSet>(&descriptors, 1), push_constants, shader_filepath);
-    }
-
-    GraphicsPipeline create_graphics_pipeline(
-        ShaderModule vert_shader,
-        ShaderModule frag_shader,
-        std::span<DescriptorSet> descriptor_sets,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        const VertexBuffer &vertex_buffer,
-        VkFormat color_attachment_format,
-        VkFormat depth_attachment_format,
-        MSAALevel msaa_level,
-        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-    {
-        GraphicsPipeline pip(device, vert_shader, frag_shader, descriptor_sets, push_constants, vertex_buffer, color_attachment_format, depth_attachment_format, msaa_level, topology);
-        created_graphics_pipelines.push_back(pip);
-        return pip;
-    }
-
-    ShaderModule create_shader_module(std::string_view shader_filepath){
-        ShaderModule module(device, shader_filepath);
-        created_shader_modules.push_back(module.module);
-        return module;
-    }
- 
-    VertexBuffer create_vertex_buffer(const std::vector<VkFormat> &attribute_formats, int element_count){
-        VertexBuffer buf(allocator, attribute_formats, element_count);
-        created_buffers.push_back({buf.buffer, buf.allocation});
-        return buf;
-    }
-
-    StagingBuffer create_staging_buffer(uint64_t buffer_size){
-        StagingBuffer buf(allocator, buffer_size);
-        created_buffers.push_back({buf.buffer, buf.allocation});
-        return buf;
-    }
-
-    [[nodiscard]] CommandBuffer create_command_buffer(CommandPool pool) const{
-        return {device, pool.pool};
-    }
-
-    DescriptorSet allocate_descriptor_set(VkDescriptorSetLayout layout) const{
-        return {device, layout, descriptor_pool};
-    }
-
-    void update_storage_image_descriptor(DescriptorSet set, std::span<ImageView> views, uint32_t bind) const{
-        std::vector<VkDescriptorImageInfo> img_infos;
-        for (auto image_view : views){
-            img_infos.push_back({
-                .sampler{},
-                .imageView = image_view.view,
-                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-            });
-        }
-
-        VkWriteDescriptorSet write{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = nullptr,
-            .dstSet = set.set,
-            .dstBinding = bind,
-            .dstArrayElement{},
-            .descriptorCount = static_cast<uint32_t>(img_infos.size()),
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            .pImageInfo = img_infos.data(),
-            .pBufferInfo{},
-            .pTexelBufferView{},
-        };
-
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-    }
-
-    void update_storage_image_descriptor(DescriptorSet &set, ImageView &view, uint32_t bind) const{
-        update_storage_image_descriptor(set, std::span<ImageView>(&view, 1), bind);
-    }
-
-    void wait(GpuFence &fence) const{
-        VK_CHECK(vkWaitForFences(device, 1, &fence.fence, (VkBool32)true, timeout_length));
-        VK_CHECK(vkResetFences(device, 1, &fence.fence));
-    }
-
-    // Returns the index of the next image in the swapchain
-    [[nodiscard]] uint32_t acquire_next_image(const Swapchain &swapchain, GpuSemaphore signal_sema) const{
-        uint32_t swapchain_image_index;
-        VK_CHECK(vkAcquireNextImageKHR(device, swapchain.swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index));
-        return swapchain_image_index;
-    }
-
-    void submit_commands(
-        CommandBuffer cmd_buffer,
-        std::optional<GpuSemaphore> wait_sema,
-        std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in cmd_buffer that use these stages will not run until wait_sema is signaled
-        std::optional<GpuSemaphore> signal_sema, // Will be signaled when every command in cmd_buffer is complete
-        std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in cmd_buffer (other stages will have outdated cached data, causing errors)
-        GpuFence signal_fence) const
-    {
-        assert(wait_sema.has_value() == wait_stage_mask.has_value() && "You can't have a wait sema without a wait stage mask or the other way around");
-        assert(signal_sema.has_value() == signal_stage_mask.has_value() && "You can't have a signal sema without a signal stage mask or the other way around");
-
-        VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(cmd_buffer.buffer);
-        VkSemaphoreSubmitInfo wait_info = wait_sema.has_value() ? struct_makers::semaphore_submit_info(*wait_stage_mask, wait_sema->semaphore) : VkSemaphoreSubmitInfo{};
-        VkSemaphoreSubmitInfo signal_info = signal_sema.has_value() ? struct_makers::semaphore_submit_info(*signal_stage_mask, signal_sema->semaphore) : VkSemaphoreSubmitInfo{};
-        VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,
-                                                               signal_sema.has_value() ? &signal_info : nullptr,
-                                                               wait_sema.has_value() ? &wait_info : nullptr);
-
-        VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, signal_fence.fence));
-    }
-
-    void submit_commands(CommandBuffer cmd_buffer, GpuFence signal_fence) const{
-        submit_commands(cmd_buffer, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
-    }
-
-    void present(const Swapchain& swapchain, GpuSemaphore wait_sema, uint32_t swapchain_image_index) const{
-        VkPresentInfoKHR present_info = {
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = nullptr,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &wait_sema.semaphore,
-            .swapchainCount = 1,
-            .pSwapchains = &swapchain.swapchain,
-            .pImageIndices = &swapchain_image_index,
-            .pResults{},
-        };
-        VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
-    }
-
 };
 
 // This is what you're meant to use instead of Layouts and Layout Bindings. You can
@@ -1731,7 +1542,7 @@ export struct DescriptorSetBuilder{
         return *this;
     }
 
-    DescriptorSet build(VulkanEngine &engine){
+    DescriptorSet build(VulkanEngine &vk){
         if (!finalized){
             VkDescriptorSetLayoutCreateInfo info = {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -1740,17 +1551,12 @@ export struct DescriptorSetBuilder{
                 .bindingCount = static_cast<uint32_t>(bindings.size()),
                 .pBindings = bindings.data(),
             };
-            VK_CHECK(vkCreateDescriptorSetLayout(engine.device, &info, nullptr, &layout));
-            engine.register_for_deletion(layout);
+            VK_CHECK(vkCreateDescriptorSetLayout(vk.device, &info, nullptr, &layout));
+            vk.descriptor_set_layouts_to_delete.push_back(layout);
             finalized = true;
         }
 
-        return engine.allocate_descriptor_set(layout);
+        return DescriptorSet{vk, layout};
     }
 };
-
-
-
-
-
 
