@@ -455,7 +455,7 @@ export struct VulkanEngine{
         for(auto &sema : created_semaphores){
             vkDestroySemaphore(device, sema, nullptr);
         }
-        for(auto &img_view : created_image_views){
+        for(const auto &img_view : created_image_views){
             vkDestroyImageView(device, img_view, nullptr);
         }
         for(auto &image : created_images){
@@ -655,7 +655,6 @@ export struct Swapchain{
     {
         build_swapchain(vk, window, present_mode);
     }
-    Swapchain() = default;
 
     // Returns the index of the next image in the swapchain
     [[nodiscard]] uint32_t acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
@@ -1307,7 +1306,7 @@ export struct CommandBuffer{
         VK_CHECK(vkQueueSubmit2(vk.graphics_queue, 1, &submit_info, signal_fence.fence));
     }
 
-    void submit(VulkanEngine &vk, GpuFence signal_fence){
+    void submit(VulkanEngine &vk, GpuFence signal_fence) const{
         submit(vk, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
     }
 
@@ -1494,7 +1493,7 @@ export struct CommandBuffer{
             vk_sets[i] = sets[i].set;
         }
 
-	vkCmdBindDescriptorSets(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout, 0, sets.size(), vk_sets, 0, nullptr);
+        vkCmdBindDescriptorSets(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout, 0, sets.size(), vk_sets, 0, nullptr);
     }
     void bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet sets) const{
         bind_descriptor_sets(pipeline, std::span<DescriptorSet>(&sets, 1));
