@@ -864,7 +864,7 @@ export struct PipelineLayout{
     VkPipelineLayout layout;
     PipelineLayout(
         VulkanEngine &vk,
-        std::span<DescriptorSet> descriptor_sets,
+        std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants)
     {
         // These are the minimums required by vulkan 1.3 for all devices, exceeding them would mean not supporting some devices.
@@ -873,8 +873,9 @@ export struct PipelineLayout{
         assert(push_constants_valid(push_constants));
 
         std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
-        for (int i = 0; i < (int)descriptor_sets.size(); ++i) {
-            desc_set_layouts.at(i) = descriptor_sets[i].layout;
+        int i = 0;
+        for (const auto &set : descriptor_sets) {
+            desc_set_layouts.at(i++) = set.layout;
         }
 
         VkPipelineLayoutCreateInfo layout_create_info{
@@ -910,7 +911,7 @@ export struct ComputePipeline{
     ComputePipeline(
         VulkanEngine &vk,
         ShaderModule shader_module,
-        std::span<DescriptorSet> descriptor_sets,
+        std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants)
     :layout(PipelineLayout(vk, descriptor_sets, push_constants))
     {
@@ -929,8 +930,8 @@ export struct ComputePipeline{
         vk.created_pipelines.push_back(pipeline);
     }
 
-    ComputePipeline(VulkanEngine &vk, ShaderModule shader_module, DescriptorSet descriptor_sets, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
-    :ComputePipeline(vk, shader_module, std::span(&descriptor_sets, 1), push_constants){}
+    ComputePipeline(VulkanEngine &vk, ShaderModule shader_module, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+    :ComputePipeline(vk, shader_module, {descriptor_set}, push_constants){}
 };
 
 static size_t vertex_format_size(VkFormat format) {
@@ -1050,7 +1051,7 @@ export struct GraphicsPipeline{
         VulkanEngine &vk,
         ShaderModule vert_shader,
         ShaderModule frag_shader,
-        std::span<DescriptorSet> descriptor_sets,
+        std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants,
         const VertexBuffer &vertex_buffer,
         VkFormat color_attachment_format,
@@ -1214,6 +1215,18 @@ export struct GraphicsPipeline{
         VK_CHECK(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
         vk.created_pipelines.push_back(pipeline);
     }
+
+    GraphicsPipeline(
+        VulkanEngine &vk, ShaderModule vert_shader,
+        ShaderModule frag_shader,
+        DescriptorSet descriptor_set,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        const VertexBuffer &vertex_buffer,
+        VkFormat color_attachment_format,
+        VkFormat depth_attachment_format,
+        MSAALevel msaa_level,
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+    :GraphicsPipeline(vk, vert_shader, frag_shader, {descriptor_set}, push_constants, vertex_buffer, color_attachment_format, depth_attachment_format, msaa_level, topology){}
 };
 
 export struct StagingBuffer : public VulkanBuffer{
@@ -1482,21 +1495,22 @@ export struct CommandBuffer{
         vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
-    void bind_descriptor_sets(const ComputePipeline &pipeline, std::span<DescriptorSet> sets) const{
+    void bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const{
         const int max_sets = 4;
         if (sets.size() > max_sets){
             std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
             abort();
         };
         VkDescriptorSet vk_sets[max_sets];
-        for(int i = 0; i < static_cast<int>(sets.size()); ++i){
-            vk_sets[i] = sets[i].set;
+        int i = 0;
+        for(const auto &set : sets){
+            vk_sets[i++] = set.set;
         }
 
         vkCmdBindDescriptorSets(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout.layout, 0, sets.size(), vk_sets, 0, nullptr);
     }
-    void bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet sets) const{
-        bind_descriptor_sets(pipeline, std::span<DescriptorSet>(&sets, 1));
+    void bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet set) const{
+        bind_descriptor_sets(pipeline, {set});
     }
 
     template <typename T>

@@ -151,7 +151,7 @@ public:
     graphics_desc_set(graphics_desc_set_builder.build(vk)),
     vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
     staging_buffer(vk, sizeof(Vertex) * 16),
-    graphics_pipeline(vk, vert_shader, frag_shader, std::span(&graphics_desc_set, 1), std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    graphics_pipeline(vk, vert_shader, frag_shader, graphics_desc_set, std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF),
     immediate_submit_fence(vk, false),
     immediate_cmd_pool(vk),
     immediate_cmd_buffer(vk,immediate_cmd_pool)
