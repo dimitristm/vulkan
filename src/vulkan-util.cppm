@@ -419,7 +419,7 @@ export struct VulkanEngine{
     };
 
     ~VulkanEngine(){
-        vkDeviceWaitIdle(device);
+        VK_CHECK(vkDeviceWaitIdle(device));
 
         if (imgui_is_initialized){
             ImGui_ImplVulkan_Shutdown();
@@ -846,7 +846,7 @@ export struct VertexShader : public Shader {
 export struct FragmentShader : public Shader {
     FragmentShader(VulkanEngine &vk, const std::string_view filepath)
     :Shader(vk, filepath) {
-        assert(filepath.find(".frag") != std::string_view::npos && "Fragment shaders should have .frag in their name. " "You either passed the wrong shader or your shader does not follow naming convention");
+        assert(filepath.find(".frag") != std::string_view::npos && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 
