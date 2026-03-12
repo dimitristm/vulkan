@@ -81,8 +81,8 @@ public:
     ComputePipeline gradient_pipeline;
     ComputePipeline sky_pipeline;
 
-    ShaderModule vert_shader;
-    ShaderModule frag_shader;
+    VertexShader vert_shader;
+    FragmentShader frag_shader;
     DescriptorSetBuilder graphics_desc_set_builder;
     DescriptorSet graphics_desc_set;
     VertexBuffer vertex_buffer;
@@ -101,9 +101,7 @@ public:
         function();
 
         immediate_cmd_buffer.end();
-
         immediate_cmd_buffer.submit(vk, immediate_submit_fence);
-
         immediate_submit_fence.wait(vk);
     }
 
@@ -143,8 +141,8 @@ public:
     ),
     desc_set(ds_builder.build(vk)),
     push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
-    gradient_pipeline(vk, ShaderModule(vk, "shaders/compiled/gradient_color.comp.spv"), desc_set, pc_builder.get_ranges()),
-    sky_pipeline(vk, ShaderModule(vk, "shaders/compiled/sky.comp.spv"), desc_set, pc_builder.get_ranges()),
+    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient_color.comp.spv"), desc_set, pc_builder.get_ranges()),
+    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), desc_set, pc_builder.get_ranges()),
     vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set_builder(),

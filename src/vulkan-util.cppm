@@ -794,10 +794,11 @@ export struct DescriptorSet{
     }
 };
 
-export struct ShaderModule{
+struct Shader{
     VkShaderModule module;
 
-    ShaderModule(VulkanEngine &vk, const std::string_view filepath){
+    Shader(VulkanEngine &vk, const std::string_view filepath){
+        assert(filepath.find(".spv") != std::string_view::npos && "Compiled SPIR-V shaders should have .spv in their name. You either passed an uncompiled shader or your shader does not follow naming convention");
         assert(filepath.data()[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
         // open the file. With cursor at the end
         std::ifstream file(filepath.data(), std::ios::ate | std::ios::binary);
@@ -827,6 +828,25 @@ export struct ShaderModule{
             abort();
         }
         vk.created_shader_modules.push_back(module);
+    }
+};
+
+export struct ComputeShader : public Shader{
+    ComputeShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.find(".comp") != std::string_view::npos && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
+    }
+};
+export struct VertexShader : public Shader {
+    VertexShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.find(".vert") != std::string_view::npos && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
+    }
+};
+export struct FragmentShader : public Shader {
+    FragmentShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.find(".frag") != std::string_view::npos && "Fragment shaders should have .frag in their name. " "You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 
@@ -892,7 +912,7 @@ export struct PipelineLayout{
     }
 };
 
-static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(ShaderModule shader_module, VkShaderStageFlagBits stage){
+static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(Shader shader_module, VkShaderStageFlagBits stage){
     return VkPipelineShaderStageCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .pNext = nullptr,
@@ -910,7 +930,7 @@ export struct ComputePipeline{
 
     ComputePipeline(
         VulkanEngine &vk,
-        ShaderModule shader_module,
+        ComputeShader shader_module,
         std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants)
     :layout(PipelineLayout(vk, descriptor_sets, push_constants))
@@ -930,7 +950,7 @@ export struct ComputePipeline{
         vk.created_pipelines.push_back(pipeline);
     }
 
-    ComputePipeline(VulkanEngine &vk, ShaderModule shader_module, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+    ComputePipeline(VulkanEngine &vk, ComputeShader shader_module, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
     :ComputePipeline(vk, shader_module, {descriptor_set}, push_constants){}
 };
 
@@ -1049,8 +1069,8 @@ export struct GraphicsPipeline{
     PipelineLayout layout;
     GraphicsPipeline(
         VulkanEngine &vk,
-        ShaderModule vert_shader,
-        ShaderModule frag_shader,
+        VertexShader vert_shader,
+        FragmentShader frag_shader,
         std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants,
         const VertexBuffer &vertex_buffer,
@@ -1217,8 +1237,9 @@ export struct GraphicsPipeline{
     }
 
     GraphicsPipeline(
-        VulkanEngine &vk, ShaderModule vert_shader,
-        ShaderModule frag_shader,
+        VulkanEngine &vk,
+        VertexShader vert_shader,
+        FragmentShader frag_shader,
         DescriptorSet descriptor_set,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants,
         const VertexBuffer &vertex_buffer,
