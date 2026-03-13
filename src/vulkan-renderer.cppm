@@ -82,7 +82,6 @@ public:
 
     VertexShader vert_shader;
     FragmentShader frag_shader;
-    DescriptorSetBuilder graphics_desc_set_builder;
     DescriptorSet graphics_desc_set;
     VertexBuffer vertex_buffer;
     StagingBuffer staging_buffer;
@@ -132,21 +131,14 @@ public:
     ),
     command_pool(vk),
     frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
-    ds_builder(
-        [&] -> DescriptorSetBuilder{
-            DescriptorSetBuilder b;
-            b.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-            return b;
-        }()
-    ),
-    desc_set(ds_builder.build(vk)),
+    ds_builder(),
+    desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
     push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
     gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient_color.comp.spv"), desc_set, pc_builder.get_ranges()),
     sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), desc_set, pc_builder.get_ranges()),
     vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
-    graphics_desc_set_builder(),
-    graphics_desc_set(graphics_desc_set_builder.build(vk)),
+    graphics_desc_set(ds_builder.reset().build(vk)),
     vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
     staging_buffer(vk, sizeof(Vertex) * 16),
     graphics_pipeline(vk, vert_shader, frag_shader, graphics_desc_set, std::nullopt, vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
