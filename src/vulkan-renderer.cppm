@@ -32,15 +32,13 @@ static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
 
 struct FrameInFlightData{
     GpuSemaphore swapchain_img_ready_sema;
-    CommandPool cmd_pool;
     CommandBuffer main_cmd_buffer;
     GpuFence rendering_done_fence;
 
-    FrameInFlightData(VulkanEngine &vk)
+    FrameInFlightData(VulkanEngine &vk, CommandPool cmd_pool)
     :
     swapchain_img_ready_sema(vk),
-    cmd_pool(vk),
-    main_cmd_buffer(vk, this->cmd_pool),
+    main_cmd_buffer(vk, cmd_pool),
     rendering_done_fence(vk, true)
     {}
 };
@@ -69,6 +67,7 @@ public:
     Image draw_image;
     ImageView draw_image_view;
     std::vector<GpuSemaphore> swapchain_render_done_semas;
+    CommandPool command_pool; // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
     std::array<FrameInFlightData, FRAMES_IN_FLIGHT> frame_in_flight_data;
 
     DescriptorSetBuilder ds_builder;
@@ -131,7 +130,8 @@ public:
             return semas;
         }()
     ),
-    frame_in_flight_data({FrameInFlightData(vk), FrameInFlightData(vk)}),
+    command_pool(vk),
+    frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
     ds_builder(
         [&] -> DescriptorSetBuilder{
             DescriptorSetBuilder b;
@@ -149,10 +149,10 @@ public:
     graphics_desc_set(graphics_desc_set_builder.build(vk)),
     vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
     staging_buffer(vk, sizeof(Vertex) * 16),
-    graphics_pipeline(vk, vert_shader, frag_shader, graphics_desc_set, std::nullopt, vertex_buffer, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    graphics_pipeline(vk, vert_shader, frag_shader, graphics_desc_set, std::nullopt, vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
     immediate_submit_fence(vk, false),
     immediate_cmd_pool(vk),
-    immediate_cmd_buffer(vk,immediate_cmd_pool)
+    immediate_cmd_buffer(vk, immediate_cmd_pool)
     {
         desc_set.update(vk, 0, draw_image_view);
         vk.init_imgui(window, swapchain.get_format());

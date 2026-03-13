@@ -536,6 +536,8 @@ export struct Image{
     // the layout that the latest recorded image barrier command (transition command) has transitioned it to
     VkImageLayout layout;
 
+    [[nodiscard]] VkFormat get_format() const { return format; }
+
     Image(
         VulkanEngine &vk,
         VkExtent2D extent,// was a glm uvec2
@@ -1556,7 +1558,7 @@ export struct CommandBuffer{
     }
 };
 
-// This is what you're meant to use instead of Layouts and Layout Bindings. You can
+// This is what you're meant to use instead of Descriptor Set Layouts and Descriptor Set Layout Bindings. You can
 // keep using build as many times as you want just like you would with a Layout.
 export struct DescriptorSetBuilder{
     std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -1591,6 +1593,16 @@ export struct DescriptorSetBuilder{
         }
 
         return DescriptorSet{vk, layout};
+    }
+
+    // Don't reset unless you know you won't be making another descriptor set with the same layout again. It's slower otherwise.
+    // Objects passed into the creation of other objects must not be destroyed while the new object is in use, so we cannot destroy the layout here.
+    // Since we use all descriptor sets until the end of the program, there is no reason to want that, either.
+    DescriptorSetBuilder &reset(){
+        finalized = false;
+        layout = {},
+        bindings.clear();
+        return *this;
     }
 };
 
