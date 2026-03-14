@@ -16,17 +16,22 @@ int main(){
         window_flags
     );
 
-    Renderer renderer{window};
-    SDL_Event event;
-    bool quit = false;
-    while (!quit){
-        while(SDL_PollEvent(&event)){
-            if (event.type == SDL_EVENT_QUIT) { quit = true; }
-            ImGui_ImplSDL3_ProcessEvent(&event);
-        }
+    {
+        Renderer renderer{window};
+        SDL_Event event;
+        bool quit = false;
+        while (!quit){
+            while(SDL_PollEvent(&event)){
+                if (event.type == SDL_EVENT_QUIT) { quit = true; }
+                ImGui_ImplSDL3_ProcessEvent(&event);
+            }
 
-        ImGui::ShowDemoWindow();
-        renderer.draw();
+            ImGui::ShowDemoWindow();
+            renderer.draw();
+        }
     }
+
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
 }

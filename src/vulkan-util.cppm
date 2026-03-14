@@ -52,7 +52,7 @@ static inline void VK_CHECK(VkResult result){
 #ifndef NDEBUG
     const bool use_validation_layers = true;
 #else
-    const bool use_validation_layers = true;
+    const bool use_validation_layers = false;
 #endif
 
 struct APIVersionVulkan{
@@ -369,7 +369,7 @@ export struct VulkanEngine{
         vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
             .request_validation_layers(use_validation_layers)
             .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
-            //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+            .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT)
             //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT)
@@ -385,13 +385,14 @@ export struct VulkanEngine{
         // Init physical device
         VkPhysicalDeviceVulkan13Features features13{};
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.synchronization2 = (uint)true;
-        features13.dynamicRendering = (uint)true;
+        features13.synchronization2 = VK_TRUE;
+        features13.dynamicRendering = VK_TRUE;
+        features13.maintenance4 = VK_TRUE;
 
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.descriptorIndexing = (uint)true;
-        features12.bufferDeviceAddress = (uint)true;
+        features12.descriptorIndexing = VK_TRUE;
+        features12.bufferDeviceAddress = VK_TRUE;
 
         vkb::PhysicalDeviceSelector selector{vkb_inst};
         vkb::PhysicalDevice vkb_physical_device = selector
@@ -615,7 +616,7 @@ export struct GpuFence{
     }
 
     void wait(VulkanEngine &vk){
-        VK_CHECK(vkWaitForFences(vk.device, 1, &fence, (VkBool32)true, timeout_length));
+        VK_CHECK(vkWaitForFences(vk.device, 1, &fence, VK_TRUE, timeout_length));
         VK_CHECK(vkResetFences(vk.device, 1, &fence));
     }
 };
@@ -912,6 +913,9 @@ export struct PipelineLayout{
         VK_CHECK(vkCreatePipelineLayout(vk.device, &layout_create_info, nullptr, &layout));
         vk.created_pipeline_layouts.push_back(layout);
     }
+
+    PipelineLayout(VulkanEngine &vk, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+    :PipelineLayout(vk, {descriptor_set}, push_constants){}
 };
 
 static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(Shader shader_module, VkShaderStageFlagBits stage){
@@ -933,9 +937,8 @@ export struct ComputePipeline{
     ComputePipeline(
         VulkanEngine &vk,
         ComputeShader shader_module,
-        std::initializer_list<DescriptorSet> descriptor_sets,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants)
-    :layout(PipelineLayout(vk, descriptor_sets, push_constants))
+        PipelineLayout pipeline_layout)
+    :layout(pipeline_layout)
     {
         auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT);
 
@@ -951,9 +954,6 @@ export struct ComputePipeline{
         VK_CHECK(vkCreateComputePipelines(vk.device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
         vk.created_pipelines.push_back(pipeline);
     }
-
-    ComputePipeline(VulkanEngine &vk, ComputeShader shader_module, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
-    :ComputePipeline(vk, shader_module, {descriptor_set}, push_constants){}
 };
 
 static size_t vertex_format_size(VkFormat format) {
@@ -1073,15 +1073,14 @@ export struct GraphicsPipeline{
         VulkanEngine &vk,
         VertexShader vert_shader,
         FragmentShader frag_shader,
-        std::initializer_list<DescriptorSet> descriptor_sets,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
+        PipelineLayout pipeline_layout,
         const VertexBuffer &vertex_buffer,
         VkFormat color_attachment_format,
         VkFormat depth_attachment_format,
         MSAALevel msaa_level,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
-    layout(PipelineLayout(vk, descriptor_sets, push_constants)) // todo make pipeline layouts into exported structs to reuse them
+    layout(pipeline_layout)
     {
         assert(
             topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
@@ -1237,19 +1236,6 @@ export struct GraphicsPipeline{
         VK_CHECK(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
         vk.created_pipelines.push_back(pipeline);
     }
-
-    GraphicsPipeline(
-        VulkanEngine &vk,
-        VertexShader vert_shader,
-        FragmentShader frag_shader,
-        DescriptorSet descriptor_set,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants,
-        const VertexBuffer &vertex_buffer,
-        VkFormat color_attachment_format,
-        VkFormat depth_attachment_format,
-        MSAALevel msaa_level,
-        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-    :GraphicsPipeline(vk, vert_shader, frag_shader, {descriptor_set}, push_constants, vertex_buffer, color_attachment_format, depth_attachment_format, msaa_level, topology){}
 };
 
 export struct StagingBuffer : public VulkanBuffer{

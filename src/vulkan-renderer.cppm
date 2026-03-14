@@ -77,6 +77,7 @@ public:
     PushConstant<ShaderData> push_const;
 
     int selected_compute_pipeline = 0;
+    PipelineLayout compute_pipeline_layout;
     ComputePipeline gradient_pipeline;
     ComputePipeline sky_pipeline;
 
@@ -134,14 +135,15 @@ public:
     ds_builder(),
     desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
     push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
-    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient_color.comp.spv"), desc_set, pc_builder.get_ranges()),
-    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), desc_set, pc_builder.get_ranges()),
+    compute_pipeline_layout(vk, desc_set, pc_builder.get_ranges()),
+    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient_color.comp.spv"), compute_pipeline_layout),
+    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout),
     vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set(ds_builder.reset().build(vk)),
     vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
     staging_buffer(vk, sizeof(Vertex) * 16),
-    graphics_pipeline(vk, vert_shader, frag_shader, graphics_desc_set, std::nullopt, vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, std::nullopt), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
     immediate_submit_fence(vk, false),
     immediate_cmd_pool(vk),
     immediate_cmd_buffer(vk, immediate_cmd_pool)

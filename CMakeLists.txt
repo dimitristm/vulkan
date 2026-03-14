@@ -113,7 +113,7 @@ foreach(SHADER_SOURCE ${SHADER_SOURCES})
 
     add_custom_command(
         OUTPUT ${SHADER_OUTPUT}
-        COMMAND ${SHADER_COMPILER} ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
+        COMMAND ${SHADER_COMPILER} --target-env=vulkan1.3 ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
         DEPENDS ${SHADER_SOURCE}
         COMMENT "Compiling ${SHADER_NAME}"
         VERBATIM
