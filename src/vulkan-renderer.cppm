@@ -77,6 +77,7 @@ public:
     PushConstant<ShaderData> push_const;
 
     int selected_compute_pipeline = 0;
+    SpecializationInfo specialization_info;
     PipelineLayout compute_pipeline_layout;
     ComputePipeline gradient_pipeline;
     ComputePipeline sky_pipeline;
@@ -135,9 +136,10 @@ public:
     ds_builder(),
     desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
     push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
+    specialization_info((2 * sizeof(int32_t)) + sizeof(double)),
     compute_pipeline_layout(vk, desc_set, pc_builder.get_ranges()),
-    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient_color.comp.spv"), compute_pipeline_layout),
-    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout),
+    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
+    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
     vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set(ds_builder.reset().build(vk)),

@@ -918,7 +918,93 @@ export struct PipelineLayout{
     :PipelineLayout(vk, {descriptor_set}, push_constants){}
 };
 
-static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(Shader shader_module, VkShaderStageFlagBits stage){
+// This struct does not need to be kept alive after being used to create a pipeline, and thus can be reset for use in another pipeline's initialization.
+export struct SpecializationInfo{
+private:
+    VkSpecializationInfo info{};
+public:
+    std::vector<VkSpecializationMapEntry> entries;
+    size_t data_buffer_max_capacity_in_bytes{};
+    void *data{};
+    bool finalized{};
+    // Differs from data_buffer_in_bytes in that this is the actually used memory, while data_buffer_in_bytes includes potentially unused memory
+    // and always reflects the actual amount of bytes available in the buffer.
+    size_t data_size_in_bytes{};
+
+    SpecializationInfo(size_t total_data_size = 128)
+    :data_buffer_max_capacity_in_bytes(total_data_size),
+    data(malloc(data_buffer_max_capacity_in_bytes))
+    {
+        assert(total_data_size >= 4 && "Specialization info data must be at least 4 bytes large");
+        assert(total_data_size % 4 == 0 && "It only ever makes sense for the size of a specialization data buffer to be a multiple of 4");
+        entries.reserve(data_buffer_max_capacity_in_bytes/sizeof(int32_t));
+        if(data == nullptr) { abort(); }
+    }
+
+    template<typename T>
+    SpecializationInfo &add_entry(uint32_t constant_ID, T constant_value){
+        static_assert(
+            std::is_same_v<T, int32_t> ||
+            std::is_same_v<T, uint32_t> ||
+            std::is_same_v<T, float> ||
+            std::is_same_v<T, double> ||
+            std::is_same_v<T, VkBool32>,
+            "Specialization constants can only be of the following types: int32_t, uint32_t, float, double, VkBool32"
+        );
+        static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+
+        if(data_size_in_bytes + sizeof(T) > data_buffer_max_capacity_in_bytes){
+            assert(false && "Exceeded limit of data buffer while adding entry to specialization info");
+            std::println("Exceeded limit of data buffer while adding entry to specialization info");
+            abort();
+        }
+        assert(std::none_of(entries.begin(), entries.end(), [&](const VkSpecializationMapEntry& e){ return e.constantID == constant_ID; }) && "Duplicate specialization constant ID: can't set the same constant twice");
+
+        finalized = false;
+
+        uint32_t offset = data_size_in_bytes;
+        entries.emplace_back(constant_ID, offset, sizeof(T));
+        memcpy((std::byte*)data + offset, &constant_value, sizeof(T));
+        data_size_in_bytes += sizeof(T);
+        return *this;
+    }
+
+    SpecializationInfo &reset(){
+        finalized = false;
+        entries.clear();
+        data_size_in_bytes = 0;
+        return *this;
+    }
+
+    // DO NOT cache the output of this funciton. If you ever reset this instance of SpecializationInfo or let it be destroyed,
+    // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
+    const VkSpecializationInfo *get_vk_specialization_info(){
+        if (!finalized){
+            info =  VkSpecializationInfo{
+                .mapEntryCount = static_cast<uint32_t>(entries.size()),
+                .pMapEntries = entries.data(),
+                .dataSize = data_size_in_bytes,
+                .pData = data,
+            };
+            finalized = true;
+        }
+        return &info;
+    }
+
+    ~SpecializationInfo(){
+        free(data);
+    }
+    SpecializationInfo(const SpecializationInfo&) = delete;
+    SpecializationInfo(SpecializationInfo&&) = delete;
+    SpecializationInfo& operator=(const SpecializationInfo&) = delete;
+    SpecializationInfo& operator=(SpecializationInfo&&) = delete;
+};
+
+static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(
+    Shader shader_module,
+    VkShaderStageFlagBits stage,
+    SpecializationInfo */* _Nullable */specialization_info)
+{
     return VkPipelineShaderStageCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .pNext = nullptr,
@@ -926,7 +1012,7 @@ static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(Shader sh
         .stage = stage,
         .module = shader_module.module,
         .pName = "main",
-        .pSpecializationInfo{},
+        .pSpecializationInfo = specialization_info != nullptr ? specialization_info->get_vk_specialization_info() : nullptr,
     };
 }
 
@@ -937,10 +1023,11 @@ export struct ComputePipeline{
     ComputePipeline(
         VulkanEngine &vk,
         ComputeShader shader_module,
-        PipelineLayout pipeline_layout)
+        PipelineLayout pipeline_layout,
+        SpecializationInfo */* _Nullable */specialization_info = nullptr)
     :layout(pipeline_layout)
     {
-        auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT);
+        auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT, specialization_info);
 
         VkComputePipelineCreateInfo computePipelineCreateInfo{
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -1078,6 +1165,8 @@ export struct GraphicsPipeline{
         VkFormat color_attachment_format,
         VkFormat depth_attachment_format,
         MSAALevel msaa_level,
+        SpecializationInfo */* _Nullable */vert_specialization_info = nullptr,
+        SpecializationInfo */* _Nullable */frag_specialization_info = nullptr,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
     layout(pipeline_layout)
@@ -1088,8 +1177,8 @@ export struct GraphicsPipeline{
             topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         );
         VkPipelineShaderStageCreateInfo shader_stage_infos[2];
-        shader_stage_infos[0] = make_pipeline_shader_stage_info(vert_shader, VK_SHADER_STAGE_VERTEX_BIT);
-        shader_stage_infos[1] = make_pipeline_shader_stage_info(frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT);
+        shader_stage_infos[0] = make_pipeline_shader_stage_info(vert_shader, VK_SHADER_STAGE_VERTEX_BIT, vert_specialization_info);
+        shader_stage_infos[1] = make_pipeline_shader_stage_info(frag_shader, VK_SHADER_STAGE_FRAGMENT_BIT, frag_specialization_info);
 
         VkPipelineRenderingCreateInfo pipeline_rendering_create_info{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
