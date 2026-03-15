@@ -13,11 +13,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     message(WARNING
         "\n\033[1;31m"
-        "============================================================\n"
-        "  WARNING: This project is only tested with Clang.\n"
-        "  Compiler in use: ${CMAKE_CXX_COMPILER_ID}\n"
-        "  Compiler-specific breakage is possible.\n"
-        "============================================================"
+        "WARNING: This project is only tested with Clang.\n"
+        "Compiler in use: ${CMAKE_CXX_COMPILER_ID}\n"
         "\033[0m\n"
     )
 endif()
