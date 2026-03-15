@@ -1494,7 +1494,7 @@ export struct CommandBuffer{
         uint32_t mip_level_count = VK_REMAINING_MIP_LEVELS;
     };
     template<typename... BarrierInfo_T>
-    void barrier(BarrierInfo_T&&... barrier_infos) const {
+    void barrier(const BarrierInfo_T&... barrier_infos) const {
         static_assert((std::is_same_v<std::remove_cvref_t<BarrierInfo_T>, BarrierInfo> && ...), "Arguments to CommandBuffer::barrier must be CommandBuffer::BarrierInfo types.");
         std::array<VkImageMemoryBarrier2, sizeof...(BarrierInfo_T)> image_barriers;
 
