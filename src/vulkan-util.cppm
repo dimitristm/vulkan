@@ -1482,7 +1482,7 @@ export struct CommandBuffer{
     }
 
     struct BarrierInfo{
-        Image *img;
+        Image &img;
         bool discard_current_data;
         VkImageLayout new_layout;
         VkPipelineStageFlags2 src_stage_mask;
@@ -1507,11 +1507,11 @@ export struct CommandBuffer{
                 .srcAccessMask = barrier_info.src_access_mask,
                 .dstStageMask = barrier_info.dst_stage_mask,
                 .dstAccessMask = barrier_info.dst_access_mask,
-                .oldLayout = barrier_info.discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : barrier_info.img->layout,
+                .oldLayout = barrier_info.discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : barrier_info.img.layout,
                 .newLayout = barrier_info.new_layout,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = barrier_info.img->vk_image,
+                .image = barrier_info.img.vk_image,
                 .subresourceRange = {
                     .aspectMask     = static_cast<VkImageAspectFlags>(barrier_info.aspects),
                     .baseMipLevel   = barrier_info.base_mip_level,
@@ -1520,7 +1520,7 @@ export struct CommandBuffer{
                     .layerCount     = VK_REMAINING_ARRAY_LAYERS,
                 },
             };
-            barrier_info.img->layout = barrier_info.new_layout;
+            barrier_info.img.layout = barrier_info.new_layout;
         };
 
         (add_image_barrier(barrier_infos), ...);

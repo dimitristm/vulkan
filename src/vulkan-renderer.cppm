@@ -196,7 +196,7 @@ public:
 
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=&draw_image,
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=draw_image,
                            .discard_current_data=true,
                            .new_layout=VK_IMAGE_LAYOUT_GENERAL,
                            .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
@@ -212,7 +212,7 @@ public:
         cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=&draw_image,
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=draw_image,
                            .discard_current_data=false,
                            .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -227,7 +227,7 @@ public:
         // check everything after this for needed changes
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
-                               .img=&draw_image,
+                               .img=draw_image,
                                .discard_current_data=false,
                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -237,7 +237,7 @@ public:
                                .aspects=ImageAspects::COLOR
                           },
                           CommandBuffer::BarrierInfo{
-                               .img=&swapchain.get_images()[swapchain_img_idx],
+                               .img=swapchain.get_images()[swapchain_img_idx],
                                .discard_current_data=true,
                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
@@ -253,7 +253,7 @@ public:
                                       ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=&swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=swapchain.get_images()[swapchain_img_idx],
                            .discard_current_data=false,
                            .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
@@ -265,7 +265,7 @@ public:
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=&swapchain.get_images()[swapchain_img_idx],
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=swapchain.get_images()[swapchain_img_idx],
                            .discard_current_data=false,
                            .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                            .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
