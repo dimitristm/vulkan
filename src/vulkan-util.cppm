@@ -1481,39 +1481,49 @@ export struct CommandBuffer{
         vkCmdEndRendering(buffer);
     }
 
-    void barrier(
-        Image &img,
-        bool discard_current_data,
-        VkImageLayout new_layout,
-        VkPipelineStageFlags2 src_stage_mask,
-        VkAccessFlags2 src_access_mask,
-        VkPipelineStageFlags2 dst_stage_mask,
-        VkAccessFlags2 dst_access_mask,
-        ImageAspects aspects,
-        uint32_t base_mip_level  = 0,
-        uint32_t mip_level_count = VK_REMAINING_MIP_LEVELS) const
-    {
-        VkImageMemoryBarrier2 image_barrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = src_stage_mask,
-            .srcAccessMask = src_access_mask,
-            .dstStageMask = dst_stage_mask,
-            .dstAccessMask = dst_access_mask,
-            .oldLayout = discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : img.layout,
-            .newLayout = new_layout,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = img.vk_image,
-            .subresourceRange = {
-                .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
-                .baseMipLevel   = base_mip_level,
-                .levelCount     = mip_level_count,
-                .baseArrayLayer = 0,
-                .layerCount     = VK_REMAINING_ARRAY_LAYERS,
-            },
+    struct BarrierInfo{
+        Image *img;
+        bool discard_current_data;
+        VkImageLayout new_layout;
+        VkPipelineStageFlags2 src_stage_mask;
+        VkAccessFlags2 src_access_mask;
+        VkPipelineStageFlags2 dst_stage_mask;
+        VkAccessFlags2 dst_access_mask;
+        ImageAspects aspects;
+        uint32_t base_mip_level = 0;
+        uint32_t mip_level_count = VK_REMAINING_MIP_LEVELS;
+    };
+    template<typename... BarrierInfo_T>
+    void barrier(BarrierInfo_T&&... barrier_infos) const {
+        static_assert((std::is_same_v<std::remove_cvref_t<BarrierInfo_T>, BarrierInfo> && ...), "Arguments to CommandBuffer::barrier must be CommandBuffer::BarrierInfo types.");
+        std::array<VkImageMemoryBarrier2, sizeof...(BarrierInfo_T)> image_barriers;
+
+        int i = 0;
+        const auto add_image_barrier = [&](const BarrierInfo& barrier_info){
+            image_barriers[i++] = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext = nullptr,
+                .srcStageMask = barrier_info.src_stage_mask,
+                .srcAccessMask = barrier_info.src_access_mask,
+                .dstStageMask = barrier_info.dst_stage_mask,
+                .dstAccessMask = barrier_info.dst_access_mask,
+                .oldLayout = barrier_info.discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : barrier_info.img->layout,
+                .newLayout = barrier_info.new_layout,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = barrier_info.img->vk_image,
+                .subresourceRange = {
+                    .aspectMask     = static_cast<VkImageAspectFlags>(barrier_info.aspects),
+                    .baseMipLevel   = barrier_info.base_mip_level,
+                    .levelCount     = barrier_info.mip_level_count,
+                    .baseArrayLayer = 0,
+                    .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+                },
+            };
+            barrier_info.img->layout = barrier_info.new_layout;
         };
 
+        (add_image_barrier(barrier_infos), ...);
 
         VkDependencyInfo dep_info {
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -1523,13 +1533,11 @@ export struct CommandBuffer{
             .pMemoryBarriers{},
             .bufferMemoryBarrierCount{},
             .pBufferMemoryBarriers{},
-            .imageMemoryBarrierCount = 1, //todo performance: function that lets you do multiple transitions in one vkCmdPipelineBarrier2 call
-            .pImageMemoryBarriers = &image_barrier,
+            .imageMemoryBarrierCount = static_cast<uint32_t>(sizeof...(BarrierInfo_T)),
+            .pImageMemoryBarriers = image_barriers.data(),
         };
 
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
-
-        img.layout = new_layout;
     }
 
     void blit(
@@ -1539,7 +1547,7 @@ export struct CommandBuffer{
         glm::ivec2 src_bottom_right,
         glm::ivec2 dst_top_left,
         glm::ivec2 dst_bottom_right,
-        ImageAspects aspects) const // should use VkCmdCopyImage instead? check best practices
+        ImageAspects aspects) const // todo add VkCmdCopyImage function for when we don't need to blit
     {
         assert(source.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL for performance reasons.");
         assert(destination.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for performance reasons.");
