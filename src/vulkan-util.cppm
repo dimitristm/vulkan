@@ -1120,36 +1120,111 @@ static size_t vertex_format_size(VkFormat format) {
 struct VulkanBuffer{
     VkBuffer buffer;
     uint32_t size_in_bytes;
-};
-
-export struct VertexBuffer : public VulkanBuffer{
     VmaAllocation allocation;
-    uint32_t element_size_in_bytes;
-    const std::vector<VkFormat> attribute_formats;
-    VertexBuffer(VulkanEngine &vk, const std::vector<VkFormat> &attribute_formats, int element_count)
-    :attribute_formats(attribute_formats)
-    {
-        assert(attribute_formats.size() <= 16);
-        element_size_in_bytes = 0;
-        for (const auto &format : attribute_formats){
-            element_size_in_bytes += vertex_format_size(format);
-        }
-        size_in_bytes = element_size_in_bytes * element_count;
 
-        VkBufferCreateInfo buf_info{
+    VulkanBuffer(
+        VulkanEngine &vk,
+        uint32_t size_in_bytes,
+        VkBufferUsageFlags usage_flags,
+        VmaAllocationCreateFlags vma_flags,
+        VkMemoryPropertyFlags memory_property_flags_required,
+        VkMemoryPropertyFlags memory_property_flags_preferred = 0)
+        :size_in_bytes(size_in_bytes)
+    {
+        VkBufferCreateInfo buf_create_info{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = nullptr,
             .flags{},
             .size = size_in_bytes,
-            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .usage = usage_flags,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount{},
             .pQueueFamilyIndices{},
         };
-        VmaAllocationCreateInfo alloc_info{};
-        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-        vmaCreateBuffer(vk.allocator, &buf_info, &alloc_info, &buffer, &allocation, nullptr);
+
+        VmaAllocationCreateInfo alloc_create_info{};
+        alloc_create_info.flags = vma_flags;
+        alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc_create_info.requiredFlags = memory_property_flags_required;
+        alloc_create_info.preferredFlags = memory_property_flags_preferred;
+
+        VmaAllocationInfo alloc_info;
+        vmaCreateBuffer(vk.allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
         vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
+    }
+};
+
+// A GPU-side buffer for the gpu to read from and write to.
+export struct StorageBuffer : public VulkanBuffer{
+    StorageBuffer(VulkanEngine &vk, uint32_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest)
+    :VulkanBuffer(vk,
+                  size_in_bytes,
+                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                  | (is_transfer_source ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0)
+                  | (is_transfer_dest ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0),
+                  0,0)
+    {}
+};
+
+export struct StagingBuffer : public VulkanBuffer{
+private:
+    void *mapped_data;
+public:
+    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
+
+    StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
+    :VulkanBuffer(vk,
+                  size_in_bytes,
+                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                  VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    {
+        VmaAllocationInfo alloc_info;
+        vmaGetAllocationInfo(vk.allocator, allocation, &alloc_info);
+        mapped_data = alloc_info.pMappedData;
+    }
+};
+
+// The opposite of a staging buffer, can be used to copy gpu resources to the cpu or the gpu might store its result in it directly
+export struct ReadbackBuffer : public VulkanBuffer{
+    ReadbackBuffer(VulkanEngine &vk, uint32_t size_in_bytes)
+    :VulkanBuffer(vk,
+                  size_in_bytes,
+                  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                  VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+                  0,0){}
+};
+
+export struct IndexBuffer : public VulkanBuffer{
+    IndexBuffer(VulkanEngine &vk, uint32_t total_indexes)
+    :VulkanBuffer(vk,
+                  total_indexes * sizeof(uint32_t),
+                  VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                  0, 0)
+    {}
+};
+
+export struct VertexBuffer : public VulkanBuffer{
+    const std::vector<VkFormat> attribute_formats;
+    uint32_t element_size_in_bytes;
+
+    static uint32_t calculate_element_size_in_bytes(const std::vector<VkFormat> &attribute_formats){
+        uint32_t size = 0;
+        for (const auto &format : attribute_formats){
+            size += vertex_format_size(format);
+        }
+        return size;
+    }
+
+    VertexBuffer(VulkanEngine &vk, const std::vector<VkFormat> &attribute_formats, int element_count)
+    :VulkanBuffer(vk,
+                 calculate_element_size_in_bytes(attribute_formats) * element_count,
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                 0, 0),
+    attribute_formats(attribute_formats),
+    element_size_in_bytes(calculate_element_size_in_bytes(attribute_formats))
+    {
+        assert(attribute_formats.size() <= 16);
     }
 };
 
@@ -1324,38 +1399,6 @@ export struct GraphicsPipeline{
         };
         VK_CHECK(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
         vk.created_pipelines.push_back(pipeline);
-    }
-};
-
-export struct StagingBuffer : public VulkanBuffer{
-    VmaAllocation allocation;
-private:
-    void *mapped_data;
-public:
-    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
-
-    StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes){
-        this->size_in_bytes = size_in_bytes;
-        VkBufferCreateInfo buf_create_info{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags{},
-            .size = size_in_bytes,
-            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount{},
-            .pQueueFamilyIndices{},
-        };
-
-        VmaAllocationCreateInfo alloc_create_info{};
-        alloc_create_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
-        alloc_create_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-
-        VmaAllocationInfo alloc_info;
-        vmaCreateBuffer(vk.allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
-        mapped_data = alloc_info.pMappedData;
-        vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
     }
 };
 

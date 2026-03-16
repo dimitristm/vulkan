@@ -95,7 +95,7 @@ public:
 
     uint32_t frame_count{};
 
-    void immediate_submit(std::function<void()>&& function){
+    void immediate_submit(const std::function<void()> &function){
         immediate_cmd_buffer.restart(true);
 
         function();
@@ -223,8 +223,6 @@ public:
         );
 
         cmd_buffer.draw(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer);
-
-        // check everything after this for needed changes
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
                                .img=draw_image,
