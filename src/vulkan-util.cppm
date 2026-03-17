@@ -1121,6 +1121,7 @@ struct VulkanBuffer{
     VkBuffer buffer;
     uint32_t size_in_bytes;
     VmaAllocation allocation;
+    VkDeviceAddress device_address;
 
     VulkanBuffer(
         VulkanEngine &vk,
@@ -1136,7 +1137,7 @@ struct VulkanBuffer{
             .pNext = nullptr,
             .flags{},
             .size = size_in_bytes,
-            .usage = usage_flags,
+            .usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount{},
             .pQueueFamilyIndices{},
@@ -1151,6 +1152,13 @@ struct VulkanBuffer{
         VmaAllocationInfo alloc_info;
         vmaCreateBuffer(vk.allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
         vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
+
+        VkBufferDeviceAddressInfo buffer_device_adress_info{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = nullptr,
+            .buffer = buffer,
+        };
+        device_address = vkGetBufferDeviceAddress(vk.device, &buffer_device_adress_info);
     }
 };
 
@@ -1162,7 +1170,8 @@ export struct StorageBuffer : public VulkanBuffer{
                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                   | (is_transfer_source ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0)
                   | (is_transfer_dest ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0),
-                  0,0)
+                  0,
+                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
     {}
 };
 
@@ -1187,12 +1196,22 @@ public:
 
 // The opposite of a staging buffer, can be used to copy gpu resources to the cpu or the gpu might store its result in it directly
 export struct ReadbackBuffer : public VulkanBuffer{
+private:
+    void *mapped_data;
+public:
+    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
+
     ReadbackBuffer(VulkanEngine &vk, uint32_t size_in_bytes)
     :VulkanBuffer(vk,
                   size_in_bytes,
                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                   VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-                  0,0){}
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+    {
+        VmaAllocationInfo alloc_info;
+        vmaGetAllocationInfo(vk.allocator, allocation, &alloc_info);
+        mapped_data = alloc_info.pMappedData;
+    }
 };
 
 export struct IndexBuffer : public VulkanBuffer{
