@@ -1121,7 +1121,10 @@ struct VulkanBuffer{
     VkBuffer buffer;
     uint32_t size_in_bytes;
     VmaAllocation allocation;
+private:
     VkDeviceAddress device_address;
+public:
+    [[nodiscard]] const VkDeviceAddress &get_device_address() const { return device_address; }
 
     VulkanBuffer(
         VulkanEngine &vk,
@@ -1175,6 +1178,8 @@ export struct StorageBuffer : public VulkanBuffer{
     {}
 };
 
+// Used to get data from Host to Device. For performance reasons, host should write into it in sequentially, not at random.
+// Copy the contents into a buffer that resides in the Device instead of accessing it from the device directly.
 export struct StagingBuffer : public VulkanBuffer{
 private:
     void *mapped_data;
@@ -1195,6 +1200,7 @@ public:
 };
 
 // The opposite of a staging buffer, can be used to copy gpu resources to the cpu or the gpu might store its result in it directly
+// It's fine for the host to access it in whatever way it pleases, but access will be slow for the device (unless we're on a UMA machine)
 export struct ReadbackBuffer : public VulkanBuffer{
 private:
     void *mapped_data;
