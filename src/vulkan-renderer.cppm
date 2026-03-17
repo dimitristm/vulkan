@@ -196,14 +196,15 @@ public:
 
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=draw_image,
-                           .discard_current_data=true,
-                           .new_layout=VK_IMAGE_LAYOUT_GENERAL,
-                           .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                           .src_access_mask=0,
-                           .dst_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           .dst_access_mask=0, // todo: do i really not need to make visible this transition to the compute stage?
-                           .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+                                .img=draw_image,
+                                .discard_current_data=true,
+                                .new_layout=VK_IMAGE_LAYOUT_GENERAL,
+                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
+                                .src_access_mask=0,
+                                .dst_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dst_access_mask=0, // todo: do i really not need to make visible this transition to the compute stage?
+                                .aspects=ImageAspects::COLOR}
         );
 
         cmd_buffer.update_push_constants(get_selected_compute_pipeline(), push_const);
@@ -212,38 +213,39 @@ public:
         cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=draw_image,
-                           .discard_current_data=false,
-                           .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                           .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           .src_access_mask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                           .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                           .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+                               .img=draw_image,
+                               .discard_current_data=false,
+                               .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                               .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               .src_access_mask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                               .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                               .aspects=ImageAspects::COLOR}
         );
 
         cmd_buffer.draw(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer);
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
-                               .img=draw_image,
-                               .discard_current_data=false,
-                               .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                               .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                               .dst_access_mask=VK_ACCESS_2_TRANSFER_READ_BIT,
-                               .aspects=ImageAspects::COLOR
-                          },
-                          CommandBuffer::BarrierInfo{
-                               .img=swapchain.get_images()[swapchain_img_idx],
-                               .discard_current_data=true,
-                               .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
-                               .src_access_mask=0,
-                               .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                               .dst_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                               .aspects=ImageAspects::COLOR
-                          }
+                                .img=draw_image,
+                                .discard_current_data=false,
+                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
+                                .dst_access_mask=VK_ACCESS_2_TRANSFER_READ_BIT,
+                                .aspects=ImageAspects::COLOR
+                           },
+                           CommandBuffer::BarrierInfo{
+                                .img=swapchain.get_images()[swapchain_img_idx],
+                                .discard_current_data=true,
+                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
+                                .src_access_mask=0,
+                                .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
+                                .dst_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                .aspects=ImageAspects::COLOR
+                           }
         );
 
         cmd_buffer.blit_entire_images(draw_image,
@@ -251,26 +253,28 @@ public:
                                       ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=swapchain.get_images()[swapchain_img_idx],
-                           .discard_current_data=false,
-                           .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                           .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                           .src_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                           .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-                           .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+                                .img=swapchain.get_images()[swapchain_img_idx],
+                                .discard_current_data=false,
+                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
+                                .src_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
+                                .aspects=ImageAspects::COLOR}
         );
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{.img=swapchain.get_images()[swapchain_img_idx],
-                           .discard_current_data=false,
-                           .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                           .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                           .dst_stage_mask=VK_PIPELINE_STAGE_2_NONE,
-                           .dst_access_mask=0,
-                           .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+                                .img=swapchain.get_images()[swapchain_img_idx],
+                                .discard_current_data=false,
+                                .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dst_stage_mask=VK_PIPELINE_STAGE_2_NONE,
+                                .dst_access_mask=0,
+                                .aspects=ImageAspects::COLOR}
         );
 
         cmd_buffer.end();
