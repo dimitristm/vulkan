@@ -52,7 +52,10 @@ struct ShaderData{
 
 struct Vertex{
     glm::vec3 pos;
-    glm::vec3 color;
+    float u;
+    glm::vec3 normal;
+    float v;
+    glm::vec4 color;
 };
 
 export class Renderer{
@@ -74,7 +77,7 @@ public:
     DescriptorSet desc_set;
 
     PushConstantsBuilder pc_builder;
-    PushConstant<ShaderData> push_const;
+    PushConstant<ShaderData> compute_push_const;
 
     int selected_compute_pipeline = 0;
     SpecializationInfo specialization_info;
@@ -86,6 +89,7 @@ public:
     FragmentShader frag_shader;
     DescriptorSet graphics_desc_set;
     VertexBuffer vertex_buffer;
+    IndexBuffer index_buffer;
     StagingBuffer staging_buffer;
     GraphicsPipeline graphics_pipeline;
 
@@ -135,15 +139,16 @@ public:
     frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
     ds_builder(),
     desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
-    push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
+    compute_push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
     specialization_info((2 * sizeof(int32_t)) + sizeof(double)),
     compute_pipeline_layout(vk, desc_set, pc_builder.get_ranges()),
     gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
     sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
-    vert_shader(vk, "shaders/compiled/colored-triangle.vert.spv"),
+    vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set(ds_builder.reset().build(vk)),
-    vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT}, 16),
+    vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT}, 16),
+    index_buffer(vk, 256),
     staging_buffer(vk, sizeof(Vertex) * 16),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, std::nullopt), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
     immediate_submit_fence(vk, false),
@@ -152,15 +157,22 @@ public:
     {
         desc_set.update(vk, 0, draw_image_view);
         vk.init_imgui(window, swapchain.get_format());
-        push_const.data.a += glm::vec4(1, 0, 0, 1);
-        push_const.data.b += glm::vec4(0, 0, 1, 1);
-        std::array<Vertex, 3> vertices = {{
-            {.pos={1.0f, 1.0f, 0.5f}, .color={1.0f, 0.0f, 0.0f}},
-            {.pos={0.0f, -1.0f, 0.5f}, .color={0.0f, 0.0f, 1.0f}},
-            {.pos={-1.0f, 1.0f, 0.5f}, .color={0.0f, 1.0f, 0.0f}},
+        compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
+        compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
+
+        std::array<Vertex, 4> vertices = {{
+            {.pos = { 0.5f, -0.5f, 0.0f }, .color = { 0.0f, 0.0f, 0.0f, 1.0f }},
+            {.pos = {-0.5f, -0.5f, 0.0f }, .color = { 1.0f, 0.0f, 0.0f, 1.0f }},
+            {.pos = { 0.5f, 0.5f,  0.0f }, .color = { 0.5f, 0.5f, 0.5f, 1.0f }},
+            {.pos = {-0.5f, 0.5f,  0.0f }, .color = { 0.0f, 1.0f, 0.0f, 1.0f }},
         }};
+        std::array<uint32_t, 6> indices = {{ 0, 1, 2, 2, 1, 3, }};
+
         memcpy(staging_buffer.get_mapped_data(), vertices.data(), vertices.size() * sizeof(Vertex));
         immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, vertex_buffer);});
+
+        memcpy(staging_buffer.get_mapped_data(), indices.data(), sizeof(uint32_t) * indices.size());
+        immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, index_buffer);});
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
@@ -181,10 +193,10 @@ public:
 
         const char *comp_pipeline_names[] = {"Gradient", "Sky"};
         ImGui::Combo("Compute Pipeline", &selected_compute_pipeline, comp_pipeline_names, IM_ARRAYSIZE(comp_pipeline_names));
-        ImGui::InputFloat4("data a",(float*)& push_const.data.a);
-        ImGui::InputFloat4("data b",(float*)& push_const.data.b);
-        ImGui::InputFloat4("data c",(float*)& push_const.data.c);
-        ImGui::InputFloat4("data d",(float*)& push_const.data.d);
+        ImGui::InputFloat4("data a",(float*)& compute_push_const.data.a);
+        ImGui::InputFloat4("data b",(float*)& compute_push_const.data.b);
+        ImGui::InputFloat4("data c",(float*)& compute_push_const.data.c);
+        ImGui::InputFloat4("data d",(float*)& compute_push_const.data.d);
 	
         ImGui::End();
 
@@ -207,7 +219,7 @@ public:
                                 .aspects=ImageAspects::COLOR}
         );
 
-        cmd_buffer.update_push_constants(get_selected_compute_pipeline(), push_const);
+        cmd_buffer.update_push_constants(get_selected_compute_pipeline(), compute_push_const);
 
         cmd_buffer.bind_pipeline(get_selected_compute_pipeline());
         cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
@@ -224,7 +236,7 @@ public:
                                .aspects=ImageAspects::COLOR}
         );
 
-        cmd_buffer.draw(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer);
+        cmd_buffer.draw_indexed(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer, index_buffer, 6);
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
                                 .img=draw_image,

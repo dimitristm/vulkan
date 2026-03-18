@@ -1221,6 +1221,7 @@ public:
 };
 
 export struct IndexBuffer : public VulkanBuffer{
+    static const VkIndexType index_type = VK_INDEX_TYPE_UINT32;
     IndexBuffer(VulkanEngine &vk, uint32_t total_indexes)
     :VulkanBuffer(vk,
                   total_indexes * sizeof(uint32_t),
@@ -1507,7 +1508,7 @@ export struct CommandBuffer{
         vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
     }
 
-    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer& vertex_buffer) const{
+    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer& vertex_buffer, uint32_t vertex_count) const{
         VkRenderingAttachmentInfo color_render_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext       = nullptr,
@@ -1545,8 +1546,52 @@ export struct CommandBuffer{
         };
         vkCmdSetScissor(buffer, 0, 1, &scissor);
 
-        vkCmdDraw(buffer, 3, 1, 0, 0);
+        vkCmdDraw(buffer, vertex_count, 1, 0, 0);
         vkCmdEndRendering(buffer);
+    }
+
+    void draw_indexed(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer &vertex_buffer, const IndexBuffer &index_buffer, uint32_t index_count) const{
+        VkRenderingAttachmentInfo color_render_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = color_attachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode{},
+            .resolveImageView{},
+            .resolveImageLayout{},
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{},
+        };
+
+        VkRenderingInfo rendering_info = struct_makers::rendering_info(draw_extent, &color_render_attachment_info, nullptr);
+
+        vkCmdBeginRendering(buffer, &rendering_info);
+
+        VkDeviceSize offsets = 0;
+        vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
+        vkCmdBindIndexBuffer(buffer, index_buffer.buffer, 0, IndexBuffer::index_type);
+
+        VkViewport viewport = {
+            .x = 0,
+            .y = 0,
+            .width = static_cast<float>(draw_extent.width),
+            .height = static_cast<float>(draw_extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+        vkCmdSetViewport(buffer, 0, 1, &viewport);
+
+        VkRect2D scissor{
+            .offset{.x = 0, .y = 0},
+            .extent{draw_extent},
+        };
+        vkCmdSetScissor(buffer, 0, 1, &scissor);
+
+        vkCmdDrawIndexed(buffer, index_count, 1, 0, 0, 0);
+        vkCmdEndRendering(buffer);
+
     }
 
     struct BarrierInfo{
