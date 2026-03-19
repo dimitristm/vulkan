@@ -8,6 +8,8 @@ module;
 
 #include <glm/vec2.hpp>
 
+#include <boost/pfr.hpp>
+
 #include <vector>
 #include <span>
 #include <array>
@@ -259,17 +261,17 @@ public:
 static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
     const int poolsize_count = 11;
     VkDescriptorPoolSize sizes[poolsize_count] = {
-        { VK_DESCRIPTOR_TYPE_SAMPLER,                pool_size },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, pool_size },
-        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          pool_size },
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          pool_size },
-        { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,   pool_size },
-        { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,   pool_size },
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         pool_size },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         pool_size },
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, pool_size },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, pool_size },
-        { VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,     pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_SAMPLER,                .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,   .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,   .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, .descriptorCount=pool_size },
+        { .type=VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,       .descriptorCount=pool_size },
     };
 
     VkDescriptorPoolCreateInfo descriptor_pool_info = {

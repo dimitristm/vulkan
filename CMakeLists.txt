@@ -55,14 +55,15 @@ add_executable(vulkan-prog
     src/main.cpp
     src/vulkan-renderer.cppm
     src/vulkan-util.cppm
+    src/normalized-types.cppm
     vendored/vma_compilation_unit.cpp
-    vendored/imgui.cpp
-    vendored/imgui_impl_sdl3.cpp
-    vendored/imgui_impl_vulkan.cpp
-    vendored/imgui_demo.cpp
-    vendored/imgui_draw.cpp
-    vendored/imgui_tables.cpp
-    vendored/imgui_widgets.cpp
+    vendored/imgui/imgui.cpp
+    vendored/imgui/imgui_impl_sdl3.cpp
+    vendored/imgui/imgui_impl_vulkan.cpp
+    vendored/imgui/imgui_demo.cpp
+    vendored/imgui/imgui_draw.cpp
+    vendored/imgui/imgui_tables.cpp
+    vendored/imgui/imgui_widgets.cpp
 )
 
 target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored)
@@ -81,6 +82,7 @@ target_sources(vulkan-prog
         FILE_SET CXX_MODULES FILES
         src/vulkan-renderer.cppm
         src/vulkan-util.cppm
+        src/normalized-types.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE
