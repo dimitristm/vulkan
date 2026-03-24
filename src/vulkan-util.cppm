@@ -19,6 +19,10 @@ module;
 #include <optional>
 
 
+#include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
+
+
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -43,6 +47,7 @@ module;
 
 
 export module vulkanUtil;
+import vertexBufferAttributeTypes;
 
 static inline void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){
@@ -1045,80 +1050,6 @@ export struct ComputePipeline{
     }
 };
 
-static size_t vertex_format_size(VkFormat format) {
-    switch (format) {
-        case VK_FORMAT_R8_UNORM:
-        case VK_FORMAT_R8_SNORM:
-        case VK_FORMAT_R8_UINT:
-        case VK_FORMAT_R8_SINT:
-            return 1;
-
-        case VK_FORMAT_R8G8_UNORM:
-        case VK_FORMAT_R8G8_SNORM:
-        case VK_FORMAT_R8G8_UINT:
-        case VK_FORMAT_R8G8_SINT:
-            return 2;
-
-        case VK_FORMAT_R8G8B8A8_UNORM:
-        case VK_FORMAT_R8G8B8A8_SNORM:
-        case VK_FORMAT_R8G8B8A8_UINT:
-        case VK_FORMAT_R8G8B8A8_SINT:
-            return 4;
-
-        case VK_FORMAT_R16_UNORM:
-        case VK_FORMAT_R16_SNORM:
-        case VK_FORMAT_R16_UINT:
-        case VK_FORMAT_R16_SINT:
-        case VK_FORMAT_R16_SFLOAT:
-            return 2;
-
-        case VK_FORMAT_R16G16_UNORM:
-        case VK_FORMAT_R16G16_SNORM:
-        case VK_FORMAT_R16G16_UINT:
-        case VK_FORMAT_R16G16_SINT:
-        case VK_FORMAT_R16G16_SFLOAT:
-            return 4;
-
-        case VK_FORMAT_R16G16B16A16_UNORM:
-        case VK_FORMAT_R16G16B16A16_SNORM:
-        case VK_FORMAT_R16G16B16A16_UINT:
-        case VK_FORMAT_R16G16B16A16_SINT:
-        case VK_FORMAT_R16G16B16A16_SFLOAT:
-            return 8;
-
-        case VK_FORMAT_R32_UINT:
-        case VK_FORMAT_R32_SINT:
-        case VK_FORMAT_R32_SFLOAT:
-            return 4;
-
-        case VK_FORMAT_R32G32_UINT:
-        case VK_FORMAT_R32G32_SINT:
-        case VK_FORMAT_R32G32_SFLOAT:
-            return 8;
-
-        case VK_FORMAT_R32G32B32_UINT:
-        case VK_FORMAT_R32G32B32_SINT:
-        case VK_FORMAT_R32G32B32_SFLOAT:
-            return 12;
-
-        case VK_FORMAT_R32G32B32A32_UINT:
-        case VK_FORMAT_R32G32B32A32_SINT:
-        case VK_FORMAT_R32G32B32A32_SFLOAT:
-            return 16;
-
-        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-        case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
-        case VK_FORMAT_A2B10G10R10_UINT_PACK32:
-        case VK_FORMAT_A2B10G10R10_SINT_PACK32:
-            return 4;
-
-        default:
-            assert(false && "Unsupported vertex attribute format");
-
-        abort();
-    }
-}
-
 struct VulkanBuffer{
     VkBuffer buffer;
     uint32_t size_in_bytes;
@@ -1232,31 +1163,115 @@ export struct IndexBuffer : public VulkanBuffer{
     {}
 };
 
-export struct VertexBuffer : public VulkanBuffer{
-    const std::vector<VkFormat> attribute_formats;
-    uint32_t element_size_in_bytes;
-
-    static uint32_t calculate_element_size_in_bytes(const std::vector<VkFormat> &attribute_formats){
-        uint32_t size = 0;
-        for (const auto &format : attribute_formats){
-            size += vertex_format_size(format);
-        }
-        return size;
+export template <typename VertexStruct>
+struct VertexBuffer : public VulkanBuffer{
+    VertexBuffer(VulkanEngine &vk, int element_count)
+    :VulkanBuffer(vk,
+                 sizeof(VertexStruct) * element_count,
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                 0, 0)
+    {
+        static_assert(get_vertex_attribute_formats().size() <= 16, "Use only up to 16 vertex attributes as some GPUs don't support more than that.");
     }
 
-    VertexBuffer(VulkanEngine &vk, const std::vector<VkFormat> &attribute_formats, int element_count)
-    :VulkanBuffer(vk,
-                 calculate_element_size_in_bytes(attribute_formats) * element_count,
-                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                 0, 0),
-    attribute_formats(attribute_formats),
-    element_size_in_bytes(calculate_element_size_in_bytes(attribute_formats))
-    {
-        assert(attribute_formats.size() <= 16);
+    [[nodiscard]] constexpr uint32_t get_stride() const {
+        return sizeof(VertexStruct);
+    }
+
+    template <typename T>
+    static constexpr VkFormat get_vertex_attribute_format(const std::string_view field_name, const T& field_value){
+        using U = std::remove_cvref_t<T>;
+
+        // This list contains only widely supported formats.
+        if constexpr      (std::is_same_v<U, int8_norm_t>)   return VK_FORMAT_R8_SNORM;
+        else if constexpr (std::is_same_v<U, int16_norm_t>)  return VK_FORMAT_R16_SNORM;
+        else if constexpr (std::is_same_v<U, int8_t>)        return VK_FORMAT_R8_SINT;
+        else if constexpr (std::is_same_v<U, int16_t>)       return VK_FORMAT_R16_SINT;
+        else if constexpr (std::is_same_v<U, int32_t>)       return VK_FORMAT_R32_SINT;
+        else if constexpr (std::is_same_v<U, uint8_norm_t>)  return VK_FORMAT_R8_UNORM;
+        else if constexpr (std::is_same_v<U, uint16_norm_t>) return VK_FORMAT_R16_UNORM;
+        else if constexpr (std::is_same_v<U, uint8_t>)       return VK_FORMAT_R8_UINT;
+        else if constexpr (std::is_same_v<U, uint16_t>)      return VK_FORMAT_R16_UINT;
+        else if constexpr (std::is_same_v<U, uint32_t>)      return VK_FORMAT_R32_UINT;
+        else if constexpr (std::is_same_v<U, float>)         return VK_FORMAT_R32_SFLOAT;
+        //else if constexpr (std::is_same_v<U, double>)        return VK_FORMAT_R64_SFLOAT; unsupported by most hardware (~27% support on gpuinfo.org)
+
+        else if constexpr (std::is_same_v<U, ivec2_norm8>)   return VK_FORMAT_R8G8_SNORM;
+        else if constexpr (std::is_same_v<U, ivec2_norm16>)  return VK_FORMAT_R16G16_SNORM;
+        else if constexpr (std::is_same_v<U, ivec3_norm8>)   return VK_FORMAT_R8G8B8_SNORM; // ~82% support on gpuinfo.org
+        else if constexpr (std::is_same_v<U, ivec3_norm16>)  return VK_FORMAT_R16G16B16_SNORM; // ~82.5%
+        else if constexpr (std::is_same_v<U, ivec4_norm8>)   return VK_FORMAT_R8G8B8A8_SNORM;
+        else if constexpr (std::is_same_v<U, ivec4_norm16>)  return VK_FORMAT_R16G16B16A16_SNORM;
+        else if constexpr (std::is_same_v<U, uvec2_norm8>)   return VK_FORMAT_R8G8_UNORM;
+        else if constexpr (std::is_same_v<U, uvec2_norm16>)  return VK_FORMAT_R16G16_UNORM;
+        else if constexpr (std::is_same_v<U, uvec3_norm8>)   return VK_FORMAT_R8G8B8_UNORM; // ~82%
+        else if constexpr (std::is_same_v<U, uvec3_norm16>)  return VK_FORMAT_R16G16B16_UNORM; // ~82%
+        else if constexpr (std::is_same_v<U, uvec4_norm8>)   return VK_FORMAT_R8G8B8A8_UNORM;
+        else if constexpr (std::is_same_v<U, uvec4_norm16>)  return VK_FORMAT_R16G16B16A16_UNORM;
+
+        else if constexpr (std::is_same_v<U, glm::i8vec2>)   return VK_FORMAT_R8G8_SINT;
+        else if constexpr (std::is_same_v<U, glm::i8vec3>)   return VK_FORMAT_R8G8B8_SINT; // ~82%
+        else if constexpr (std::is_same_v<U, glm::i8vec4>)   return VK_FORMAT_R8G8B8A8_SINT;
+        else if constexpr (std::is_same_v<U, glm::i16vec2>)  return VK_FORMAT_R16G16_SINT;
+        else if constexpr (std::is_same_v<U, glm::i16vec3>)  return VK_FORMAT_R16G16B16_SINT; // ~78%
+        else if constexpr (std::is_same_v<U, glm::i16vec4>)  return VK_FORMAT_R16G16B16A16_SINT;
+        else if constexpr (std::is_same_v<U, glm::ivec2>)    return VK_FORMAT_R32G32_SINT;
+        else if constexpr (std::is_same_v<U, glm::ivec3>)    return VK_FORMAT_R32G32B32_SINT;
+        else if constexpr (std::is_same_v<U, glm::ivec4>)    return VK_FORMAT_R32G32B32A32_SINT;
+        else if constexpr (std::is_same_v<U, glm::u8vec2>)   return VK_FORMAT_R8G8_UINT;
+        else if constexpr (std::is_same_v<U, glm::u8vec3>)   return VK_FORMAT_R8G8B8_UINT; // ~82%
+        else if constexpr (std::is_same_v<U, glm::u8vec4>)   return VK_FORMAT_R8G8B8A8_UINT;
+        else if constexpr (std::is_same_v<U, glm::u16vec2>)  return VK_FORMAT_R16G16_UINT;
+        else if constexpr (std::is_same_v<U, glm::u16vec3>)  return VK_FORMAT_R16G16B16_UINT; // ~78%
+        else if constexpr (std::is_same_v<U, glm::u16vec4>)  return VK_FORMAT_R16G16B16A16_UINT;
+        else if constexpr (std::is_same_v<U, glm::uvec2>)    return VK_FORMAT_R32G32_UINT;
+        else if constexpr (std::is_same_v<U, glm::uvec3>)    return VK_FORMAT_R32G32B32_UINT;
+        else if constexpr (std::is_same_v<U, glm::uvec4>)    return VK_FORMAT_R32G32B32A32_UINT;
+
+        else if constexpr (std::is_same_v<U, glm::vec2>)     return VK_FORMAT_R32G32_SFLOAT;
+        else if constexpr (std::is_same_v<U, glm::vec3>)     return VK_FORMAT_R32G32B32_SFLOAT;
+        else if constexpr (std::is_same_v<U, glm::vec4>)     return VK_FORMAT_R32G32B32A32_SFLOAT;
+
+        else if constexpr (std::is_same_v<U, int32_A2R10G10B10_t>)          return VK_FORMAT_A2R10G10B10_SINT_PACK32;
+        else if constexpr (std::is_same_v<U, int32_A2R10G10B10_norm_t>)     return VK_FORMAT_A2B10G10R10_SNORM_PACK32;
+        else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_t>)         return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+        else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_norm_t>)    return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+
+
+        std::println("Your vertex struct conainted a field named '{}', which has a type that isn't supported as a vertex attribute.", field_name);
+        assert(false);
+        abort();
+        return VK_FORMAT_UNDEFINED;
+    }
+
+    [[nodiscard]] static constexpr std::vector<VkFormat> get_vertex_attribute_formats(){
+        std::vector<VkFormat> formats;
+        boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
+            formats.push_back(get_vertex_attribute_format(name, value));
+        });
+        return formats;
+    }
+
+    [[nodiscard]] static constexpr std::vector<VkVertexInputAttributeDescription> get_vertex_attribute_descriptions(uint32_t binding = 0, uint32_t first_location = 0) {
+        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions;
+        uint32_t curr_location = first_location;
+        uint32_t curr_offset = 0;
+        boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
+            vertex_attribute_descriptions.push_back({
+                .location = curr_location,
+                .binding = binding,
+                .format = get_vertex_attribute_format(name, value),
+                .offset = curr_offset,
+            });
+            ++curr_location;
+            curr_offset += sizeof(std::remove_cvref_t<decltype(value)>);
+        });
+        return vertex_attribute_descriptions;
     }
 };
 
-export struct GraphicsPipeline{
+export template <typename T>
+struct GraphicsPipeline{
     VkPipeline pipeline;
     PipelineLayout layout;
     GraphicsPipeline(
@@ -1264,7 +1279,7 @@ export struct GraphicsPipeline{
         VertexShader vert_shader,
         FragmentShader frag_shader,
         PipelineLayout pipeline_layout,
-        const VertexBuffer &vertex_buffer,
+        const VertexBuffer<T> &vertex_buffer,
         VkFormat color_attachment_format,
         VkFormat depth_attachment_format,
         MSAALevel msaa_level,
@@ -1295,19 +1310,11 @@ export struct GraphicsPipeline{
 
         VkVertexInputBindingDescription vertex_binding_description{
             .binding = 0,
-            .stride = vertex_buffer.element_size_in_bytes,
+            .stride = vertex_buffer.get_stride(),
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
         };
 
-        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions;
-        vertex_attribute_descriptions.reserve(vertex_buffer.attribute_formats.size());
-        uint32_t curr_location = 0;
-        uint32_t curr_offset = 0;
-        for(const auto &format : vertex_buffer.attribute_formats){
-            vertex_attribute_descriptions.push_back({.location = curr_location, .binding = 0, .format = format, .offset = curr_offset,});
-            ++curr_location;
-            curr_offset += vertex_format_size(format);
-        }
+        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions = vertex_buffer.get_vertex_attribute_descriptions();
 
         VkPipelineVertexInputStateCreateInfo vert_input_state_info{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -1510,7 +1517,8 @@ export struct CommandBuffer{
         vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
     }
 
-    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer& vertex_buffer, uint32_t vertex_count) const{
+    template <typename T>
+    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline<T> pipeline, const VertexBuffer<T>& vertex_buffer, uint32_t vertex_count) const{
         VkRenderingAttachmentInfo color_render_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext       = nullptr,
@@ -1552,7 +1560,8 @@ export struct CommandBuffer{
         vkCmdEndRendering(buffer);
     }
 
-    void draw_indexed(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline pipeline, const VertexBuffer &vertex_buffer, const IndexBuffer &index_buffer, uint32_t index_count) const{
+    template <typename T>
+    void draw_indexed(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline<T> pipeline, const VertexBuffer<T> &vertex_buffer, const IndexBuffer &index_buffer, uint32_t index_count) const{
         VkRenderingAttachmentInfo color_render_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext       = nullptr,

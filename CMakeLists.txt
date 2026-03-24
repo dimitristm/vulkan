@@ -55,7 +55,7 @@ add_executable(vulkan-prog
     src/main.cpp
     src/vulkan-renderer.cppm
     src/vulkan-util.cppm
-    src/normalized-types.cppm
+    src/vertex-buffer-attribute-types.cppm
     vendored/vma_compilation_unit.cpp
     vendored/imgui/imgui.cpp
     vendored/imgui/imgui_impl_sdl3.cpp
@@ -82,7 +82,7 @@ target_sources(vulkan-prog
         FILE_SET CXX_MODULES FILES
         src/vulkan-renderer.cppm
         src/vulkan-util.cppm
-        src/normalized-types.cppm
+        src/vertex-buffer-attribute-types.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE

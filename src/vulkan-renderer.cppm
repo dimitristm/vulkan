@@ -88,10 +88,10 @@ public:
     VertexShader vert_shader;
     FragmentShader frag_shader;
     DescriptorSet graphics_desc_set;
-    VertexBuffer vertex_buffer;
+    VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
     StagingBuffer staging_buffer;
-    GraphicsPipeline graphics_pipeline;
+    GraphicsPipeline<Vertex> graphics_pipeline;
 
     GpuFence immediate_submit_fence;
     CommandPool immediate_cmd_pool;
@@ -116,7 +116,7 @@ public:
     vk(window),
     swapchain(vk, window, VK_PRESENT_MODE_FIFO_KHR),
     draw_image(vk,
-               {static_cast<uint32_t>(window_size.x), static_cast<uint32_t>(window_size.y)},
+               {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
                VK_FORMAT_R16G16B16A16_SFLOAT,
                VK_IMAGE_USAGE_TRANSFER_SRC_BIT
                | VK_IMAGE_USAGE_TRANSFER_DST_BIT
@@ -147,7 +147,7 @@ public:
     vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     graphics_desc_set(ds_builder.reset().build(vk)),
-    vertex_buffer(vk, {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT}, 16),
+    vertex_buffer(vk, 16),
     index_buffer(vk, 256),
     staging_buffer(vk, sizeof(Vertex) * 16),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, std::nullopt), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
