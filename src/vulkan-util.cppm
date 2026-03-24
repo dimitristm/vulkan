@@ -1166,6 +1166,8 @@ export struct IndexBuffer : public VulkanBuffer{
 export template <typename VertexStruct>
 struct VertexBuffer : public VulkanBuffer{
     static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
+    static const uint32_t stride = sizeof(VertexStruct);
+
     VertexBuffer(VulkanEngine &vk, int element_count)
     :VulkanBuffer(vk,
                  sizeof(VertexStruct) * element_count,
@@ -1173,10 +1175,6 @@ struct VertexBuffer : public VulkanBuffer{
                  0, 0)
     {
         static_assert(vertex_attribute_count <= 16, "Use only up to 16 vertex attributes as some GPUs don't support more than that.");
-    }
-
-    [[nodiscard]] constexpr uint32_t get_stride() const {
-        return sizeof(VertexStruct);
     }
 
     template <typename T>
@@ -1306,7 +1304,7 @@ struct GraphicsPipeline{
 
         VkVertexInputBindingDescription vertex_binding_description{
             .binding = 0,
-            .stride = vertex_buffer.get_stride(),
+            .stride = vertex_buffer.stride,
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
         };
 
