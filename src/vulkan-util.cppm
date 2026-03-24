@@ -49,7 +49,7 @@ module;
 export module vulkanUtil;
 import vertexBufferAttributeTypes;
 
-static inline void VK_CHECK(VkResult result){
+void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){
         std::println("Vulkan error: {}", string_VkResult(result));
         abort();
@@ -179,7 +179,7 @@ static VkRenderingAttachmentInfo attachment_info(
     };
 }
 
-static VkRenderingInfo rendering_info(
+VkRenderingInfo rendering_info(
     VkExtent2D renderExtent,
     VkRenderingAttachmentInfo* colorAttachment,
     VkRenderingAttachmentInfo* depthAttachment)
@@ -1007,7 +1007,7 @@ public:
     SpecializationInfo& operator=(SpecializationInfo&&) = delete;
 };
 
-static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(
+VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(
     Shader shader_module,
     VkShaderStageFlagBits stage,
     SpecializationInfo */* _Nullable */specialization_info)
