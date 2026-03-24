@@ -1165,13 +1165,14 @@ export struct IndexBuffer : public VulkanBuffer{
 
 export template <typename VertexStruct>
 struct VertexBuffer : public VulkanBuffer{
+    static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
     VertexBuffer(VulkanEngine &vk, int element_count)
     :VulkanBuffer(vk,
                  sizeof(VertexStruct) * element_count,
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  0, 0)
     {
-        static_assert(get_vertex_attribute_formats().size() <= 16, "Use only up to 16 vertex attributes as some GPUs don't support more than that.");
+        static_assert(vertex_attribute_count <= 16, "Use only up to 16 vertex attributes as some GPUs don't support more than that.");
     }
 
     [[nodiscard]] constexpr uint32_t get_stride() const {
@@ -1244,25 +1245,20 @@ struct VertexBuffer : public VulkanBuffer{
         return VK_FORMAT_UNDEFINED;
     }
 
-    [[nodiscard]] static constexpr std::vector<VkFormat> get_vertex_attribute_formats(){
-        std::vector<VkFormat> formats;
-        boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
-            formats.push_back(get_vertex_attribute_format(name, value));
-        });
-        return formats;
-    }
-
-    [[nodiscard]] static constexpr std::vector<VkVertexInputAttributeDescription> get_vertex_attribute_descriptions(uint32_t binding = 0, uint32_t first_location = 0) {
-        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions;
+    [[nodiscard]] static constexpr std::array<VkVertexInputAttributeDescription, vertex_attribute_count>
+    get_vertex_attribute_descriptions(uint32_t binding = 0, uint32_t first_location = 0)
+    {
+        std::array<VkVertexInputAttributeDescription, vertex_attribute_count> vertex_attribute_descriptions;
         uint32_t curr_location = first_location;
         uint32_t curr_offset = 0;
+        int i = 0;
         boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
-            vertex_attribute_descriptions.push_back({
+            vertex_attribute_descriptions[i++] = {
                 .location = curr_location,
                 .binding = binding,
                 .format = get_vertex_attribute_format(name, value),
                 .offset = curr_offset,
-            });
+            };
             ++curr_location;
             curr_offset += sizeof(std::remove_cvref_t<decltype(value)>);
         });
@@ -1314,7 +1310,7 @@ struct GraphicsPipeline{
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
         };
 
-        std::vector<VkVertexInputAttributeDescription> vertex_attribute_descriptions = vertex_buffer.get_vertex_attribute_descriptions();
+        auto vertex_attribute_descriptions = vertex_buffer.get_vertex_attribute_descriptions();
 
         VkPipelineVertexInputStateCreateInfo vert_input_state_info{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
