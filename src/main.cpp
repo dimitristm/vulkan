@@ -4,6 +4,7 @@
 #include <print>
 
 import vulkanRenderer;
+import userInput;
 
 int main(){
     SDL_Init(SDL_INIT_VIDEO);
@@ -18,18 +19,16 @@ int main(){
         window_flags
     );
 
+    UserInputHandler input_handler(window);
+
     {
         Renderer renderer{window};
-        SDL_Event event;
-        bool quit = false;
-        while (!quit){
-            while(SDL_PollEvent(&event)){
-                if (event.type == SDL_EVENT_QUIT) { quit = true; }
-                ImGui_ImplSDL3_ProcessEvent(&event);
-            }
+        while (true){
+            input_handler.handle_input();
+            if(input_handler.should_quit) { break; }
 
             ImGui::ShowDemoWindow();
-            renderer.draw();
+            renderer.draw(input_handler.get_camera().get_view_transform());
         }
     }
 

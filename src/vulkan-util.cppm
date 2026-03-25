@@ -259,6 +259,12 @@ public:
     [[nodiscard]] const std::vector<VkPushConstantRange>& get_ranges() const{
         return ranges;
     }
+
+    PushConstantsBuilder &reset(){
+        current_last_byte_used = 0;
+        ranges.clear();
+        return *this;
+    }
 };
 
 
@@ -1574,7 +1580,6 @@ export struct CommandBuffer{
         vkCmdBeginRendering(buffer, &rendering_info);
 
         VkDeviceSize offsets = 0;
-        vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
         vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
         vkCmdBindIndexBuffer(buffer, index_buffer.buffer, 0, IndexBuffer::index_type);
 
@@ -1719,6 +1724,11 @@ export struct CommandBuffer{
         vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
+    template <typename T>
+    void bind_pipeline(const GraphicsPipeline<T> &pipeline) const{
+        vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+    }
+
     void bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const{
         const int max_sets = 4;
         if (sets.size() > max_sets){
@@ -1742,6 +1752,23 @@ export struct CommandBuffer{
         ComputePipeline pipeline,
         const PushConstant<T>& push_constant)
     {
+        assert(push_constant.shader_stages & VK_SHADER_STAGE_COMPUTE_BIT
+               && "Updated push constants for a compute pipeline with a push constant that cannot be accessed by compute shaders.");
+        vkCmdPushConstants(this->buffer,
+                           pipeline.layout.layout,
+                           push_constant.shader_stages,
+                           push_constant.offset,
+                           push_constant.size,
+                           &push_constant.data);
+    }
+
+    template <typename T, typename U>
+    void update_push_constants(
+        GraphicsPipeline<T> pipeline,
+        const PushConstant<U>& push_constant)
+    {
+        assert(push_constant.shader_stages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+               && "Updated push constants for a graphics pipeline with a push constant that cannot be accessed by vertex nor fragment shaders.");
         vkCmdPushConstants(this->buffer,
                            pipeline.layout.layout,
                            push_constant.shader_stages,

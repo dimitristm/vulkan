@@ -56,6 +56,8 @@ add_executable(vulkan-prog
     src/vulkan-renderer.cppm
     src/vulkan-util.cppm
     src/vertex-buffer-attribute-types.cppm
+    src/mesh-loading.cppm
+    src/user-input.cppm
     vendored/vma_compilation_unit.cpp
     vendored/imgui/imgui.cpp
     vendored/imgui/imgui_impl_sdl3.cpp
@@ -83,6 +85,8 @@ target_sources(vulkan-prog
         src/vulkan-renderer.cppm
         src/vulkan-util.cppm
         src/vertex-buffer-attribute-types.cppm
+        src/mesh-loading.cppm
+        src/user-input.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE

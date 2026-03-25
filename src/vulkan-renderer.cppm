@@ -6,6 +6,7 @@ module;
 #include <SDL3/SDL_events.h>
 
 #include <VkBootstrap.h>
+#include <glm/ext/matrix_float4x4.hpp>
 #include <vulkan/vk_enum_string_helper.h>
 
 #include <array>
@@ -23,6 +24,7 @@ module;
 export module vulkanRenderer;
 
 import vulkanUtil;
+import userInput;
 
 static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     glm::ivec2 size;
@@ -87,6 +89,7 @@ public:
 
     VertexShader vert_shader;
     FragmentShader frag_shader;
+    PushConstant<glm::mat4> view_transform_const;
     DescriptorSet graphics_desc_set;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
@@ -146,11 +149,12 @@ public:
     sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
     vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
+    view_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
     graphics_desc_set(ds_builder.reset().build(vk)),
     vertex_buffer(vk, 16),
     index_buffer(vk, 256),
     staging_buffer(vk, sizeof(Vertex) * 16),
-    graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, std::nullopt), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
     immediate_submit_fence(vk, false),
     immediate_cmd_pool(vk),
     immediate_cmd_buffer(vk, immediate_cmd_pool)
@@ -188,7 +192,7 @@ public:
         }
     }
 
-    void draw(){
+    void draw(glm::mat4 view_transform){
 	ImGui::Begin("Background customizer");
 
         const char *comp_pipeline_names[] = {"Gradient", "Sky"};
@@ -236,6 +240,9 @@ public:
                                .aspects=ImageAspects::COLOR}
         );
 
+        cmd_buffer.bind_pipeline(graphics_pipeline);
+        view_transform_const.data = view_transform;
+        cmd_buffer.update_push_constants(graphics_pipeline, view_transform_const);
         cmd_buffer.draw_indexed(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer, index_buffer, 6);
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
