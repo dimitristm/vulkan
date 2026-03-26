@@ -10,9 +10,13 @@ layout(location = 4) in vec3 in_color;
 layout (location = 0) out vec3 out_color;
 layout (location = 1) out vec2 out_uv;
 
+layout(push_constant) uniform constants {
+    mat4 matrix;
+} view_proj_matrix;
+
 void main()
 {
-	gl_Position = vec4(position, 1.0f);
+	gl_Position = view_proj_matrix.matrix * vec4(position, 1.0f);
 	out_color = in_color.xyz;
 	out_uv.x = u;
 	out_uv.y = v;

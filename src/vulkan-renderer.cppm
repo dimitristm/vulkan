@@ -6,6 +6,7 @@ module;
 #include <SDL3/SDL_events.h>
 
 #include <VkBootstrap.h>
+#include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <vulkan/vk_enum_string_helper.h>
 
@@ -89,7 +90,7 @@ public:
 
     VertexShader vert_shader;
     FragmentShader frag_shader;
-    PushConstant<glm::mat4> view_transform_const;
+    PushConstant<glm::mat4> view_proj_transform_const;
     DescriptorSet graphics_desc_set;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
@@ -149,7 +150,7 @@ public:
     sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
     vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
-    view_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
+    view_proj_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
     graphics_desc_set(ds_builder.reset().build(vk)),
     vertex_buffer(vk, 16),
     index_buffer(vk, 256),
@@ -241,8 +242,8 @@ public:
         );
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
-        view_transform_const.data = view_transform;
-        cmd_buffer.update_push_constants(graphics_pipeline, view_transform_const);
+        view_proj_transform_const.data = glm::perspective(glm::radians(45.0f), (float)window_size.x / (float)window_size.y, 0.01f, 100.0f) * view_transform;
+        cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
         cmd_buffer.draw_indexed(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer, index_buffer, 6);
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{

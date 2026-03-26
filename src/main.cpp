@@ -1,7 +1,6 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
-#include <print>
 
 import vulkanRenderer;
 import userInput;
@@ -23,9 +22,8 @@ int main(){
 
     {
         Renderer renderer{window};
-        while (true){
+        while (!input_handler.should_quit){
             input_handler.handle_input();
-            if(input_handler.should_quit) { break; }
 
             ImGui::ShowDemoWindow();
             renderer.draw(input_handler.get_camera().get_view_transform());
