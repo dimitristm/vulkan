@@ -23,9 +23,9 @@ module;
 #include <glm/vec4.hpp>
 
 
-#include "imgui.h"
-#include "imgui_impl_sdl3.h"
-#include "imgui_impl_vulkan.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl3.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 // Disable harmless VMA warnings
 #if defined(__clang__)
@@ -1058,7 +1058,7 @@ export struct ComputePipeline{
 
 struct VulkanBuffer{
     VkBuffer buffer;
-    uint32_t size_in_bytes;
+    uint32_t capacity_in_bytes;
     VmaAllocation allocation;
 private:
     VkDeviceAddress device_address;
@@ -1067,18 +1067,18 @@ public:
 
     VulkanBuffer(
         VulkanEngine &vk,
-        uint32_t size_in_bytes,
+        uint32_t capacity_in_bytes,
         VkBufferUsageFlags usage_flags,
         VmaAllocationCreateFlags vma_flags,
         VkMemoryPropertyFlags memory_property_flags_required,
         VkMemoryPropertyFlags memory_property_flags_preferred = 0)
-        :size_in_bytes(size_in_bytes)
+        :capacity_in_bytes(capacity_in_bytes)
     {
         VkBufferCreateInfo buf_create_info{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = nullptr,
             .flags{},
-            .size = size_in_bytes,
+            .size = capacity_in_bytes,
             .usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount{},
@@ -1508,11 +1508,11 @@ export struct CommandBuffer{
     }
 
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const{
-        assert(dst.size_in_bytes >= src.size_in_bytes);
+        assert(dst.capacity_in_bytes >= src.capacity_in_bytes);
         VkBufferCopy range{
             .srcOffset = 0,
             .dstOffset = 0,
-            .size = src.size_in_bytes,
+            .size = src.capacity_in_bytes,
         };
         vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
     }

@@ -18,9 +18,9 @@ module;
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "imgui.h"
-#include "imgui_impl_sdl3.h"
-#include "imgui_impl_vulkan.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl3.h"
+#include "imgui/imgui_impl_vulkan.h"
 
 export module vulkanRenderer;
 

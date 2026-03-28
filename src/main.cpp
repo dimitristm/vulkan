@@ -1,5 +1,5 @@
-#include "imgui.h"
-#include "imgui_impl_sdl3.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
 
 import vulkanRenderer;

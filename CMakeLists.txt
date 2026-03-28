@@ -34,6 +34,7 @@ FetchContent_Declare(
     fetch_vk_bootstrap
     GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
     GIT_TAG        v1.4.338
+    GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(fetch_vk_bootstrap)
 
@@ -41,10 +42,21 @@ FetchContent_Declare(
     VMA
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
     GIT_TAG        v3.3.0
+    GIT_SHALLOW TRUE
 )
 set(VMA_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 set(VMA_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(VMA)
+
+FetchContent_Declare(
+    fastgltf
+    GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+    GIT_TAG        v0.9.0
+    GIT_SHALLOW TRUE
+)
+set(FASTGLTF_COMPILE_AS_CPP20   ON  CACHE BOOL "" FORCE)
+set(FASTGLTF_ENABLE_CPP_MODULES ON  CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(fastgltf)
 
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
@@ -77,6 +89,7 @@ target_link_libraries(vulkan-prog
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
         glm::glm
+        fastgltf::module
 )
 
 target_sources(vulkan-prog
