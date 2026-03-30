@@ -85,13 +85,15 @@ struct Meshes{
         }
 
         for (const auto &gltf_mesh : asset->meshes){
-            MeshData new_mesh_data;
-            new_mesh_data.name = gltf_mesh.name;
-            new_mesh_data.first_index = indices.size();
-            new_mesh_data.vertex_buffer_byte_offset = (sizeof(Vertex) * vertices.size());
-            mesh_data.push_back(new_mesh_data);
-
+            uint32_t primitive_count = 0;
             for (const auto &primitive : gltf_mesh.primitives){
+                MeshData new_mesh_data;
+                new_mesh_data.name = gltf_mesh.name;
+                new_mesh_data.name.append("_primitive").append(std::to_string(primitive_count));
+                new_mesh_data.first_index = indices.size();
+                new_mesh_data.vertex_buffer_byte_offset = (sizeof(Vertex) * vertices.size());
+                mesh_data.push_back(new_mesh_data);
+
                 const fastgltf::Accessor &index_accessor = asset->accessors[primitive.indicesAccessor.value()];
                 fastgltf::iterateAccessor<std::uint32_t>(asset.get(), index_accessor, [&](std::uint32_t index){
                     indices.push_back(index);
