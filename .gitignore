@@ -1,6 +1,7 @@
 /build/
 /build-release/
 /build-deb-no-opt/
+/assets/
 shaders/compiled/*
 !shaders/compiled/.gitkeep
 /.idea/
