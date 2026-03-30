@@ -407,11 +407,15 @@ export struct VulkanEngine{
         features12.descriptorIndexing = VK_TRUE;
         features12.bufferDeviceAddress = VK_TRUE;
 
+        VkPhysicalDeviceFeatures features{};
+        features.multiDrawIndirect = VK_TRUE;
+
         vkb::PhysicalDeviceSelector selector{vkb_inst};
         vkb::PhysicalDevice vkb_physical_device = selector
             .set_minimum_version(api_version.major, api_version.minor)
             .set_required_features_13(features13)
             .set_required_features_12(features12)
+            .set_required_features(features)
             .set_surface(this->surface)
             .select()
             .value();

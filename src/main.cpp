@@ -4,6 +4,7 @@
 
 import vulkanRenderer;
 import userInput;
+import meshLoading;
 
 int main(){
     SDL_Init(SDL_INIT_VIDEO);
