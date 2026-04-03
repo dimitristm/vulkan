@@ -6,8 +6,9 @@ module;
 #include <stdexcept>
 #include <span>
 #include <print>
+#include <SDL3/SDL_stdinc.h>
 
-export module meshLoading;
+export module meshes;
 import fastgltf;
 
 // Sadly, fastgltf doesn't expose these in the module so we need to keep them here.
@@ -37,30 +38,57 @@ template<> struct ElementTraits<glm::mat4> : ElementTraitsBase<glm::mat4, Access
 
 
 
-namespace{
-struct Vertex {
+export struct Vertex {
     glm::vec3 pos;
     float u;
     glm::vec3 normal;
     float v;
     glm::vec4 color;
 };
-}
 
-struct MeshData{
+
+export struct Submesh{
     std::string name;
     uint32_t vertex_buffer_byte_offset;
+    uint32_t vertex_count;
     uint32_t first_index;
+    uint32_t index_count;
+
+    [[nodiscard]] uint32_t get_index_of_first_vertex() const {
+        return vertex_buffer_byte_offset / sizeof(Vertex);
+    }
+    [[nodiscard]] uint32_t get_index_of_last_vertex() const {
+        return get_index_of_first_vertex() + vertex_count - 1;
+    }
 };
 
-struct Meshes{
-    std::vector<MeshData> mesh_data;
-    std::vector<Vertex>vertices;
+export struct Mesh{
+    std::string name;
+    uint32_t first_submesh_idx;
+    uint32_t last_submesh_idx;
+};
+
+export struct Meshes{
+    std::vector<Mesh> meshes;
+    std::vector<Submesh> submeshes;
+    std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
+    [[nodiscard]] size_t vertex_buffer_size_in_bytes() const {
+        return vertices.size() * sizeof(decltype(vertices)::value_type);
+    }
+    [[nodiscard]] size_t index_buffer_size_in_bytes() const {
+        return indices.size() * sizeof(decltype(indices)::value_type);
+    }
     Meshes() = default;
     Meshes(const std::filesystem::path &filepath){
         add_meshes(filepath);
+    }
+    Meshes(const std::initializer_list<std::filesystem::path> &filepaths){
+        for (const auto &path : filepaths) add_meshes(path);
+    }
+    Meshes(const std::span<std::filesystem::path> &filepaths){
+        for (const auto &path : filepaths) add_meshes(path);
     }
 
     void add_meshes(const std::filesystem::path &filepath){
@@ -85,16 +113,23 @@ struct Meshes{
         }
 
         for (const auto &gltf_mesh : asset->meshes){
+            Mesh new_mesh;
+            new_mesh.first_submesh_idx = submeshes.size();
+            new_mesh.name = gltf_mesh.name;
             uint32_t primitive_count = 0;
+            if (gltf_mesh.primitives.empty()){
+                std::println("Mesh {} has no primitives. This is invalid.", gltf_mesh.name);
+                abort();
+            }
             for (const auto &primitive : gltf_mesh.primitives){
-                MeshData new_mesh_data;
-                new_mesh_data.name = gltf_mesh.name;
-                new_mesh_data.name.append("_primitive").append(std::to_string(primitive_count));
-                new_mesh_data.first_index = indices.size();
-                new_mesh_data.vertex_buffer_byte_offset = (sizeof(Vertex) * vertices.size());
-                mesh_data.push_back(new_mesh_data);
+                Submesh new_submesh;
+                new_submesh.name = gltf_mesh.name;
+                new_submesh.name.append("_primitive").append(std::to_string(primitive_count++));
+                new_submesh.first_index = indices.size();
+                new_submesh.vertex_buffer_byte_offset = (sizeof(Vertex) * vertices.size());
 
                 const fastgltf::Accessor &index_accessor = asset->accessors[primitive.indicesAccessor.value()];
+                new_submesh.index_count = index_accessor.count;
                 fastgltf::iterateAccessor<std::uint32_t>(asset.get(), index_accessor, [&](std::uint32_t index){
                     indices.push_back(index);
                 });
@@ -117,10 +152,10 @@ struct Meshes{
 
                 if (!has_attribute("POSITION")) {abort();};
                 const fastgltf::Accessor &pos_accessor = get_accessor_for_attribute("POSITION", asset.get());
+                new_submesh.vertex_count = pos_accessor.count;
                 fastgltf::iterateAccessor<glm::vec3>(asset.get(), pos_accessor, [&](glm::vec3 position){
-                    vertices.push_back(Vertex{.pos = position});
+                    vertices.push_back(Vertex{.pos = position, .color{1, SDL_randf(), 0, 1}});
                 });
-
 
                 if (has_attribute("NORMAL")){
                     const fastgltf::Accessor &norm_accessor = get_accessor_for_attribute("NORMAL", asset.get());
@@ -143,7 +178,73 @@ struct Meshes{
                         vertices[first_vertex_of_current_mesh_idx + idx].color = col;
                     });
                 }
+                submeshes.push_back(new_submesh);
             }
+            new_mesh.last_submesh_idx = submeshes.size() - 1;
+            meshes.push_back(new_mesh);
+        }
+    }
+
+    void print_mesh_summary() const {
+        std::println("=== Mesh Summary ===");
+        std::println("Number of meshes: {}", meshes.size());
+        std::println("Number of submeshes: {}", submeshes.size());
+        std::println("Total vertices: {} ({} Bytes)", vertices.size(), vertices.size() * sizeof(Vertex));
+        std::println("Total indices: {} ({} Bytes)", indices.size(), indices.size() * sizeof(uint32_t));
+        std::println("Combined size (vertices + indices): {} bytes\n", vertices.size() * sizeof(Vertex) + indices.size() * sizeof(uint32_t));
+        int32_t submesh_idx = 0;
+        for (const auto& submesh : submeshes) {
+            const size_t vbytes = static_cast<size_t>(submesh.vertex_count) * sizeof(Vertex);
+            const size_t ibytes = static_cast<size_t>(submesh.index_count) * sizeof(uint32_t);
+            std::println("Submesh: \"{}\" | Idx: {} | Verts: {} ({} Bytes) | Indices: {} ({} Bytes) | Total: {} Bytes",
+                        submesh.name,
+                        submesh_idx++,
+                        submesh.vertex_count, vbytes,
+                        submesh.index_count,  ibytes,
+                        (vbytes + ibytes));
+
+            uint32_t first_vtx = submesh.get_index_of_first_vertex();
+            uint32_t last_vtx  = submesh.get_index_of_last_vertex();
+
+            uint32_t first_idx = submesh.first_index;
+            uint32_t last_idx  = submesh.first_index + submesh.index_count - 1;
+
+            std::println("  Vertex range: bytes [{}, {}]  →  indices [{}, {}]",
+                         submesh.vertex_buffer_byte_offset,
+                         submesh.vertex_buffer_byte_offset + (submesh.vertex_count * sizeof(Vertex)) - 1,
+                         first_vtx, last_vtx);
+
+            std::println("  Index range:  [{}, {}]  ({} indices)", first_idx, last_idx, submesh.index_count);
+
+            if (first_vtx < vertices.size()) {
+                const auto& v1 = vertices[first_vtx];
+                std::println("  First vertex: pos({:.3f}, {:.3f}, {:.3f})  uv({:.3f}, {:.3f})  normal({:.3f}, {:.3f}, {:.3f})  color({:.2f}, {:.2f}, {:.2f}, {:.2f})",
+                             v1.pos.x, v1.pos.y, v1.pos.z,
+                             v1.u, v1.v,
+                             v1.normal.x, v1.normal.y, v1.normal.z,
+                             v1.color.x, v1.color.y, v1.color.z, v1.color.w);
+            }
+
+            if (last_vtx < vertices.size() && last_vtx != first_vtx) {
+                const auto& v2 = vertices[last_vtx];
+                std::println("  Last  vertex: pos({:.3f}, {:.3f}, {:.3f})  uv({:.3f}, {:.3f})  normal({:.3f}, {:.3f}, {:.3f})  color({:.2f}, {:.2f}, {:.2f}, {:.2f})",
+                             v2.pos.x, v2.pos.y, v2.pos.z,
+                             v2.u, v2.v,
+                             v2.normal.x, v2.normal.y, v2.normal.z,
+                             v2.color.x, v2.color.y, v2.color.z, v2.color.w);
+            }
+
+            if (first_idx < indices.size()) {
+                std::println("  First index: {}", first_idx);
+            }
+            if (last_idx < indices.size() && last_idx != first_idx) {
+                std::println("  Last  index: {}", last_idx);
+            }
+
+            std::println("");
+        }
+        for (const auto &mesh : meshes){
+            std::println("Mesh {} | first sub idx: {} | last sub idx: {}", mesh.name, mesh.first_submesh_idx, mesh.last_submesh_idx);
         }
     }
 };
