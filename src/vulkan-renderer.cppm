@@ -8,6 +8,7 @@ module;
 #include <VkBootstrap.h>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_float4x4.hpp>
+#include <glm/trigonometric.hpp>
 #include <vulkan/vk_enum_string_helper.h>
 
 #include <array>
@@ -24,14 +25,30 @@ module;
 
 export module vulkanRenderer;
 
-import vulkanUtil;
+import vulkanEngine;
 import userInput;
+import meshes;
 
 static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     glm::ivec2 size;
     SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
     return size;
 }
+
+//Assumes a right handed coordinate system. Output Z ranges from 0 to 1, with close objects at 1.
+static glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float horizontal_to_vertical_ratio, float near_z, float far_z){
+    // todo numerical precision is there a reason to pass vertical_to_horizontal_ratio or horizontal to vertical? pick whichever has better precision or if it doesn't matter do h/v
+    const float half_fov = glm::radians(horizontal_fov_in_degrees)/2;
+    float tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it  instead of divide it twice?
+
+    // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
+    return glm::mat4{
+        1/tan,0,0,0,
+        0,-horizontal_to_vertical_ratio/tan,0,0,
+        0,0,-near_z/(near_z-far_z),-1,
+        0,0,(far_z*near_z)/(far_z-near_z),0,
+    };
+};
 
 struct FrameInFlightData{
     GpuSemaphore swapchain_img_ready_sema;
@@ -46,19 +63,11 @@ struct FrameInFlightData{
     {}
 };
 
-struct ShaderData{
+struct ComputeShaderData{
     glm::vec4 a;
     glm::vec4 b;
     glm::vec4 c;
     glm::vec4 d;
-};
-
-struct Vertex{
-    glm::vec3 pos;
-    float u;
-    glm::vec3 normal;
-    float v;
-    glm::vec4 color;
 };
 
 export class Renderer{
@@ -72,6 +81,8 @@ public:
     Swapchain swapchain;
     Image draw_image;
     ImageView draw_image_view;
+    Image depth_image;
+    ImageView depth_image_view;
     std::vector<GpuSemaphore> swapchain_render_done_semas;
     CommandPool command_pool; // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
     std::array<FrameInFlightData, FRAMES_IN_FLIGHT> frame_in_flight_data;
@@ -80,7 +91,7 @@ public:
     DescriptorSet desc_set;
 
     PushConstantsBuilder pc_builder;
-    PushConstant<ShaderData> compute_push_const;
+    PushConstant<ComputeShaderData> compute_push_const;
 
     int selected_compute_pipeline = 0;
     SpecializationInfo specialization_info;
@@ -92,13 +103,13 @@ public:
     FragmentShader frag_shader;
     PushConstant<glm::mat4> view_proj_transform_const;
     DescriptorSet graphics_desc_set;
+    Meshes meshes;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
     StagingBuffer staging_buffer;
     GraphicsPipeline<Vertex> graphics_pipeline;
 
     GpuFence immediate_submit_fence;
-    CommandPool immediate_cmd_pool;
     CommandBuffer immediate_cmd_buffer;
 
     uint32_t frame_count{};
@@ -128,6 +139,12 @@ public:
                | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
     draw_image_view(vk, draw_image, ImageAspects::COLOR, 0, 1),
+    depth_image(vk,
+                {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
+                VK_FORMAT_D32_SFLOAT,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    depth_image_view(vk, depth_image, ImageAspects::DEPTH, 0, 1),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
             std::vector<GpuSemaphore> semas;
@@ -143,7 +160,7 @@ public:
     frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
     ds_builder(),
     desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
-    compute_push_const(pc_builder.add<ShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
+    compute_push_const(pc_builder.add<ComputeShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
     specialization_info((2 * sizeof(int32_t)) + sizeof(double)),
     compute_pipeline_layout(vk, desc_set, pc_builder.get_ranges()),
     gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
@@ -152,32 +169,33 @@ public:
     frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
     view_proj_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
     graphics_desc_set(ds_builder.reset().build(vk)),
-    vertex_buffer(vk, 16),
-    index_buffer(vk, 256),
-    staging_buffer(vk, sizeof(Vertex) * 16),
-    graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), VK_FORMAT_UNDEFINED, MSAALevel::OFF),
+    meshes({"assets/BoxVertexColors.glb"}),
+    vertex_buffer(vk, meshes.vertices.size()),
+    index_buffer(vk, meshes.vertex_buffer_size_in_bytes()),
+    staging_buffer(vk, vertex_buffer.capacity_in_bytes),
+    graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
     immediate_submit_fence(vk, false),
-    immediate_cmd_pool(vk),
-    immediate_cmd_buffer(vk, immediate_cmd_pool)
+    immediate_cmd_buffer(vk, command_pool)
     {
         desc_set.update(vk, 0, draw_image_view);
         vk.init_imgui(window, swapchain.get_format());
         compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
         compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
 
-        std::array<Vertex, 4> vertices = {{
-            {.pos = { 0.5f, -0.5f, 0.0f }, .color = { 0.0f, 0.0f, 0.0f, 1.0f }},
-            {.pos = {-0.5f, -0.5f, 0.0f }, .color = { 1.0f, 0.0f, 0.0f, 1.0f }},
-            {.pos = { 0.5f, 0.5f,  0.0f }, .color = { 0.5f, 0.5f, 0.5f, 1.0f }},
-            {.pos = {-0.5f, 0.5f,  0.0f }, .color = { 0.0f, 1.0f, 0.0f, 1.0f }},
-        }};
-        std::array<uint32_t, 6> indices = {{ 0, 1, 2, 2, 1, 3, }};
-
-        memcpy(staging_buffer.get_mapped_data(), vertices.data(), vertices.size() * sizeof(Vertex));
+        memcpy(staging_buffer.get_mapped_data(), meshes.vertices.data(), meshes.vertex_buffer_size_in_bytes());
         immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, vertex_buffer);});
 
-        memcpy(staging_buffer.get_mapped_data(), indices.data(), sizeof(uint32_t) * indices.size());
-        immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, index_buffer);});
+        memcpy(staging_buffer.get_mapped_data(), meshes.indices.data(), meshes.index_buffer_size_in_bytes());
+        immediate_submit([&]{
+            immediate_cmd_buffer.copy_entire_buffer(staging_buffer, index_buffer);
+            immediate_cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+            .img = depth_image, .discard_current_data = true, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+            .src_access_mask = 0,
+            .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+            .aspects = ImageAspects::DEPTH});
+        });
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
@@ -242,9 +260,9 @@ public:
         );
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
-        view_proj_transform_const.data = glm::perspective(glm::radians(45.0f), (float)window_size.x / (float)window_size.y, 0.01f, 100.0f) * view_transform;
+        view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image_view, draw_image.extent, graphics_pipeline, vertex_buffer, index_buffer, 6);
+        cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, meshes.indices.size());
 
         cmd_buffer.barrier(CommandBuffer::BarrierInfo{
                                 .img=draw_image,

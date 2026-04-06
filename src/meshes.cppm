@@ -154,7 +154,7 @@ export struct Meshes{
                 const fastgltf::Accessor &pos_accessor = get_accessor_for_attribute("POSITION", asset.get());
                 new_submesh.vertex_count = pos_accessor.count;
                 fastgltf::iterateAccessor<glm::vec3>(asset.get(), pos_accessor, [&](glm::vec3 position){
-                    vertices.push_back(Vertex{.pos = position, .color{1, SDL_randf(), 0, 1}});
+                    vertices.push_back(Vertex{.pos = position});
                 });
 
                 if (has_attribute("NORMAL")){
@@ -174,77 +174,23 @@ export struct Meshes{
 
                 if (has_attribute("COLOR_0")){
                     const fastgltf::Accessor &color_accessor = get_accessor_for_attribute("COLOR_0", asset.get());
-                    fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), color_accessor, [&](glm::vec4 col, uint32_t idx){
-                        vertices[first_vertex_of_current_mesh_idx + idx].color = col;
-                    });
+                    if (color_accessor.type == fastgltf::AccessorType::Vec3){
+                        fastgltf::iterateAccessorWithIndex<glm::vec3>(asset.get(), color_accessor, [&](glm::vec3 col, uint32_t idx){
+                            vertices[first_vertex_of_current_mesh_idx + idx].color = glm::vec4(col, 1);
+                        });
+                    }
+
+                    if (color_accessor.type == fastgltf::AccessorType::Vec4){
+                        fastgltf::iterateAccessorWithIndex<glm::vec4>(asset.get(), color_accessor, [&](glm::vec4 col, uint32_t idx){
+                            vertices[first_vertex_of_current_mesh_idx + idx].color = col;
+                        });
+                    }
+
                 }
                 submeshes.push_back(new_submesh);
             }
             new_mesh.last_submesh_idx = submeshes.size() - 1;
             meshes.push_back(new_mesh);
-        }
-    }
-
-    void print_mesh_summary() const {
-        std::println("=== Mesh Summary ===");
-        std::println("Number of meshes: {}", meshes.size());
-        std::println("Number of submeshes: {}", submeshes.size());
-        std::println("Total vertices: {} ({} Bytes)", vertices.size(), vertices.size() * sizeof(Vertex));
-        std::println("Total indices: {} ({} Bytes)", indices.size(), indices.size() * sizeof(uint32_t));
-        std::println("Combined size (vertices + indices): {} bytes\n", vertices.size() * sizeof(Vertex) + indices.size() * sizeof(uint32_t));
-        int32_t submesh_idx = 0;
-        for (const auto& submesh : submeshes) {
-            const size_t vbytes = static_cast<size_t>(submesh.vertex_count) * sizeof(Vertex);
-            const size_t ibytes = static_cast<size_t>(submesh.index_count) * sizeof(uint32_t);
-            std::println("Submesh: \"{}\" | Idx: {} | Verts: {} ({} Bytes) | Indices: {} ({} Bytes) | Total: {} Bytes",
-                        submesh.name,
-                        submesh_idx++,
-                        submesh.vertex_count, vbytes,
-                        submesh.index_count,  ibytes,
-                        (vbytes + ibytes));
-
-            uint32_t first_vtx = submesh.get_index_of_first_vertex();
-            uint32_t last_vtx  = submesh.get_index_of_last_vertex();
-
-            uint32_t first_idx = submesh.first_index;
-            uint32_t last_idx  = submesh.first_index + submesh.index_count - 1;
-
-            std::println("  Vertex range: bytes [{}, {}]  →  indices [{}, {}]",
-                         submesh.vertex_buffer_byte_offset,
-                         submesh.vertex_buffer_byte_offset + (submesh.vertex_count * sizeof(Vertex)) - 1,
-                         first_vtx, last_vtx);
-
-            std::println("  Index range:  [{}, {}]  ({} indices)", first_idx, last_idx, submesh.index_count);
-
-            if (first_vtx < vertices.size()) {
-                const auto& v1 = vertices[first_vtx];
-                std::println("  First vertex: pos({:.3f}, {:.3f}, {:.3f})  uv({:.3f}, {:.3f})  normal({:.3f}, {:.3f}, {:.3f})  color({:.2f}, {:.2f}, {:.2f}, {:.2f})",
-                             v1.pos.x, v1.pos.y, v1.pos.z,
-                             v1.u, v1.v,
-                             v1.normal.x, v1.normal.y, v1.normal.z,
-                             v1.color.x, v1.color.y, v1.color.z, v1.color.w);
-            }
-
-            if (last_vtx < vertices.size() && last_vtx != first_vtx) {
-                const auto& v2 = vertices[last_vtx];
-                std::println("  Last  vertex: pos({:.3f}, {:.3f}, {:.3f})  uv({:.3f}, {:.3f})  normal({:.3f}, {:.3f}, {:.3f})  color({:.2f}, {:.2f}, {:.2f}, {:.2f})",
-                             v2.pos.x, v2.pos.y, v2.pos.z,
-                             v2.u, v2.v,
-                             v2.normal.x, v2.normal.y, v2.normal.z,
-                             v2.color.x, v2.color.y, v2.color.z, v2.color.w);
-            }
-
-            if (first_idx < indices.size()) {
-                std::println("  First index: {}", first_idx);
-            }
-            if (last_idx < indices.size() && last_idx != first_idx) {
-                std::println("  Last  index: {}", last_idx);
-            }
-
-            std::println("");
-        }
-        for (const auto &mesh : meshes){
-            std::println("Mesh {} | first sub idx: {} | last sub idx: {}", mesh.name, mesh.first_submesh_idx, mesh.last_submesh_idx);
         }
     }
 };

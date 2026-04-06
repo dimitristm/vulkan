@@ -46,7 +46,7 @@ module;
 #endif
 
 
-export module vulkanUtil;
+export module vulkanEngine;
 import vertexBufferAttributeTypes;
 
 void VK_CHECK(VkResult result){
@@ -558,7 +558,7 @@ export struct Image{
 
     Image(
         VulkanEngine &vk,
-        VkExtent2D extent,// was a glm uvec2
+        VkExtent2D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags)
@@ -1178,7 +1178,7 @@ struct VertexBuffer : public VulkanBuffer{
     static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
     static const uint32_t stride = sizeof(VertexStruct);
 
-    VertexBuffer(VulkanEngine &vk, int element_count)
+    VertexBuffer(VulkanEngine &vk, uint32_t element_count)
     :VulkanBuffer(vk,
                  sizeof(VertexStruct) * element_count,
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1368,7 +1368,7 @@ struct GraphicsPipeline{
             .flags = 0,
             .depthTestEnable = static_cast<VkBool32>(depth_attachment_format != VK_FORMAT_UNDEFINED),
             .depthWriteEnable = static_cast<VkBool32>(depth_attachment_format != VK_FORMAT_UNDEFINED),
-            .depthCompareOp = VK_COMPARE_OP_GREATER, // reversed Z
+            .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // reverse Z. "OR_EQUAL" for when we do z prepass later
 
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE,
@@ -1522,8 +1522,15 @@ export struct CommandBuffer{
     }
 
     template <typename T>
-    void draw(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline<T> pipeline, const VertexBuffer<T>& vertex_buffer, uint32_t vertex_count) const{
-        VkRenderingAttachmentInfo color_render_attachment_info{
+    void draw_indexed(
+        ImageView color_attachment,
+        ImageView depth_attachment,
+        VkExtent2D draw_extent,
+        const VertexBuffer<T> &vertex_buffer,
+        const IndexBuffer &index_buffer,
+        uint32_t index_count) const
+    {
+        VkRenderingAttachmentInfo color_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext       = nullptr,
             .imageView   = color_attachment.view,
@@ -1536,50 +1543,22 @@ export struct CommandBuffer{
             .clearValue{},
         };
 
-        VkRenderingInfo rendering_info = struct_makers::rendering_info(draw_extent, &color_render_attachment_info, nullptr);
-
-        vkCmdBeginRendering(buffer, &rendering_info);
-
-        VkDeviceSize offsets = 0;
-        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
-        vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
-
-        VkViewport viewport = {
-            .x = 0,
-            .y = 0,
-            .width = static_cast<float>(draw_extent.width),
-            .height = static_cast<float>(draw_extent.height),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
-        vkCmdSetViewport(buffer, 0, 1, &viewport);
-
-        VkRect2D scissor{
-            .offset{.x = 0, .y = 0},
-            .extent{draw_extent},
-        };
-        vkCmdSetScissor(buffer, 0, 1, &scissor);
-
-        vkCmdDraw(buffer, vertex_count, 1, 0, 0);
-        vkCmdEndRendering(buffer);
-    }
-
-    template <typename T>
-    void draw_indexed(ImageView color_attachment, VkExtent2D draw_extent, GraphicsPipeline<T> pipeline, const VertexBuffer<T> &vertex_buffer, const IndexBuffer &index_buffer, uint32_t index_count) const{
-        VkRenderingAttachmentInfo color_render_attachment_info{
+        VkRenderingAttachmentInfo depth_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext       = nullptr,
-            .imageView   = color_attachment.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .imageView   = depth_attachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .resolveMode{},
             .resolveImageView{},
             .resolveImageLayout{},
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{},
+            .clearValue{
+                .depthStencil{.depth = 0.0f, .stencil = 0}
+            },
         };
 
-        VkRenderingInfo rendering_info = struct_makers::rendering_info(draw_extent, &color_render_attachment_info, nullptr);
+        VkRenderingInfo rendering_info = struct_makers::rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
 
         vkCmdBeginRendering(buffer, &rendering_info);
 
@@ -1605,7 +1584,6 @@ export struct CommandBuffer{
 
         vkCmdDrawIndexed(buffer, index_count, 1, 0, 0, 0);
         vkCmdEndRendering(buffer);
-
     }
 
     struct BarrierInfo{

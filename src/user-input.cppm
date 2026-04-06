@@ -20,12 +20,12 @@ private:
     glm::vec3 direction = glm::vec3(0.0f, 0.0f, -1.0f);
     float yaw = -90.f;
     float pitch = 0.0f;
-    float speed = 0.0035;
+    float speed = 0.02;
 
 public:
     void update_direction(float mouse_movement_x, float mouse_movement_y){
         yaw += mouse_movement_x * mouse_sensitivity;
-        pitch += mouse_movement_y * mouse_sensitivity;
+        pitch -= mouse_movement_y * mouse_sensitivity;
 
         if(pitch > 89.0f) pitch = 89.0f;
         if(pitch < -89.0f) pitch = -89.0f;

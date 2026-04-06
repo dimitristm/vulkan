@@ -66,9 +66,9 @@ find_package(glm CONFIG REQUIRED)
 add_executable(vulkan-prog
     src/main.cpp
     src/vulkan-renderer.cppm
-    src/vulkan-util.cppm
+    src/vulkan-engine.cppm
     src/vertex-buffer-attribute-types.cppm
-    src/mesh-loading.cppm
+    src/meshes.cppm
     src/user-input.cppm
     vendored/vma_compilation_unit.cpp
     vendored/imgui/imgui.cpp
@@ -96,9 +96,9 @@ target_sources(vulkan-prog
         PRIVATE
         FILE_SET CXX_MODULES FILES
         src/vulkan-renderer.cppm
-        src/vulkan-util.cppm
+        src/vulkan-engine.cppm
         src/vertex-buffer-attribute-types.cppm
-        src/mesh-loading.cppm
+        src/meshes.cppm
         src/user-input.cppm
 )
 
