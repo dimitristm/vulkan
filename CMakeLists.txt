@@ -66,6 +66,7 @@ find_package(glm CONFIG REQUIRED)
 add_executable(vulkan-prog
     src/main.cpp
     src/vulkan-renderer.cppm
+    src/vulkan-engine.cpp
     src/vulkan-engine.cppm
     src/vertex-buffer-attribute-types.cppm
     src/meshes.cppm
