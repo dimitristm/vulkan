@@ -36,7 +36,6 @@ module;
 #  pragma GCC diagnostic pop
 #endif
 module vulkanEngine;
-//import <vector>;
 
 
 #ifndef NDEBUG

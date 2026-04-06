@@ -14,6 +14,7 @@ module;
 #include <print>
 #include <unordered_set>
 #include <optional>
+#include <algorithm>
 
 
 #include <glm/vec3.hpp>
