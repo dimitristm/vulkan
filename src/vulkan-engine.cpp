@@ -52,11 +52,6 @@ void VK_CHECK(VkResult result){
 
 const uint64_t timeout_length = 3000000000;
 
-static void warnmeaboutthisifyoucompile(int sdf){
-    sdf++;
-    std::println("{}", sdf);
-}
-
 namespace struct_makers {
 static VkCommandBufferSubmitInfo command_buffer_submit_info(VkCommandBuffer cmd){
     return VkCommandBufferSubmitInfo{

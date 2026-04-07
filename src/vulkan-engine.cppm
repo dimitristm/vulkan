@@ -40,25 +40,6 @@ export module vulkanEngine;
 import vertexBufferAttributeTypes;
 
 
-static VkRenderingInfo make_rendering_info(
-    VkExtent2D renderExtent,
-    VkRenderingAttachmentInfo* colorAttachment,
-    VkRenderingAttachmentInfo* depthAttachment)
-{
-    return VkRenderingInfo{
-        .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .pNext                = nullptr,
-        .flags{},
-        .renderArea           = {{0, 0}, renderExtent},
-        .layerCount           = 1,
-        .viewMask{},
-        .colorAttachmentCount = 1,
-        .pColorAttachments    = colorAttachment,
-        .pDepthAttachment     = depthAttachment,
-        .pStencilAttachment   = nullptr,
-    };
-}
-
 struct APIVersionVulkan{
     uint32_t major;
     uint32_t minor;
@@ -458,7 +439,7 @@ struct VertexBuffer : public VulkanBuffer{
     }
 
     template <typename T>
-    static constexpr VkFormat get_vertex_attribute_format(const std::string_view field_name, const T& field_value){
+    static constexpr VkFormat get_vertex_attribute_format(const std::string_view field_name, [[maybe_unused]] const T& field_value){
         using U = std::remove_cvref_t<T>;
 
         // This list contains only widely supported formats.
@@ -517,7 +498,8 @@ struct VertexBuffer : public VulkanBuffer{
         else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_norm_t>)    return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
 
 
-        printf("%s", "Your vertex struct conainted a field which has a type that isn't supported as a vertex attribute.");
+        std::string name{field_name};
+        printf("Your vertex struct conainted a field named %s which has a type that isn't supported as a vertex attribute.", name.c_str());
         assert(false);
         abort();
         return VK_FORMAT_UNDEFINED;
@@ -786,6 +768,25 @@ export struct CommandBuffer{
             .clearValue{
                 .depthStencil{.depth = 0.0f, .stencil = 0}
             },
+        };
+
+        const auto make_rendering_info = [](
+            VkExtent2D renderExtent,
+            VkRenderingAttachmentInfo* colorAttachment,
+            VkRenderingAttachmentInfo* depthAttachment)
+        {
+            return VkRenderingInfo{
+                .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext                = nullptr,
+                .flags{},
+                .renderArea           = {{0, 0}, renderExtent},
+                .layerCount           = 1,
+                .viewMask{},
+                .colorAttachmentCount = 1,
+                .pColorAttachments    = colorAttachment,
+                .pDepthAttachment     = depthAttachment,
+                .pStencilAttachment   = nullptr,
+            };
         };
 
         VkRenderingInfo rendering_info = make_rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
