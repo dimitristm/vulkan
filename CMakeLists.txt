@@ -12,10 +12,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     message(WARNING
-        "\n\033[1;31m"
         "WARNING: This project is only tested with Clang.\n"
         "Compiler in use: ${CMAKE_CXX_COMPILER_ID}\n"
-        "\033[0m\n"
     )
 endif()
 
@@ -69,7 +67,8 @@ add_executable(vulkan-prog
     src/vulkan-engine.cpp
     src/vulkan-engine.cppm
     src/vertex-buffer-attribute-types.cppm
-    src/meshes.cppm
+    src/models.cpp
+    src/models.cppm
     src/user-input.cppm
     vendored/vma_compilation_unit.cpp
     vendored/imgui/imgui.cpp
@@ -99,7 +98,7 @@ target_sources(vulkan-prog
         src/vulkan-renderer.cppm
         src/vulkan-engine.cppm
         src/vertex-buffer-attribute-types.cppm
-        src/meshes.cppm
+        src/models.cppm
         src/user-input.cppm
 )
 

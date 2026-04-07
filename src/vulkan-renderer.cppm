@@ -27,7 +27,7 @@ export module vulkanRenderer;
 
 import vulkanEngine;
 import userInput;
-import meshes;
+import models;
 
 static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     glm::ivec2 size;
