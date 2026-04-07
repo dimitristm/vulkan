@@ -1,22 +1,18 @@
 module;
 
-#include <SDL3/SDL.h>
-
-#include <vulkan/vk_enum_string_helper.h>
-
-#include <glm/vec2.hpp>
+#include <SDL3/SDL_video.h>
 
 #include <boost/pfr.hpp>
+#include <cstdio>
 
 #include <vector>
 #include <span>
 #include <array>
-#include <print>
 #include <unordered_set>
 #include <optional>
 #include <algorithm>
 
-
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -43,13 +39,6 @@ module;
 export module vulkanEngine;
 import vertexBufferAttributeTypes;
 
-
-export void VK_CHECK(VkResult result){
-    if(result != VK_SUCCESS){
-        std::println("Vulkan error: {}", string_VkResult(result));
-        abort();
-    }
-}
 
 static VkRenderingInfo make_rendering_info(
     VkExtent2D renderExtent,
@@ -110,16 +99,7 @@ export class PushConstantsBuilder{
     uint32_t current_last_byte_used = 0;
     std::vector<VkPushConstantRange> ranges;
 
-    static bool range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags){
-        for (const auto &range : old){
-            if ((bool)(range.stageFlags & new_flags)){
-                // todo print which stage we're talking about
-                std::println("Assert failed: specified multiple push constant ranges for the same shader stage. Are you trying to make push constants for multiple pipelines? You'll have to use a PushConstantsBuilder for each pipeline that has unique push constant ranges.");
-                return false;
-            }
-        }
-        return true;
-    }
+    static bool range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags);
 
 public:
     PushConstantsBuilder() = default;
@@ -144,15 +124,9 @@ public:
         return PushConstant<T>{range.offset, range.stageFlags};
     }
 
-    [[nodiscard]] const std::vector<VkPushConstantRange>& get_ranges() const{
-        return ranges;
-    }
+    [[nodiscard]] const std::vector<VkPushConstantRange>& get_ranges() const{ return ranges; }
 
-    PushConstantsBuilder &reset(){
-        current_last_byte_used = 0;
-        ranges.clear();
-        return *this;
-    }
+    PushConstantsBuilder &reset();
 };
 
 export struct VulkanEngine{
@@ -379,7 +353,7 @@ public:
 
         if(data_size_in_bytes + sizeof(T) > data_buffer_max_capacity_in_bytes){
             assert(false && "Exceeded limit of data buffer while adding entry to specialization info");
-            std::println("Exceeded limit of data buffer while adding entry to specialization info");
+            printf("%s", "Exceeded limit of data buffer while adding entry to specialization info");
             abort();
         }
         assert(std::none_of(entries.begin(), entries.end(), [&](const VkSpecializationMapEntry& e){ return e.constantID == constant_ID; }) && "Duplicate specialization constant ID: can't set the same constant twice");
@@ -543,7 +517,7 @@ struct VertexBuffer : public VulkanBuffer{
         else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_norm_t>)    return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
 
 
-        std::println("Your vertex struct conainted a field named '{}', which has a type that isn't supported as a vertex attribute.", field_name);
+        printf("%s", "Your vertex struct conainted a field which has a type that isn't supported as a vertex attribute.");
         assert(false);
         abort();
         return VK_FORMAT_UNDEFINED;
@@ -749,7 +723,12 @@ struct GraphicsPipeline{
             .basePipelineHandle{},
             .basePipelineIndex{},
         };
-        VK_CHECK(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
+
+        VkResult result = (vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
+        if(result != VK_SUCCESS){
+            printf("Vulkan error with code: %d", result);
+            abort();
+        }
         vk.created_pipelines.push_back(pipeline);
     }
 };

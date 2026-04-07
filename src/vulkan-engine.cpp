@@ -1,5 +1,5 @@
 module;
-#include <SDL3/SDL.h>
+#include <SDL3/SDL_video.h>
 #include <SDL3/SDL_vulkan.h>
 
 #include <VkBootstrap.h>
@@ -37,6 +37,12 @@ module;
 #endif
 module vulkanEngine;
 
+void VK_CHECK(VkResult result){
+    if(result != VK_SUCCESS){
+        std::println("Vulkan error: {}", string_VkResult(result));
+        abort();
+    }
+}
 
 #ifndef NDEBUG
     const bool use_validation_layers = true;
@@ -158,6 +164,24 @@ static VkRenderingInfo rendering_info(
 
 } // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
 
+
+
+bool PushConstantsBuilder::range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags){
+    for (const auto &range : old){
+        if ((bool)(range.stageFlags & new_flags)){
+            // todo print which stage we're talking about
+            std::println("Assert failed: specified multiple push constant ranges for the same shader stage. Are you trying to make push constants for multiple pipelines? You'll have to use a PushConstantsBuilder for each pipeline that has unique push constant ranges.");
+            return false;
+        }
+    }
+    return true;
+}
+
+PushConstantsBuilder &PushConstantsBuilder::reset(){
+    current_last_byte_used = 0;
+    ranges.clear();
+    return *this;
+}
 
 static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
     const int poolsize_count = 11;
