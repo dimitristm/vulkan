@@ -3,14 +3,7 @@ module;
 #include <SDL3/SDL_video.h>
 
 #include <boost/pfr.hpp>
-#include <cstdio>
 
-#include <vector>
-#include <span>
-#include <array>
-#include <unordered_set>
-#include <optional>
-#include <algorithm>
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -36,8 +29,21 @@ module;
 #endif
 
 
+#if !USE_IMPORT_STD
+#include <cstdio>
+#include <vector>
+#include <span>
+#include <array>
+#include <unordered_set>
+#include <optional>
+#include <algorithm>
+#endif
+
 export module vulkanEngine;
 import vertexBufferAttributeTypes;
+#if USE_IMPORT_STD
+import std;
+#endif
 
 
 struct APIVersionVulkan{

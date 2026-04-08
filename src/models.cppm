@@ -4,10 +4,15 @@ module;
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
+#if !USE_IMPORT_STD
 #include <vector>
 #include <filesystem>
+#endif
 
 export module models;
+#if USE_IMPORT_STD
+import std;
+#endif
 import fastgltf;
 
 // Sadly, fastgltf doesn't expose these in the module so we need to keep them here.

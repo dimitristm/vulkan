@@ -7,13 +7,6 @@ module;
 
 #include <glm/vec2.hpp>
 
-#include <vector>
-#include <span>
-#include <array>
-#include <print>
-#include <fstream>
-#include <optional>
-
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
 #include "imgui/imgui_impl_vulkan.h"
@@ -35,7 +28,21 @@ module;
 #elif defined(__GNUC__)
 #  pragma GCC diagnostic pop
 #endif
+
+
+#if !USE_IMPORT_STD
+#include <vector>
+#include <span>
+#include <array>
+#include <print>
+#include <fstream>
+#include <optional>
+#endif
+
 module vulkanEngine;
+#if USE_IMPORT_STD
+import std;
+#endif
 
 void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){

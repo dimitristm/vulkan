@@ -5,11 +5,17 @@ module;
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
+
+#if !USE_IMPORT_STD
 #include <vector>
 #include <filesystem>
 #include <print>
+#endif
 
 module models;
+#if USE_IMPORT_STD
+import std;
+#endif
 
 import fastgltf;
 

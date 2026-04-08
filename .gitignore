@@ -1,7 +1,9 @@
 /build/
+/build-use-import-std/
 /build-release/
 /build-deb-no-opt/
 /assets/
+/scratch-space/
 shaders/compiled/*
 !shaders/compiled/.gitkeep
 /.idea/

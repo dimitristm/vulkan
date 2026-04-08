@@ -1,14 +1,19 @@
 module;
 
-#include "boost/pfr.hpp"
-#include <cassert>
-#include <format>
 #include <vulkan/vulkan_core.h>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#if !USE_IMPORT_STD
+#include <cassert>
+#include <format>
+#endif
+
 export module vertexBufferAttributeTypes;
+#if USE_IMPORT_STD
+import std;
+#endif
 
 namespace{
 template <typename T, typename Tag>

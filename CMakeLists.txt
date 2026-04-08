@@ -2,13 +2,20 @@ cmake_minimum_required(VERSION 3.31.6)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(USE_IMPORT_STD "Enable import std. CMake only has experimental support, and you need to input a special UUID for your specific CMake version." OFF)
+if(USE_IMPORT_STD)
+    set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
+    set(CMAKE_CXX_MODULE_STD ON)
+endif()
+
 project(vulkan-project
     LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     message(WARNING
@@ -52,8 +59,10 @@ FetchContent_Declare(
     GIT_TAG        v0.9.0
     GIT_SHALLOW TRUE
 )
-set(FASTGLTF_COMPILE_AS_CPP20   ON  CACHE BOOL "" FORCE)
-set(FASTGLTF_ENABLE_CPP_MODULES ON  CACHE BOOL "" FORCE)
+
+set(FASTGLTF_USE_STD_MODULE ${USE_IMPORT_STD} CACHE BOOL "" FORCE)
+set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
+set(FASTGLTF_ENABLE_CPP_MODULES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
 
 find_package(Vulkan REQUIRED)
@@ -61,24 +70,7 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
 # ---- Executable ----
-add_executable(vulkan-prog
-    src/main.cpp
-    src/vulkan-renderer.cppm
-    src/vulkan-engine.cpp
-    src/vulkan-engine.cppm
-    src/vertex-buffer-attribute-types.cppm
-    src/models.cpp
-    src/models.cppm
-    src/user-input.cppm
-    vendored/vma_compilation_unit.cpp
-    vendored/imgui/imgui.cpp
-    vendored/imgui/imgui_impl_sdl3.cpp
-    vendored/imgui/imgui_impl_vulkan.cpp
-    vendored/imgui/imgui_demo.cpp
-    vendored/imgui/imgui_draw.cpp
-    vendored/imgui/imgui_tables.cpp
-    vendored/imgui/imgui_widgets.cpp
-)
+add_executable(vulkan-prog)
 
 target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored)
 
@@ -93,8 +85,20 @@ target_link_libraries(vulkan-prog
 )
 
 target_sources(vulkan-prog
-        PRIVATE
-        FILE_SET CXX_MODULES FILES
+    PRIVATE
+        src/main.cpp
+        src/vulkan-engine.cpp
+        src/models.cpp
+        vendored/vma_compilation_unit.cpp
+        vendored/imgui/imgui.cpp
+        vendored/imgui/imgui_impl_sdl3.cpp
+        vendored/imgui/imgui_impl_vulkan.cpp
+        vendored/imgui/imgui_demo.cpp
+        vendored/imgui/imgui_draw.cpp
+        vendored/imgui/imgui_tables.cpp
+        vendored/imgui/imgui_widgets.cpp
+
+    PRIVATE FILE_SET CXX_MODULES FILES
         src/vulkan-renderer.cppm
         src/vulkan-engine.cppm
         src/vertex-buffer-attribute-types.cppm
@@ -106,6 +110,10 @@ target_compile_options(vulkan-prog PRIVATE
     -Wall
     -Wextra
     -Wpedantic
+)
+
+target_compile_definitions(vulkan-prog PRIVATE
+    USE_IMPORT_STD=$<BOOL:${USE_IMPORT_STD}>
 )
 
 # ---- Shaders ----

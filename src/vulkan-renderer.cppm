@@ -1,6 +1,5 @@
 module;
 
-#include <functional>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL_events.h>
@@ -11,10 +10,6 @@ module;
 #include <glm/trigonometric.hpp>
 #include <vulkan/vk_enum_string_helper.h>
 
-#include <array>
-#include <cmath>
-#include <print>
-
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -23,7 +18,17 @@ module;
 #include "imgui/imgui_impl_sdl3.h"
 #include "imgui/imgui_impl_vulkan.h"
 
+#if !USE_IMPORT_STD
+#include <array>
+#include <cmath>
+#include <print>
+#include <functional>
+#endif
+
 export module vulkanRenderer;
+#if USE_IMPORT_STD
+import std;
+#endif
 
 import vulkanEngine;
 import userInput;
