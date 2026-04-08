@@ -4,7 +4,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(USE_IMPORT_STD "Enable import std. CMake only has experimental support, and you need to input a special UUID for your specific CMake version." OFF)
+option(USE_IMPORT_STD "Enable import std. CMake only has experimental support, \
+                       and you need to input a special UUID for your specific CMake version. \
+                       Also, for whatever reason, this breaks if you initially have it off and \
+                       then set it to off (the other way around works fine). \
+                       Make a new build directory to enable it."
+                       OFF
+)
 if(USE_IMPORT_STD)
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
     set(CMAKE_CXX_MODULE_STD ON)
