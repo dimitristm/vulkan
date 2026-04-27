@@ -214,7 +214,8 @@ export struct GpuFence{
     VkFence fence;
     GpuFence(VulkanEngine &vk, bool signaled);
 
-    void wait(VulkanEngine &vk);
+    void wait(const VulkanEngine &vk) const;
+    [[nodiscard]] bool is_signaled(const VulkanEngine &vk) const;
 };
 
 export struct GpuSemaphore{
@@ -379,13 +380,14 @@ export struct ComputePipeline{
     );
 };
 
-struct VulkanBuffer{
+export struct VulkanBuffer{
     VkBuffer buffer;
     uint32_t capacity_in_bytes;
     VmaAllocation allocation;
 private:
     VkDeviceAddress device_address;
 public:
+    [[nodiscard]] const VkBuffer &get_vk_buffer() const { return buffer; }
     [[nodiscard]] const VkDeviceAddress &get_device_address() const { return device_address; }
 
     VulkanBuffer(
@@ -396,6 +398,14 @@ public:
         VkMemoryPropertyFlags memory_property_flags_required,
         VkMemoryPropertyFlags memory_property_flags_preferred = 0
     );
+
+    bool operator==(const VulkanBuffer& other) const {
+        return buffer == other.buffer;
+    }
+
+    bool operator!=(const VulkanBuffer& other) const {
+        return !(*this == other);
+    }
 };
 
 // A GPU-side buffer for the gpu to read from and write to.
@@ -735,8 +745,8 @@ export struct CommandBuffer{
         GpuFence signal_fence
     )const;
     void submit(VulkanEngine &vk, GpuFence signal_fence) const;
-    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy> ranges) const;
-    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy range) const;
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
 
     template <typename T>

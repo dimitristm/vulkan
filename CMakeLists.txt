@@ -93,8 +93,9 @@ target_link_libraries(vulkan-prog
 target_sources(vulkan-prog
     PRIVATE
         src/main.cpp
-        src/vulkan-engine.cpp
         src/models.cpp
+        src/vulkan-engine.cpp
+        src/vulkan-util.cpp
         vendored/vma_compilation_unit.cpp
         vendored/imgui/imgui.cpp
         vendored/imgui/imgui_impl_sdl3.cpp
@@ -105,11 +106,12 @@ target_sources(vulkan-prog
         vendored/imgui/imgui_widgets.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
-        src/vulkan-renderer.cppm
-        src/vulkan-engine.cppm
-        src/vertex-buffer-attribute-types.cppm
         src/models.cppm
         src/user-input.cppm
+        src/vertex-buffer-attribute-types.cppm
+        src/vulkan-engine.cppm
+        src/vulkan-renderer.cppm
+        src/vulkan-util.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE

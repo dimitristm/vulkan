@@ -455,9 +455,19 @@ GpuFence::GpuFence(VulkanEngine &vk, bool signaled){
     vk.created_fences.push_back(fence);
 }
 
-void GpuFence::wait(VulkanEngine &vk){
+void GpuFence::wait(const VulkanEngine &vk) const {
     VK_CHECK(vkWaitForFences(vk.device, 1, &fence, VK_TRUE, timeout_length));
     VK_CHECK(vkResetFences(vk.device, 1, &fence));
+}
+
+bool GpuFence::is_signaled(const VulkanEngine &vk) const {
+    auto result = vkGetFenceStatus(vk.device, this->fence);
+    if (result == VK_SUCCESS) return true;
+    else if (result == VK_NOT_READY) return false;
+    else{
+        std::println("GpuFence error, is_signalled returned {}", string_VkResult(result));
+        abort();
+    }
 }
 
 GpuSemaphore::GpuSemaphore(VulkanEngine &vk){
@@ -923,12 +933,20 @@ void CommandBuffer::submit(VulkanEngine &vk, GpuFence signal_fence) const{
     submit(vk, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
 }
 
-void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy> ranges) const{
-    vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, ranges.size(), ranges.data());
+void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const{
+    VkCopyBufferInfo2 copy_info{
+        .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
+        .pNext = nullptr,
+        .srcBuffer = src.buffer,
+        .dstBuffer = dst.buffer,
+        .regionCount = static_cast<uint32_t>(ranges.size()),
+        .pRegions = ranges.data()
+    };
+    vkCmdCopyBuffer2(buffer, &copy_info);
 }
 
-void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy range) const{
-    vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
+void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const{
+    copy_buffer(src, dst, std::span<VkBufferCopy2>(&range, 1));
 }
 
 void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const{
