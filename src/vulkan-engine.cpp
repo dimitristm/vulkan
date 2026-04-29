@@ -869,16 +869,31 @@ IndexBuffer::IndexBuffer(VulkanEngine &vk, uint32_t total_indexes)
                 0, 0)
 {}
 
-
-CommandBuffer::CommandBuffer(const VulkanEngine &vk, const CommandPool &pool){
-    VkCommandBufferAllocateInfo alloc_info{
+static VkCommandBufferAllocateInfo make_VkCommandBufferAllocateInfo(const CommandPool &pool, uint32_t command_buffer_count){
+    return VkCommandBufferAllocateInfo{
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
         .commandPool        = pool.pool,
         .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
+}
+
+CommandBuffer::CommandBuffer(const VulkanEngine &vk, const CommandPool &pool){
+    auto alloc_info = make_VkCommandBufferAllocateInfo(pool, 1);
     VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, &buffer));
+}
+
+void CommandBuffer::make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, int how_many_buffers_to_append){
+    auto alloc_info = make_VkCommandBufferAllocateInfo(pool, how_many_buffers_to_append);
+    thread_local std::vector<VkCommandBuffer> vk_buffers;
+    vk_buffers.resize(how_many_buffers_to_append);
+    buffers.reserve(buffers.size() + how_many_buffers_to_append);
+
+    VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, vk_buffers.data()));
+    for (int i = 0; i < how_many_buffers_to_append; ++i){
+        buffers.emplace_back(vk_buffers[i]);
+    }
 }
 
 void CommandBuffer::draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{

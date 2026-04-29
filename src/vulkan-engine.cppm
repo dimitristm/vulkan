@@ -734,6 +734,8 @@ struct GraphicsPipeline{
 export struct CommandBuffer{
     VkCommandBuffer buffer;
     CommandBuffer(const VulkanEngine &vk, const CommandPool &pool);
+    CommandBuffer(VkCommandBuffer vk_buffer):buffer(vk_buffer){}
+    static void make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, int how_many_buffers_to_append);
     void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const;
     void restart(bool one_time_submit) const;
     void submit(

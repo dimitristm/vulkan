@@ -29,20 +29,24 @@ export class HostToDeviceUploader{
     CommandPool cmd_pool;
 
     struct InProgressUpload{
+        static std::vector<GpuFence> fence_pool;
+        static std::vector<CommandBuffer> cmd_buffer_pool;
+
         CommandBuffer cmd_buffer;
         GpuFence fence;
-        std::vector<VkBufferCopy2> copy_info;
-        InProgressUpload(VulkanEngine &vk, const CommandPool &cmd_pool);
+
+        InProgressUpload(CommandBuffer &command_buffer, GpuFence &gpu_fence)
+        :cmd_buffer(command_buffer), fence(gpu_fence){}
     };
     struct QueuedUpload{
         VulkanBuffer dst;
-        std::vector<VkBufferCopy2> copy_info;//don't forget to std::swap this vector when it goes into an upload slot
+        std::vector<VkBufferCopy2> copy_info;// todo: get rid of the allocation with a memory pool
         QueuedUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(dst){
             copy_info.reserve(128);
             copy_info.push_back(copy);
         }
     };
-    std::vector<InProgressUpload> in_progress_uploads; // Each of these can support a running upload
+    std::vector<InProgressUpload> in_progress_uploads;
     std::vector<QueuedUpload> queued_uploads;
  
     uint32_t used_staging_buffer_bytes;
@@ -79,5 +83,7 @@ public:
     bool queued_uploads_exist();
     bool in_progress_uploads_exist();
     bool queued_or_in_progress_uploads_exist();
+    size_t queued_uploads_count();
+    size_t in_progress_uploads_count();
 };
 
