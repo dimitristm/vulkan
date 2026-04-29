@@ -33,6 +33,7 @@ import std;
 import vulkanEngine;
 import userInput;
 import models;
+import vulkanUtil;
 
 static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
     glm::ivec2 size;
@@ -114,20 +115,9 @@ public:
     StagingBuffer staging_buffer;
     GraphicsPipeline<Vertex> graphics_pipeline;
 
-    GpuFence immediate_submit_fence;
-    CommandBuffer immediate_cmd_buffer;
-
     uint32_t frame_count{};
 
-    void immediate_submit(const std::function<void()> &function){
-        immediate_cmd_buffer.restart(true);
-
-        function();
-
-        immediate_cmd_buffer.end();
-        immediate_cmd_buffer.submit(vk, immediate_submit_fence);
-        immediate_submit_fence.wait(vk);
-    }
+    ImmediateSubmitter immediate_submiter;
 
     Renderer(SDL_Window *window)
     :
@@ -179,8 +169,7 @@ public:
     index_buffer(vk, meshes.vertex_buffer_size_in_bytes()),
     staging_buffer(vk, vertex_buffer.capacity_in_bytes),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
-    immediate_submit_fence(vk, false),
-    immediate_cmd_buffer(vk, command_pool)
+    immediate_submiter(vk, command_pool)
     {
         desc_set.update(vk, 0, draw_image_view);
         vk.init_imgui(window, swapchain.get_format());
@@ -188,12 +177,14 @@ public:
         compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
 
         memcpy(staging_buffer.get_mapped_data(), meshes.vertices.data(), meshes.vertex_buffer_size_in_bytes());
-        immediate_submit([&]{immediate_cmd_buffer.copy_entire_buffer(staging_buffer, vertex_buffer);});
+        immediate_submiter.submit(vk,[&]{
+            immediate_submiter.cmd_buffer().copy_entire_buffer(staging_buffer, vertex_buffer);
+        });
 
         memcpy(staging_buffer.get_mapped_data(), meshes.indices.data(), meshes.index_buffer_size_in_bytes());
-        immediate_submit([&]{
-            immediate_cmd_buffer.copy_entire_buffer(staging_buffer, index_buffer);
-            immediate_cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        immediate_submiter.submit(vk, [&]{
+            immediate_submiter.cmd_buffer().copy_entire_buffer(staging_buffer, index_buffer);
+            immediate_submiter.cmd_buffer().barrier(CommandBuffer::BarrierInfo{
             .img = depth_image, .discard_current_data = true, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
             .src_access_mask = 0,

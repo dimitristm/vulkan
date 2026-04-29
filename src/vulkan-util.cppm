@@ -17,10 +17,11 @@ import vulkanEngine;
 
 export class ImmediateSubmitter{
     GpuFence submit_fence;
-    CommandBuffer cmd_buffer;
+    CommandBuffer internal_cmd_buffer;
 public:
     ImmediateSubmitter(VulkanEngine &vk, const CommandPool &cmd_pool);
     void submit(VulkanEngine &vk, const std::function<void()> &function);
+    const CommandBuffer &cmd_buffer(){ return internal_cmd_buffer; }
 };
 
 export class HostToDeviceUploader{
@@ -41,7 +42,7 @@ export class HostToDeviceUploader{
     };
     struct QueuedUpload{
         VulkanBuffer dst;
-        std::vector<VkBufferCopy2> copy_info;// todo: get rid of the allocation with a memory pool
+        std::vector<VkBufferCopy2> copy_info;// todo performance: get rid of the allocation with a memory pool
         QueuedUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(dst){
             copy_info.reserve(128);
             copy_info.push_back(copy);

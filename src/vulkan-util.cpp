@@ -19,15 +19,15 @@ import std;
 import vulkanEngine;
 
 ImmediateSubmitter::ImmediateSubmitter(VulkanEngine &vk, const CommandPool &cmd_pool)
-:submit_fence(vk, false), cmd_buffer(vk, cmd_pool){}
+:submit_fence(vk, false), internal_cmd_buffer(vk, cmd_pool){}
 
 void ImmediateSubmitter::submit(VulkanEngine &vk, const std::function<void()> &function){
-    cmd_buffer.restart(true);
+    internal_cmd_buffer.restart(true);
 
     function();
 
-    cmd_buffer.end();
-    cmd_buffer.submit(vk, submit_fence);
+    internal_cmd_buffer.end();
+    internal_cmd_buffer.submit(vk, submit_fence);
     submit_fence.wait(vk);
 }
 
