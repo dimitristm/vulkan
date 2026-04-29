@@ -41,12 +41,12 @@ used_staging_buffer_bytes(0)
 {
     in_progress_uploads.reserve(128);
     queued_uploads.reserve(128);
-    InProgressUpload::fence_pool.reserve(128);
-    InProgressUpload::cmd_buffer_pool.reserve(128);
+    fence_pool.reserve(128);
+    cmd_buffer_pool.reserve(128);
     for (int i = 0; i < 16; ++i){
-        InProgressUpload::fence_pool.emplace_back(*vk, false);
+        fence_pool.emplace_back(*vk, false);
     }
-    CommandBuffer::make_command_buffers(*vk, InProgressUpload::cmd_buffer_pool, cmd_pool, 64);
+    CommandBuffer::make_command_buffers(*vk, cmd_buffer_pool, cmd_pool, 64);
 }
 
 HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(uint32_t desired_size){
@@ -108,8 +108,6 @@ static auto pop_back_and_return(Container& c) {
 
 void HostToDeviceUploader::begin_uploads(){
     const auto add_in_progress_upload = [&]{
-        auto &cmd_buffer_pool =  InProgressUpload::cmd_buffer_pool;
-        auto &fence_pool = InProgressUpload::fence_pool;
         CommandBuffer cmd_buffer = cmd_buffer_pool.empty() ? CommandBuffer(*vk, cmd_pool)
                                                            : pop_back_and_return(cmd_buffer_pool);
         GpuFence fence = fence_pool.empty() ? GpuFence(*vk, false)
@@ -130,8 +128,8 @@ void HostToDeviceUploader::begin_uploads(){
 void HostToDeviceUploader::finish_in_progress_uploads(){
     for (auto &in_progress_upload : in_progress_uploads){
         in_progress_upload.fence.wait(*vk);
-        InProgressUpload::fence_pool.push_back(in_progress_upload.fence);
-        InProgressUpload::cmd_buffer_pool.push_back(in_progress_upload.cmd_buffer);
+        fence_pool.push_back(in_progress_upload.fence);
+        cmd_buffer_pool.push_back(in_progress_upload.cmd_buffer);
     }
     in_progress_uploads.clear();
 

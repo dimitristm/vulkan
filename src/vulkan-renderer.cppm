@@ -44,7 +44,7 @@ static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
 static glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float horizontal_to_vertical_ratio, float near_z, float far_z){
     // todo numerical precision is there a reason to pass vertical_to_horizontal_ratio or horizontal to vertical? pick whichever has better precision or if it doesn't matter do h/v
     const float half_fov = glm::radians(horizontal_fov_in_degrees)/2;
-    float tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it  instead of divide it twice?
+    float tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
 
     // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
     return glm::mat4{

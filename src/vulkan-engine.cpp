@@ -875,7 +875,7 @@ static VkCommandBufferAllocateInfo make_VkCommandBufferAllocateInfo(const Comman
         .pNext              = nullptr,
         .commandPool        = pool.pool,
         .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
+        .commandBufferCount = command_buffer_count,
     };
 }
 

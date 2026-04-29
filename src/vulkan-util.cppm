@@ -28,9 +28,10 @@ export class HostToDeviceUploader{
     StagingBuffer staging_buffer;
     CommandPool cmd_pool;
 
+    std::vector<GpuFence> fence_pool;
+    std::vector<CommandBuffer> cmd_buffer_pool;
+
     struct InProgressUpload{
-        static std::vector<GpuFence> fence_pool;
-        static std::vector<CommandBuffer> cmd_buffer_pool;
 
         CommandBuffer cmd_buffer;
         GpuFence fence;
