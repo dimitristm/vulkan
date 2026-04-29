@@ -112,12 +112,13 @@ public:
     Meshes meshes;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
-    StagingBuffer staging_buffer;
+    StagingBuffer staging_buffer;// TODO REMOVE
     GraphicsPipeline<Vertex> graphics_pipeline;
 
     uint32_t frame_count{};
 
     ImmediateSubmitter immediate_submiter;
+    HostToDeviceUploader uploader;
 
     Renderer(SDL_Window *window)
     :
@@ -169,21 +170,20 @@ public:
     index_buffer(vk, meshes.vertex_buffer_size_in_bytes()),
     staging_buffer(vk, vertex_buffer.capacity_in_bytes),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
-    immediate_submiter(vk, command_pool)
+    immediate_submiter(vk, command_pool),
+    uploader(&vk, command_pool, 64 * 1024 * 1024)// todo performance 64MiB is small, raise it if we do more later
     {
         desc_set.update(vk, 0, draw_image_view);
         vk.init_imgui(window, swapchain.get_format());
         compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
         compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
 
-        memcpy(staging_buffer.get_mapped_data(), meshes.vertices.data(), meshes.vertex_buffer_size_in_bytes());
-        immediate_submiter.submit(vk,[&]{
-            immediate_submiter.cmd_buffer().copy_entire_buffer(staging_buffer, vertex_buffer);
-        });
+        uploader.queue_upload(meshes.indices.data(), index_buffer, meshes.index_buffer_size_in_bytes());
+        uploader.begin_uploads();
+        uploader.queue_upload(meshes.vertices.data(), vertex_buffer, meshes.vertex_buffer_size_in_bytes());
+        uploader.begin_and_finish_uploads();
 
-        memcpy(staging_buffer.get_mapped_data(), meshes.indices.data(), meshes.index_buffer_size_in_bytes());
         immediate_submiter.submit(vk, [&]{
-            immediate_submiter.cmd_buffer().copy_entire_buffer(staging_buffer, index_buffer);
             immediate_submiter.cmd_buffer().barrier(CommandBuffer::BarrierInfo{
             .img = depth_image, .discard_current_data = true, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,

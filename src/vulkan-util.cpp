@@ -118,10 +118,12 @@ void HostToDeviceUploader::begin_uploads(){
 
     const InProgressUpload &in_progress_upload = add_in_progress_upload();
     const CommandBuffer &cmd_buffer = in_progress_upload.cmd_buffer;
+    cmd_buffer.restart(true);
     for (auto &queued_upload : queued_uploads){
         cmd_buffer.copy_buffer(staging_buffer, queued_upload.dst, queued_upload.copy_info);
     }
-    cmd_buffer.submit(*vk, in_progress_upload.fence);
+    cmd_buffer.end();
+    cmd_buffer.submit(*vk, in_progress_upload.fence);//todo reset the buffer
     queued_uploads.clear();
 }
 
