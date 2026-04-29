@@ -123,7 +123,7 @@ void HostToDeviceUploader::begin_uploads(){
         cmd_buffer.copy_buffer(staging_buffer, queued_upload.dst, queued_upload.copy_info);
     }
     cmd_buffer.end();
-    cmd_buffer.submit(*vk, in_progress_upload.fence);//todo reset the buffer
+    cmd_buffer.submit(*vk, in_progress_upload.fence);
     queued_uploads.clear();
 }
 
