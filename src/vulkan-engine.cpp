@@ -575,13 +575,13 @@ CommandPool::CommandPool(VulkanEngine &vk){
     vk.created_command_pools.push_back(pool);
 }
 
-DescriptorSet:: DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
+DescriptorSet::DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
 :layout(layout)
 {
     VkDescriptorSetAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloc_info.pNext = nullptr;
-    alloc_info.descriptorPool = vk.descriptor_pool;
+    alloc_info.descriptorPool = vk.descriptor_pool; // todo dynamically make more descriptor pools if vkAllocateDescriptorSets returns OUT_OF_POOL_MEMORY
     alloc_info.descriptorSetCount = 1;
     alloc_info.pSetLayouts = &layout;
     VK_CHECK(vkAllocateDescriptorSets(vk.device, &alloc_info, &set));
