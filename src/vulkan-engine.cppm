@@ -58,6 +58,7 @@ struct APIVersionVulkan{
 
 export enum class MSAALevel : std::uint8_t{
     //todo: check physical device limits, they might not support one of these
+    // Can be cast into a VkSampleCountFlagBits
     OFF = VK_SAMPLE_COUNT_1_BIT,
     X2 = VK_SAMPLE_COUNT_2_BIT,
     X4 = VK_SAMPLE_COUNT_4_BIT,
@@ -190,7 +191,9 @@ export struct Image{
         VkExtent2D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
-        VkMemoryPropertyFlagBits memory_property_flags
+        VkMemoryPropertyFlagBits memory_property_flags,
+        MSAALevel msaa_level,
+        uint32_t mip_level_count
     );
 
     Image(VkImage img, VkExtent2D extent, VkFormat format);

@@ -101,31 +101,6 @@ static VkSubmitInfo2 submit_info(
     };
 }
 
-static VkImageCreateInfo image_create_info(
-    VkFormat format,
-    VkImageUsageFlags usageFlags,
-    VkExtent3D extent,
-    VkImageLayout initial_layout)
-{
-    return VkImageCreateInfo{
-        .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext         = nullptr,
-        .flags{},
-        .imageType     = VK_IMAGE_TYPE_2D,
-        .format        = format,
-        .extent        = extent,
-        .mipLevels     = 1,
-        .arrayLayers   = 1,
-        .samples       = VK_SAMPLE_COUNT_1_BIT,
-        .tiling        = VK_IMAGE_TILING_OPTIMAL,
-        .usage         = usageFlags,
-        .sharingMode{},
-        .queueFamilyIndexCount{},
-        .pQueueFamilyIndices{},
-        .initialLayout = initial_layout,
-    };
-}
-
 static VkRenderingAttachmentInfo attachment_info(
     VkImageView view,
     VkClearValue* clear,
@@ -389,13 +364,33 @@ Image::Image(
     VkExtent2D extent,
     VkFormat format,
     VkImageUsageFlags image_usage_flags,
-    VkMemoryPropertyFlagBits memory_property_flags)
+    VkMemoryPropertyFlagBits memory_property_flags,
+    MSAALevel msaa_level,
+    uint32_t mip_level_count)
     :
     extent(extent),
     format(format),
     layout(VK_IMAGE_LAYOUT_UNDEFINED)
 {
-    VkImageCreateInfo img_create_info = struct_makers::image_create_info(format, image_usage_flags, {extent.width, extent.height, 1}, VK_IMAGE_LAYOUT_UNDEFINED);
+    assert(mip_level_count > 0 && "Minimum mip level is 1, not 0.");
+    assert(extent.width > 0 && extent.height > 0);
+    VkImageCreateInfo img_create_info{
+        .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext         = nullptr,
+        .flags{},
+        .imageType     = VK_IMAGE_TYPE_2D,
+        .format        = format,
+        .extent        = {.width=extent.width, .height=extent.height, .depth=1},
+        .mipLevels     = mip_level_count,
+        .arrayLayers   = 1,
+        .samples       = static_cast<VkSampleCountFlagBits>(msaa_level),
+        .tiling        = VK_IMAGE_TILING_OPTIMAL,
+        .usage         = image_usage_flags,
+        .sharingMode{},
+        .queueFamilyIndexCount{},
+        .pQueueFamilyIndices{},
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
     VmaAllocationCreateInfo img_alloc_info = {};
     img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
     img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);

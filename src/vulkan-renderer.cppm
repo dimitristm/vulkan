@@ -133,13 +133,17 @@ public:
                | VK_IMAGE_USAGE_TRANSFER_DST_BIT
                | VK_IMAGE_USAGE_STORAGE_BIT
                | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+               MSAALevel::OFF,
+               1),
     draw_image_view(vk, draw_image, ImageAspects::COLOR, 0, 1),
     depth_image(vk,
                 {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
                 VK_FORMAT_D32_SFLOAT,
                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                MSAALevel::OFF,
+                1),
     depth_image_view(vk, depth_image, ImageAspects::DEPTH, 0, 1),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
