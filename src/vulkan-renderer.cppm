@@ -135,7 +135,7 @@ public:
                | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                MSAALevel::OFF,
-               1),
+               1, 1),
     draw_image_view(vk, draw_image, ImageAspects::COLOR, 0, 1),
     depth_image(vk,
                 {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
@@ -143,7 +143,7 @@ public:
                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 MSAALevel::OFF,
-                1),
+                1, 1),
     depth_image_view(vk, depth_image, ImageAspects::DEPTH, 0, 1),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {

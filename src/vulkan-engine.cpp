@@ -83,7 +83,7 @@ static VkSemaphoreSubmitInfo semaphore_submit_info(
     };
 }
 
-static VkSubmitInfo2 submit_info(
+static VkSubmitInfo2 submit_info2(
     VkCommandBufferSubmitInfo* cmd,
     VkSemaphoreSubmitInfo* signalSemaphoreInfo, // Can be null, in which case we do not signal a semaphore
     VkSemaphoreSubmitInfo* waitSemaphoreInfo)   // Can be null, in which case we do not wait on a semaphore
@@ -101,7 +101,7 @@ static VkSubmitInfo2 submit_info(
     };
 }
 
-static VkRenderingAttachmentInfo attachment_info(
+static VkRenderingAttachmentInfo rendering_attachment_info(
     VkImageView view,
     VkClearValue* clear,
     VkImageLayout layout)
@@ -129,7 +129,7 @@ static VkRenderingInfo rendering_info(
         .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .pNext                = nullptr,
         .flags{},
-        .renderArea           = {{0, 0}, renderExtent},
+        .renderArea           = {.offset={.x=0, .y=0}, .extent=renderExtent},
         .layerCount           = 1,
         .viewMask{},
         .colorAttachmentCount = 1,
@@ -139,8 +139,30 @@ static VkRenderingInfo rendering_info(
     };
 }
 
-} // End of namespace struct_makers. TODO: remove this namespace and add 'make' to the name of each function.
+static VkBufferImageCopy2 buffer_image_copy2(ImageAspects aspects, uint32_t mip_level, const Image &image){
+    const auto &base_extent = image.extent;
+    return VkBufferImageCopy2{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+        .pNext = nullptr,
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource{
+            .aspectMask = static_cast<VkImageAspectFlags>(aspects),
+            .mipLevel = mip_level,
+            .baseArrayLayer = 0,
+            .layerCount = image.layer_count,
+        },
+        .imageOffset{},
+        .imageExtent = {
+            .width  = std::max(1u, base_extent.width >> mip_level),
+            .height = std::max(1u, base_extent.height >> mip_level),
+            .depth  = 1,
+        },
+    };
+}
 
+} // End of namespace struct_makers.
 
 
 bool PushConstantsBuilder::range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags){
@@ -366,11 +388,13 @@ Image::Image(
     VkImageUsageFlags image_usage_flags,
     VkMemoryPropertyFlagBits memory_property_flags,
     MSAALevel msaa_level,
-    uint32_t mip_level_count)
+    uint32_t mip_level_count,
+    uint32_t layer_count)
     :
     extent(extent),
     format(format),
-    layout(VK_IMAGE_LAYOUT_UNDEFINED)
+    layout(VK_IMAGE_LAYOUT_UNDEFINED),
+    layer_count(layer_count)
 {
     assert(mip_level_count > 0 && "Minimum mip level is 1, not 0.");
     assert(extent.width > 0 && extent.height > 0);
@@ -382,7 +406,7 @@ Image::Image(
         .format        = format,
         .extent        = {.width=extent.width, .height=extent.height, .depth=1},
         .mipLevels     = mip_level_count,
-        .arrayLayers   = 1,
+        .arrayLayers   = layer_count,
         .samples       = static_cast<VkSampleCountFlagBits>(msaa_level),
         .tiling        = VK_IMAGE_TILING_OPTIMAL,
         .usage         = image_usage_flags,
@@ -404,8 +428,8 @@ Image::Image(
     vk.created_images.push_back({.image=vk_image, .allocation=allocation});
 }
 
-Image::Image(VkImage img, VkExtent2D extent, VkFormat format)
-:vk_image(img), allocation(nullptr), extent(extent), format(format), layout(VK_IMAGE_LAYOUT_UNDEFINED)
+Image::Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count)
+:vk_image(img), allocation(nullptr), extent(extent), format(format), layout(VK_IMAGE_LAYOUT_UNDEFINED), layer_count(layer_count)
 {}
 
 ImageView::ImageView(
@@ -429,7 +453,7 @@ ImageView::ImageView(
             .baseMipLevel   = base_mip_level,
             .levelCount     = mip_level_count,
             .baseArrayLayer = 0,
-            .layerCount     = 1,
+            .layerCount     = img.layer_count,
         },
     };
     VK_CHECK(vkCreateImageView(vk.device, &view_info, nullptr, &view));
@@ -534,7 +558,7 @@ void Swapchain::build_swapchain(
 
     std::vector<VkImage> vk_images = vkb_swapchain.get_images().value();
     for (const auto &vk_img : vk_images){
-        this->images.emplace_back(vk_img, vkb_swapchain.extent, vkb_swapchain.image_format);
+        this->images.emplace_back(vk_img, vkb_swapchain.extent, vkb_swapchain.image_format, 1);
     }
     this->image_format = vkb_swapchain.image_format;
 
@@ -894,7 +918,7 @@ void CommandBuffer::make_command_buffers(const VulkanEngine &vk, std::vector<Com
 void CommandBuffer::draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{
     ImGui::Render(); // todo performance: maybe we should call this on another thread while other things are going on
 
-    VkRenderingAttachmentInfo colorAttachment = struct_makers::attachment_info(target_image_view.view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo colorAttachment = struct_makers::rendering_attachment_info(target_image_view.view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     VkRenderingInfo renderInfo = struct_makers::rendering_info(draw_extent, &colorAttachment, nullptr);
 
     vkCmdBeginRendering(this->buffer, &renderInfo);
@@ -932,7 +956,7 @@ void CommandBuffer::submit(
     VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(buffer);
     VkSemaphoreSubmitInfo wait_info = wait_sema.has_value() ? struct_makers::semaphore_submit_info(*wait_stage_mask, wait_sema->semaphore) : VkSemaphoreSubmitInfo{};
     VkSemaphoreSubmitInfo signal_info = signal_sema.has_value() ? struct_makers::semaphore_submit_info(*signal_stage_mask, signal_sema->semaphore) : VkSemaphoreSubmitInfo{};
-    VkSubmitInfo2 submit_info = struct_makers::submit_info(&cmd_info,
+    VkSubmitInfo2 submit_info = struct_makers::submit_info2(&cmd_info,
                                                             signal_sema.has_value() ? &signal_info : nullptr,
                                                             wait_sema.has_value() ? &wait_info : nullptr);
 
@@ -969,17 +993,87 @@ void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuff
     vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
 }
 
+void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, ImageAspects aspects, uint32_t mip_level) const{
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(aspects, mip_level, image);
+    VkCopyBufferToImageInfo2 buffer_image_copy{
+        .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+        .pNext = nullptr,
+        .srcBuffer = buffer.buffer,
+        .dstImage = image.vk_image,
+        .dstImageLayout = image.layout,
+        .regionCount = 1,
+        .pRegions = &region,
+    };
+    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+}
+
+void CommandBuffer::copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, ImageAspects aspects, uint32_t mip_level) const {
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(aspects, mip_level, image);
+    VkCopyImageToBufferInfo2 image_buffer_copy{
+        .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+        .pNext = nullptr,
+        .srcImage = image.vk_image,
+        .srcImageLayout = image.layout,
+        .dstBuffer = buffer.buffer,
+        .regionCount = 1,
+        .pRegions = &region,
+    };
+    vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
+}
+
+void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const {
+    assert(src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
+    assert(dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
+    assert((src.extent.height == dst.extent.height) && "copy_image is designed for images of the same extent.");// todo make copy_image_regions
+    assert((src.extent.width == dst.extent.width) && "copy_image is designed for images of the same extent.");
+    assert(src.layer_count == dst.layer_count && "cop_image is designed for images with the same amount of layers.");
+
+    VkImageCopy2 region{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2,
+        .pNext = nullptr,
+        .srcSubresource{
+            .aspectMask = static_cast<VkImageAspectFlags>(src_aspects),
+            .mipLevel = src_mip_level,
+            .baseArrayLayer = 0,
+            .layerCount = src.layer_count,
+        },
+        .srcOffset{},
+        .dstSubresource{
+            .aspectMask = static_cast<VkImageAspectFlags>(dst_aspects),
+            .mipLevel = dst_mip_level,
+            .baseArrayLayer = 0,
+            .layerCount = dst.layer_count,
+        },
+        .dstOffset{},
+        .extent = {.width=src.extent.width, .height=src.extent.height, .depth=1},
+    };
+    VkCopyImageInfo2 image_copy{
+        .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
+        .pNext = nullptr,
+        .srcImage = src.vk_image,
+        .srcImageLayout = src.layout,
+        .dstImage = dst.vk_image,
+        .dstImageLayout = dst.layout,
+        .regionCount = 1,
+        .pRegions = &region,
+    };
+    vkCmdCopyImage2(this->buffer, &image_copy);
+}
+
 void CommandBuffer::blit(
-    const Image &source,
-    const Image &destination,
+    const Image &src,
+    const Image &dst,
     glm::ivec2 src_top_left,
     glm::ivec2 src_bottom_right,
     glm::ivec2 dst_top_left,
     glm::ivec2 dst_bottom_right,
     ImageAspects aspects) const // todo add VkCmdCopyImage function for when we don't need to blit
 {
-    assert(source.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL for performance reasons.");
-    assert(destination.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for performance reasons.");
+    assert(src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL for performance reasons.");
+    assert(dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for performance reasons.");
+    assert(src.layer_count == dst.layer_count);
 
     VkImageBlit2 blit_region{
         .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
@@ -989,31 +1083,31 @@ void CommandBuffer::blit(
             .aspectMask = static_cast<VkImageAspectFlags>(aspects),
             .mipLevel = 0,
             .baseArrayLayer = 0,
-            .layerCount = 1,
+            .layerCount = src.layer_count,
         },
         .srcOffsets{
-            {src_top_left.x, src_top_left.y, 0},
-            {src_bottom_right.x, src_bottom_right.y, 1},
+            {.x=src_top_left.x, .y=src_top_left.y, .z=0},
+            {.x=src_bottom_right.x, .y=src_bottom_right.y, .z=1},
         },
 
         .dstSubresource{
             .aspectMask = static_cast<VkImageAspectFlags>(aspects),
             .mipLevel = 0,
             .baseArrayLayer = 0,
-            .layerCount = 1,
+            .layerCount = dst.layer_count,
 
         },
         .dstOffsets{
-            {dst_top_left.x, dst_top_left.y, 0},
-            {dst_bottom_right.x, dst_bottom_right.y, 1},
+            {.x=dst_top_left.x, .y=dst_top_left.y, .z=0},
+            {.x=dst_bottom_right.x, .y=dst_bottom_right.y, .z=1},
         },
     };
     VkBlitImageInfo2 blit_info{
         .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
         .pNext = nullptr,
-        .srcImage = source.vk_image,
+        .srcImage = src.vk_image,
         .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        .dstImage = destination.vk_image,
+        .dstImage = dst.vk_image,
         .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .regionCount = 1,
         .pRegions = &blit_region,

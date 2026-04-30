@@ -183,6 +183,7 @@ export struct Image{
     // Important to remember that this isn't the layout the image is currently in, but is instead
     // the layout that the latest recorded image barrier command (transition command) has transitioned it to
     VkImageLayout layout;
+    uint32_t layer_count;
 
     [[nodiscard]] VkFormat get_format() const { return format; }
 
@@ -193,10 +194,11 @@ export struct Image{
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags,
         MSAALevel msaa_level,
-        uint32_t mip_level_count
+        uint32_t mip_level_count,
+        uint32_t layer_count
     );
 
-    Image(VkImage img, VkExtent2D extent, VkFormat format);
+    Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count);
 };
 
 export struct ImageView{
@@ -753,6 +755,9 @@ export struct CommandBuffer{
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, ImageAspects aspects, uint32_t mip_level) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, ImageAspects aspects, uint32_t mip_level) const;
+    void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const;
 
     template <typename T>
     void draw_indexed(
@@ -905,7 +910,7 @@ export struct CommandBuffer{
         glm::ivec2 dst_top_left,
         glm::ivec2 dst_bottom_right,
         ImageAspects aspects
-    )const; // todo add VkCmdCopyImage function for when we don't need to blit
+    )const;
 
     void blit_entire_images(const Image &source, const Image &destination, ImageAspects aspects) const;
     void bind_pipeline(const ComputePipeline &pipeline) const;
