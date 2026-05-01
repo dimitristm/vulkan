@@ -183,6 +183,7 @@ export struct Image{
     // Important to remember that this isn't the layout the image is currently in, but is instead
     // the layout that the latest recorded image barrier command (transition command) has transitioned it to
     VkImageLayout layout;
+    uint32_t mip_level_count;
     uint32_t layer_count;
 
     [[nodiscard]] VkFormat get_format() const { return format; }
@@ -290,19 +291,19 @@ struct Shader{
 export struct ComputeShader : public Shader{
     ComputeShader(VulkanEngine &vk, const std::string_view filepath)
     :Shader(vk, filepath) {
-        assert(filepath.find(".comp") != std::string_view::npos && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(filepath.contains(".comp") && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 export struct VertexShader : public Shader {
     VertexShader(VulkanEngine &vk, const std::string_view filepath)
     :Shader(vk, filepath) {
-        assert(filepath.find(".vert") != std::string_view::npos && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(filepath.contains(".vert") && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 export struct FragmentShader : public Shader {
     FragmentShader(VulkanEngine &vk, const std::string_view filepath)
     :Shader(vk, filepath) {
-        assert(filepath.find(".frag") != std::string_view::npos && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(filepath.contains(".frag") && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 
@@ -387,7 +388,7 @@ export struct ComputePipeline{
 
 export struct VulkanBuffer{
     VkBuffer buffer;
-    uint32_t capacity_in_bytes;
+    uint64_t capacity_in_bytes;
     VmaAllocation allocation;
 private:
     VkDeviceAddress device_address;
@@ -397,7 +398,7 @@ public:
 
     VulkanBuffer(
         VulkanEngine &vk,
-        uint32_t capacity_in_bytes,
+        uint64_t capacity_in_bytes,
         VkBufferUsageFlags usage_flags,
         VmaAllocationCreateFlags vma_flags,
         VkMemoryPropertyFlags memory_property_flags_required,
@@ -415,7 +416,7 @@ public:
 
 // A GPU-side buffer for the gpu to read from and write to.
 export struct StorageBuffer : public VulkanBuffer{
-    StorageBuffer(VulkanEngine &vk, uint32_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
+    StorageBuffer(VulkanEngine &vk, uint64_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
 };
 
 // Used to get data from Host to Device. For performance reasons, host should write into it in sequentially, not at random.
@@ -437,12 +438,12 @@ private:
 public:
     void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    ReadbackBuffer(VulkanEngine &vk, uint32_t size_in_bytes);
+    ReadbackBuffer(VulkanEngine &vk, uint64_t size_in_bytes);
 };
 
 export struct IndexBuffer : public VulkanBuffer{
     static const VkIndexType index_type = VK_INDEX_TYPE_UINT32;
-    IndexBuffer(VulkanEngine &vk, uint32_t total_indexes);
+    IndexBuffer(VulkanEngine &vk, uint64_t total_indexes);
 };
 
 export template <typename VertexStruct>
@@ -450,7 +451,7 @@ struct VertexBuffer : public VulkanBuffer{
     static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
     static const uint32_t stride = sizeof(VertexStruct);
 
-    VertexBuffer(VulkanEngine &vk, uint32_t element_count)
+    VertexBuffer(VulkanEngine &vk, uint64_t element_count)
     :VulkanBuffer(vk,
                  sizeof(VertexStruct) * element_count,
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -755,8 +756,8 @@ export struct CommandBuffer{
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, ImageAspects aspects, uint32_t mip_level) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, ImageAspects aspects, uint32_t mip_level) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, uint64_t buffer_offset, uint32_t mip_level, ImageAspects aspects) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, uint64_t buffer_offset, uint32_t mip_level, ImageAspects aspects) const;
     void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const;
 
     template <typename T>
@@ -903,8 +904,8 @@ export struct CommandBuffer{
     }
 
     void blit(
-        const Image &source,
-        const Image &destination,
+        const Image &src,
+        const Image &dst,
         glm::ivec2 src_top_left,
         glm::ivec2 src_bottom_right,
         glm::ivec2 dst_top_left,

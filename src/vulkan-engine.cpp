@@ -139,12 +139,16 @@ static VkRenderingInfo rendering_info(
     };
 }
 
-static VkBufferImageCopy2 buffer_image_copy2(ImageAspects aspects, uint32_t mip_level, const Image &image){
+static VkBufferImageCopy2 buffer_image_copy2(
+    const Image &image,
+    uint64_t buffer_offset,
+    uint32_t mip_level,
+    ImageAspects aspects){
     const auto &base_extent = image.extent;
     return VkBufferImageCopy2{
         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
         .pNext = nullptr,
-        .bufferOffset = 0,
+        .bufferOffset = buffer_offset,
         .bufferRowLength = 0,
         .bufferImageHeight = 0,
         .imageSubresource{
@@ -809,7 +813,7 @@ ComputePipeline::ComputePipeline(
 
 VulkanBuffer::VulkanBuffer(
     VulkanEngine &vk,
-    uint32_t capacity_in_bytes,
+    uint64_t capacity_in_bytes,
     VkBufferUsageFlags usage_flags,
     VmaAllocationCreateFlags vma_flags,
     VkMemoryPropertyFlags memory_property_flags_required,
@@ -846,7 +850,7 @@ VulkanBuffer::VulkanBuffer(
     device_address = vkGetBufferDeviceAddress(vk.device, &buffer_device_adress_info);
 }
 
-StorageBuffer::StorageBuffer(VulkanEngine &vk, uint32_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest)
+StorageBuffer::StorageBuffer(VulkanEngine &vk, uint64_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest)
 :VulkanBuffer(vk,
                 size_in_bytes,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
@@ -869,7 +873,7 @@ StagingBuffer::StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
 }
 
 
-ReadbackBuffer::ReadbackBuffer(VulkanEngine &vk, uint32_t size_in_bytes)
+ReadbackBuffer::ReadbackBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
 :VulkanBuffer(vk,
                 size_in_bytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -881,7 +885,7 @@ ReadbackBuffer::ReadbackBuffer(VulkanEngine &vk, uint32_t size_in_bytes)
     mapped_data = alloc_info.pMappedData;
 }
 
-IndexBuffer::IndexBuffer(VulkanEngine &vk, uint32_t total_indexes)
+IndexBuffer::IndexBuffer(VulkanEngine &vk, uint64_t total_indexes)
 :VulkanBuffer(vk,
                 total_indexes * sizeof(uint32_t),
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -993,9 +997,15 @@ void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuff
     vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
 }
 
-void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, ImageAspects aspects, uint32_t mip_level) const{
+void CommandBuffer::copy_buffer_to_image(
+    const VulkanBuffer &buffer,
+    const Image &image,
+    uint64_t buffer_offset,
+    uint32_t mip_level,
+    ImageAspects aspects) const
+{
     assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(aspects, mip_level, image);
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, aspects);
     VkCopyBufferToImageInfo2 buffer_image_copy{
         .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
         .pNext = nullptr,
@@ -1008,9 +1018,15 @@ void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image
     vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
 }
 
-void CommandBuffer::copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, ImageAspects aspects, uint32_t mip_level) const {
+void CommandBuffer::copy_image_to_buffer(
+    const Image &image,
+    const VulkanBuffer &buffer,
+    uint64_t buffer_offset,
+    uint32_t mip_level,
+    ImageAspects aspects) const
+{
     assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(aspects, mip_level, image);
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, aspects);
     VkCopyImageToBufferInfo2 image_buffer_copy{
         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
         .pNext = nullptr,

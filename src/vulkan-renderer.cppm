@@ -112,7 +112,6 @@ public:
     Meshes meshes;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
-    StagingBuffer staging_buffer;// TODO REMOVE
     GraphicsPipeline<Vertex> graphics_pipeline;
 
     uint32_t frame_count{};
@@ -171,8 +170,7 @@ public:
     graphics_desc_set(ds_builder.reset().build(vk)),
     meshes({"assets/BoxVertexColors.glb"}),
     vertex_buffer(vk, meshes.vertices.size()),
-    index_buffer(vk, meshes.vertex_buffer_size_in_bytes()),
-    staging_buffer(vk, vertex_buffer.capacity_in_bytes),
+    index_buffer(vk, meshes.indices.size()),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024)// todo performance 64MiB is small, raise it if we do more later

@@ -6,7 +6,6 @@ module;
 #if !USE_IMPORT_STD
 #include <bits/std_function.h>
 #include <vector>
-#include <span>
 #endif
 export module vulkanUtil;
 #if USE_IMPORT_STD
@@ -51,17 +50,17 @@ export class HostToDeviceUploader{
     std::vector<InProgressUpload> in_progress_uploads;
     std::vector<QueuedUpload> queued_uploads;
  
-    uint32_t used_staging_buffer_bytes;
+    uint64_t used_staging_buffer_bytes;
     struct FreeStagingRegion{
-        uint32_t offset;
-        uint32_t size;
+        uint64_t offset;
+        uint64_t size;
     };
-    FreeStagingRegion get_free_staging_region(uint32_t desired_size);
-    void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint32_t dst_offset);
+    FreeStagingRegion get_free_staging_region(uint64_t desired_size);
+    void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset);
 
 
 public:
-    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, uint32_t staging_buffer_size);
+    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, uint64_t staging_buffer_size);
 
     // The next three functions and their comments describe the core of how this class is used.
 
@@ -69,7 +68,7 @@ public:
     // If you have multiple uploads for a single destination buffer, there will be less driver overhead if you stage them
     // all before calling begin_uploads.
     // The uploads made with this function are put into the "Queued" category.
-    void queue_upload(const void *src, const VulkanBuffer &dst, uint32_t byte_count, uint32_t dst_offset = 0);
+    void queue_upload(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
     // Non-blocking. You must call finish_uploads before doing anything that assumes the data has been uploaded to the GPU.
     // Uploads affected by this function are put into the "In Progress" category. They are REMOVED from the "Queued" category.
     // If the internal staging buffer becomes full, queued uploads might begin (and finish) without you calling
@@ -80,12 +79,14 @@ public:
     // Finished uploads are removed from all categories.
     void finish_in_progress_uploads();
     void begin_and_finish_uploads();
-
+    void queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
 
     bool queued_uploads_exist();
     bool in_progress_uploads_exist();
     bool queued_or_in_progress_uploads_exist();
     size_t queued_uploads_count();
     size_t in_progress_uploads_count();
+
+    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint64_t dst_offset = 0);
 };
 
