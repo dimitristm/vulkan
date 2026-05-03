@@ -59,7 +59,7 @@ HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_r
         remaining_size = staging_buffer.capacity_in_bytes;
         if (require_desired_size && staging_buffer.capacity_in_bytes < desired_size){
             std::println("Staging buffer not large enough for image write");
-            abort();
+            std::abort();
         }
     }
 
