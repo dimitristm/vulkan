@@ -32,31 +32,41 @@ export class HostToDeviceUploader{
     std::vector<CommandBuffer> cmd_buffer_pool;
 
     struct InProgressUpload{
-
         CommandBuffer cmd_buffer;
         GpuFence fence;
-
         InProgressUpload(CommandBuffer &command_buffer, GpuFence &gpu_fence)
         :cmd_buffer(command_buffer), fence(gpu_fence){}
     };
-    struct QueuedUpload{
+
+    struct QueuedBufferUpload{
         VulkanBuffer dst;
         std::vector<VkBufferCopy2> copy_info;// todo performance: get rid of the allocation with a memory pool
-        QueuedUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(dst){
+        QueuedBufferUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(dst){
             copy_info.reserve(128);
             copy_info.push_back(copy);
         }
     };
+    struct QueuedImageUpload{
+        Image dst;
+        std::vector<VkBufferImageCopy2> copy_info;
+        QueuedImageUpload(const Image dst, const VkBufferImageCopy2 &copy):dst(dst){
+            copy_info.reserve(128);
+            copy_info.push_back(copy);
+        }
+    };
+
     std::vector<InProgressUpload> in_progress_uploads;
-    std::vector<QueuedUpload> queued_uploads;
+    std::vector<QueuedBufferUpload> queued_buffer_uploads;
+    std::vector<QueuedImageUpload> queued_image_uploads;
  
     uint64_t used_staging_buffer_bytes;
     struct FreeStagingRegion{
         uint64_t offset;
         uint64_t size;
     };
-    FreeStagingRegion get_free_staging_region(uint64_t desired_size);
+    FreeStagingRegion get_free_staging_region(uint64_t desired_size, bool require_desired_size);
     void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset);
+    void stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy);
 
 
 public:
@@ -71,9 +81,10 @@ public:
     void queue_upload(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
     // Non-blocking. You must call finish_uploads before doing anything that assumes the data has been uploaded to the GPU.
     // Uploads affected by this function are put into the "In Progress" category. They are REMOVED from the "Queued" category.
+    // Uploads may be coalesced into one, so if you have X "Queued" uploads you may get Y "In Progress" uploads where Y<X.
     // If the internal staging buffer becomes full, queued uploads might begin (and finish) without you calling
     // this function. In general, you should not assume that you have control over when the data
-    // is uploaded.
+    // is uploaded and in what order, unless you use a finish_uploads function between the uploads.
     void begin_uploads();
     // Blocks until all data has made it to GPU memory.
     // Finished uploads are removed from all categories.
@@ -87,6 +98,6 @@ public:
     size_t queued_uploads_count();
     size_t in_progress_uploads_count();
 
-    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint64_t dst_offset = 0);
+    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset = {});
 };
 

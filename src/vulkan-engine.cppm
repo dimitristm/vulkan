@@ -200,6 +200,14 @@ export struct Image{
     );
 
     Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count);
+
+    bool operator==(const Image& other) const noexcept {
+        return vk_image == other.vk_image;
+    }
+
+    bool operator!=(const Image& other) const noexcept {
+        return !(*this == other);
+    }
 };
 
 export struct ImageView{
@@ -756,8 +764,12 @@ export struct CommandBuffer{
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, uint64_t buffer_offset, uint32_t mip_level, ImageAspects aspects) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, uint64_t buffer_offset, uint32_t mip_level, ImageAspects aspects) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, uint64_t buffer_offset, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, uint64_t buffer_offset, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const;
     void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const;
 
     template <typename T>

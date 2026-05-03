@@ -143,7 +143,12 @@ static VkBufferImageCopy2 buffer_image_copy2(
     const Image &image,
     uint64_t buffer_offset,
     uint32_t mip_level,
-    ImageAspects aspects){
+    uint32_t base_layer,
+    uint32_t layer_count,
+    ImageAspects aspects,
+    VkOffset3D img_offset)
+{
+    assert(base_layer + layer_count <= image.layer_count);
     const auto &base_extent = image.extent;
     return VkBufferImageCopy2{
         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
@@ -154,15 +159,49 @@ static VkBufferImageCopy2 buffer_image_copy2(
         .imageSubresource{
             .aspectMask = static_cast<VkImageAspectFlags>(aspects),
             .mipLevel = mip_level,
-            .baseArrayLayer = 0,
-            .layerCount = image.layer_count,
+            .baseArrayLayer = base_layer,
+            .layerCount = layer_count,
         },
-        .imageOffset{},
+        .imageOffset = img_offset,
         .imageExtent = {
             .width  = std::max(1u, base_extent.width >> mip_level),
             .height = std::max(1u, base_extent.height >> mip_level),
             .depth  = 1,
         },
+    };
+}
+
+static VkCopyBufferToImageInfo2 copy_buffer_to_image_info2(
+    const VulkanBuffer &buffer,
+    const Image &image,
+    const VkBufferImageCopy2 *regions,
+    uint32_t region_count)
+{
+    return VkCopyBufferToImageInfo2{
+        .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+        .pNext = nullptr,
+        .srcBuffer = buffer.buffer,
+        .dstImage = image.vk_image,
+        .dstImageLayout = image.layout,
+        .regionCount = region_count,
+        .pRegions = regions,
+    };
+}
+
+static VkCopyImageToBufferInfo2 copy_image_to_buffer_info2(
+    const Image &image,
+    const VulkanBuffer &buffer,
+    const VkBufferImageCopy2 *regions,
+    uint32_t region_count)
+{
+    return VkCopyImageToBufferInfo2{
+        .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+        .pNext = nullptr,
+        .srcImage = image.vk_image,
+        .srcImageLayout = image.layout,
+        .dstBuffer = buffer.buffer,
+        .regionCount = region_count,
+        .pRegions = regions,
     };
 }
 
@@ -1002,19 +1041,25 @@ void CommandBuffer::copy_buffer_to_image(
     const Image &image,
     uint64_t buffer_offset,
     uint32_t mip_level,
-    ImageAspects aspects) const
+    uint32_t base_layer,
+    uint32_t layer_count,
+    ImageAspects aspects,
+    const VkOffset3D &img_offset = VkOffset3D{}) const
 {
     assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, aspects);
-    VkCopyBufferToImageInfo2 buffer_image_copy{
-        .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
-        .pNext = nullptr,
-        .srcBuffer = buffer.buffer,
-        .dstImage = image.vk_image,
-        .dstImageLayout = image.layout,
-        .regionCount = 1,
-        .pRegions = &region,
-    };
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1);
+    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+}
+
+void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const{
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1);
+    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+}
+void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const{
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, regions.data(), regions.size());
     vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
 }
 
@@ -1023,19 +1068,28 @@ void CommandBuffer::copy_image_to_buffer(
     const VulkanBuffer &buffer,
     uint64_t buffer_offset,
     uint32_t mip_level,
-    ImageAspects aspects) const
+    uint32_t base_layer,
+    uint32_t layer_count,
+    ImageAspects aspects,
+    const VkOffset3D &img_offset = VkOffset3D{}) const
 {
     assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, aspects);
-    VkCopyImageToBufferInfo2 image_buffer_copy{
-        .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
-        .pNext = nullptr,
-        .srcImage = image.vk_image,
-        .srcImageLayout = image.layout,
-        .dstBuffer = buffer.buffer,
-        .regionCount = 1,
-        .pRegions = &region,
-    };
+    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1);
+    vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
+}
+
+void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const
+{
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1);
+    vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
+}
+
+void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const
+{
+    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, regions.data(), regions.size());
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 

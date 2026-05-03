@@ -9,6 +9,7 @@ module;
 #include <vector>
 #include <span>
 #include <bits/std_function.h>
+#include <print>
 #endif
 
 module vulkanUtil;
@@ -40,7 +41,8 @@ cmd_pool(cmd_pool),
 used_staging_buffer_bytes(0)
 {
     in_progress_uploads.reserve(128);
-    queued_uploads.reserve(128);
+    queued_buffer_uploads.reserve(128);
+    queued_image_uploads.reserve(128);
     fence_pool.reserve(128);
     cmd_buffer_pool.reserve(128);
     for (int i = 0; i < 16; ++i){
@@ -49,12 +51,16 @@ used_staging_buffer_bytes(0)
     CommandBuffer::make_command_buffers(*vk, cmd_buffer_pool, cmd_pool, 64);
 }
 
-HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(uint64_t desired_size){
+HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(uint64_t desired_size, bool require_desired_size){
     uint64_t remaining_size = staging_buffer.capacity_in_bytes - used_staging_buffer_bytes;
-    assert((int32_t)remaining_size > -1);
-    if (remaining_size == 0) {
+    assert((int64_t)remaining_size > -1);
+    if (remaining_size == 0 || (require_desired_size && remaining_size < desired_size)) {
         begin_and_finish_uploads();
         remaining_size = staging_buffer.capacity_in_bytes;
+        if (require_desired_size && staging_buffer.capacity_in_bytes < desired_size){
+            std::println("Staging buffer not large enough for image write");
+            abort();
+        }
     }
 
     FreeStagingRegion region{
@@ -66,11 +72,13 @@ HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_r
     return region;
 }
 
+// todo clearer naming convention for dst_offset. which dst? we have the staging as a dst in the memcpy
+// and then we have the dst vulkan buffer. maybe just rename it to dst_vk_buffer.
 void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset){
     std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
                 (char*)src,
-                free_region.size);
-
+                free_region.size
+    );
     VkBufferCopy2 copy{
         .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
         .pNext = nullptr,
@@ -78,19 +86,33 @@ void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const voi
         .dstOffset = dst_offset,
         .size = free_region.size
     };
-    for (auto &queued_upload : queued_uploads){
+    for (auto &queued_upload : queued_buffer_uploads){
         if (queued_upload.dst.buffer == dst.buffer){
             queued_upload.copy_info.push_back(copy);
             return;
         }
     }
-    queued_uploads.emplace_back(dst, copy);
+    queued_buffer_uploads.emplace_back(dst, copy);
+}
+
+void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy){
+    std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
+                (char*)src,
+                free_region.size
+    );
+    for (auto &queued_upload : queued_image_uploads){
+        if (queued_upload.dst == dst){
+            queued_upload.copy_info.push_back(copy);
+            return;
+        }
+    }
+    queued_image_uploads.emplace_back(dst, copy);
 }
 
 void HostToDeviceUploader::queue_upload(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset){
     uint64_t remaining_size = byte_count;
     while (remaining_size > 0){
-        FreeStagingRegion free_region = get_free_staging_region(remaining_size);
+        FreeStagingRegion free_region = get_free_staging_region(remaining_size, false);
 
         uint64_t bytes_already_written = byte_count - remaining_size;
         stage_upload(free_region, (const char*)src + bytes_already_written, dst, dst_offset + bytes_already_written );
@@ -119,12 +141,16 @@ void HostToDeviceUploader::begin_uploads(){
     const InProgressUpload &in_progress_upload = add_in_progress_upload();
     const CommandBuffer &cmd_buffer = in_progress_upload.cmd_buffer;
     cmd_buffer.restart(true);
-    for (auto &queued_upload : queued_uploads){
+    for (auto &queued_upload : queued_buffer_uploads){
         cmd_buffer.copy_buffer(staging_buffer, queued_upload.dst, queued_upload.copy_info);
+    }
+    for (auto &queued_upload : queued_image_uploads){
+        cmd_buffer.copy_buffer_to_image(staging_buffer, queued_upload.dst, queued_upload.copy_info);
     }
     cmd_buffer.end();
     cmd_buffer.submit(*vk, in_progress_upload.fence);
-    queued_uploads.clear();
+    queued_buffer_uploads.clear();
+    queued_image_uploads.clear();
 }
 
 void HostToDeviceUploader::finish_in_progress_uploads(){
@@ -135,7 +161,7 @@ void HostToDeviceUploader::finish_in_progress_uploads(){
     }
     in_progress_uploads.clear();
 
-    if (queued_uploads.empty()) { used_staging_buffer_bytes = 0; }
+    if (!queued_uploads_exist()) { used_staging_buffer_bytes = 0; }
 }
 
 void HostToDeviceUploader::begin_and_finish_uploads(){
@@ -149,7 +175,7 @@ void HostToDeviceUploader::queue_begin_finish_uploads(const void *src, const Vul
 }
 
 bool HostToDeviceUploader::queued_uploads_exist(){
-    return !queued_uploads.empty();
+    return !queued_buffer_uploads.empty() || !queued_image_uploads.empty();
 }
 bool HostToDeviceUploader::in_progress_uploads_exist(){
     return !in_progress_uploads.empty();
@@ -158,12 +184,56 @@ bool HostToDeviceUploader::queued_or_in_progress_uploads_exist(){
     return queued_uploads_exist() || in_progress_uploads_exist();
 }
 size_t HostToDeviceUploader::queued_uploads_count(){
-    return queued_uploads.size();
+    return queued_buffer_uploads.size() + queued_image_uploads.size();
 }
 size_t HostToDeviceUploader::in_progress_uploads_count(){
     return in_progress_uploads.size();
 }
 
-void HostToDeviceUploader::queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint64_t dst_offset){
+// todo unify this with struct_makers from vulkan-engine.cpp and put it in its own file
+static VkBufferImageCopy2 buffer_image_copy2(
+    const Image &image,
+    uint64_t buffer_offset,
+    uint32_t mip_level,
+    uint32_t base_layer,
+    uint32_t layer_count,
+    ImageAspects aspects,
+    const VkOffset3D &img_offset = VkOffset3D{})
+{
+    assert(base_layer + layer_count <= image.layer_count);
+    const auto &base_extent = image.extent;
+    return VkBufferImageCopy2{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+        .pNext = nullptr,
+        .bufferOffset = buffer_offset, // for HTDU, we calculate it since we manage the Staging buffer
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource{
+            .aspectMask = static_cast<VkImageAspectFlags>(aspects),
+            .mipLevel = mip_level,
+            .baseArrayLayer = base_layer,
+            .layerCount = layer_count,
+        },
+        .imageOffset = img_offset,
+        .imageExtent = {
+            .width  = std::max(1u, base_extent.width >> mip_level),
+            .height = std::max(1u, base_extent.height >> mip_level),
+            .depth  = 1,
+        },
+    };
+}
 
+void HostToDeviceUploader::queue_upload(
+    const void *src,
+    const Image &dst,
+    uint64_t byte_count,
+    uint32_t mip_level,
+    uint32_t base_layer,
+    uint32_t layer_count,
+    ImageAspects aspects,
+    const VkOffset3D &img_offset)
+{
+    FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
+    auto img_region = buffer_image_copy2(dst, free_region.offset, mip_level, base_layer, layer_count, aspects, img_offset);
+    stage_upload(free_region, src, dst, img_region);
 }
