@@ -175,14 +175,15 @@ static VkCopyBufferToImageInfo2 copy_buffer_to_image_info2(
     const VulkanBuffer &buffer,
     const Image &image,
     const VkBufferImageCopy2 *regions,
-    uint32_t region_count)
+    uint32_t region_count,
+    VkImageLayout layout)
 {
     return VkCopyBufferToImageInfo2{
         .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
         .pNext = nullptr,
         .srcBuffer = buffer.buffer,
         .dstImage = image.vk_image,
-        .dstImageLayout = image.layout,
+        .dstImageLayout = layout,
         .regionCount = region_count,
         .pRegions = regions,
     };
@@ -192,13 +193,14 @@ static VkCopyImageToBufferInfo2 copy_image_to_buffer_info2(
     const Image &image,
     const VulkanBuffer &buffer,
     const VkBufferImageCopy2 *regions,
-    uint32_t region_count)
+    uint32_t region_count,
+    VkImageLayout layout)
 {
     return VkCopyImageToBufferInfo2{
         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
         .pNext = nullptr,
         .srcImage = image.vk_image,
-        .srcImageLayout = image.layout,
+        .srcImageLayout = layout,
         .dstBuffer = buffer.buffer,
         .regionCount = region_count,
         .pRegions = regions,
@@ -436,7 +438,6 @@ Image::Image(
     :
     extent(extent),
     format(format),
-    layout(VK_IMAGE_LAYOUT_UNDEFINED),
     layer_count(layer_count)
 {
     assert(mip_level_count > 0 && "Minimum mip level is 1, not 0.");
@@ -472,7 +473,7 @@ Image::Image(
 }
 
 Image::Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count)
-:vk_image(img), allocation(nullptr), extent(extent), format(format), layout(VK_IMAGE_LAYOUT_UNDEFINED), layer_count(layer_count)
+:vk_image(img), allocation(nullptr), extent(extent), format(format), layer_count(layer_count)
 {}
 
 ImageView::ImageView(
@@ -1036,6 +1037,7 @@ void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuff
     vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
 void CommandBuffer::copy_buffer_to_image(
     const VulkanBuffer &buffer,
     const Image &image,
@@ -1046,23 +1048,24 @@ void CommandBuffer::copy_buffer_to_image(
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{}) const
 {
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
     VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1);
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
 void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const{
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1);
-    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
-}
-void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const{
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, regions.data(), regions.size());
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
+void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const{
+    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, regions.data(), regions.size(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+}
+
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
 void CommandBuffer::copy_image_to_buffer(
     const Image &image,
     const VulkanBuffer &buffer,
@@ -1073,29 +1076,27 @@ void CommandBuffer::copy_image_to_buffer(
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{}) const
 {
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
     VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1);
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
 void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const
 {
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1);
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
 void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const
 {
-    assert(image.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, regions.data(), regions.size());
+    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, regions.data(), regions.size(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
+//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC/DST_OPTIMAL.
 void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const {
-    assert(src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Specific layout required for performance reasons");
-    assert(dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Specific layout required for performance reasons");
     assert((src.extent.height == dst.extent.height) && "copy_image is designed for images of the same extent.");// todo make copy_image_regions
     assert((src.extent.width == dst.extent.width) && "copy_image is designed for images of the same extent.");
     assert(src.layer_count == dst.layer_count && "cop_image is designed for images with the same amount of layers.");
@@ -1123,15 +1124,16 @@ void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects 
         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
         .pNext = nullptr,
         .srcImage = src.vk_image,
-        .srcImageLayout = src.layout,
+        .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         .dstImage = dst.vk_image,
-        .dstImageLayout = dst.layout,
+        .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .regionCount = 1,
         .pRegions = &region,
     };
     vkCmdCopyImage2(this->buffer, &image_copy);
 }
 
+// The layouts of the images MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC/DST_OPTIMAL
 void CommandBuffer::blit(
     const Image &src,
     const Image &dst,
@@ -1141,8 +1143,6 @@ void CommandBuffer::blit(
     glm::ivec2 dst_bottom_right,
     ImageAspects aspects) const // todo add VkCmdCopyImage function for when we don't need to blit
 {
-    assert(src.layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL for performance reasons.");
-    assert(dst.layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && "Layout must be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for performance reasons.");
     assert(src.layer_count == dst.layer_count);
 
     VkImageBlit2 blit_region{

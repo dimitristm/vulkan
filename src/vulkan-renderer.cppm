@@ -187,7 +187,7 @@ public:
 
         immediate_submiter.submit(vk, [&]{
             immediate_submiter.cmd_buffer().barrier(BarrierInfo{
-            .img = depth_image, .discard_current_data = true, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .img = depth_image, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
             .src_access_mask = 0,
             .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -231,7 +231,7 @@ public:
         cmd_buffer.restart(true);
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
-                                .discard_current_data=true,
+                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
                                 .new_layout=VK_IMAGE_LAYOUT_GENERAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
                                 .src_access_mask=0,
@@ -248,7 +248,7 @@ public:
 
         cmd_buffer.barrier(BarrierInfo{
                                .img=draw_image,
-                               .discard_current_data=false,
+                               .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_GENERAL,
                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                .src_access_mask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -264,7 +264,7 @@ public:
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
-                                .discard_current_data=false,
+                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                 .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -274,7 +274,7 @@ public:
                            },
                            BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
-                                .discard_current_data=true,
+                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
                                 .src_access_mask=0,
@@ -291,7 +291,7 @@ public:
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
-                                .discard_current_data=false,
+                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
                                 .src_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -304,7 +304,7 @@ public:
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
-                                .discard_current_data=false,
+                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                 .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,

@@ -180,9 +180,6 @@ export struct Image{
     VmaAllocation allocation;
     VkExtent2D extent;
     VkFormat format;
-    // Important to remember that this isn't the layout the image is currently in, but is instead
-    // the layout that the latest recorded image barrier command (transition command) has transitioned it to
-    VkImageLayout layout;
     uint32_t mip_level_count;
     uint32_t layer_count;
 
@@ -747,7 +744,7 @@ struct GraphicsPipeline{
 
 export struct BarrierInfo{
     Image &img;
-    bool discard_current_data;
+    VkImageLayout old_layout_or_undefined_to_discard_current_data;
     VkImageLayout new_layout;
     VkPipelineStageFlags2 src_stage_mask;
     VkAccessFlags2 src_access_mask;
@@ -878,7 +875,7 @@ private:
             .srcAccessMask = barrier_info.src_access_mask,
             .dstStageMask = barrier_info.dst_stage_mask,
             .dstAccessMask = barrier_info.dst_access_mask,
-            .oldLayout = barrier_info.discard_current_data ? VK_IMAGE_LAYOUT_UNDEFINED : barrier_info.img.layout,
+            .oldLayout =  barrier_info.old_layout_or_undefined_to_discard_current_data,
             .newLayout = barrier_info.new_layout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -916,7 +913,6 @@ public:
         int i = 0;
         const auto add_image_barrier = [&](const BarrierInfo& barrier_info){
             image_barriers[i++] = image_memory_barrier2(barrier_info);
-            barrier_info.img.layout = barrier_info.new_layout;
         };
 
         (add_image_barrier(barrier_infos), ...);
@@ -930,7 +926,6 @@ public:
         image_barriers.reserve(barrier_infos.size());
         for (const auto &info : barrier_infos){
             image_barriers.push_back(image_memory_barrier2(info));
-            info.img.layout = info.new_layout;
         }
         VkDependencyInfo dep_info = dependency_info(image_barriers);
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
