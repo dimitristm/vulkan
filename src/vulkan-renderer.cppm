@@ -186,7 +186,7 @@ public:
         uploader.begin_and_finish_uploads();
 
         immediate_submiter.submit(vk, [&]{
-            immediate_submiter.cmd_buffer().barrier(CommandBuffer::BarrierInfo{
+            immediate_submiter.cmd_buffer().barrier(BarrierInfo{
             .img = depth_image, .discard_current_data = true, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
             .src_access_mask = 0,
@@ -229,7 +229,7 @@ public:
 
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
                                 .discard_current_data=true,
                                 .new_layout=VK_IMAGE_LAYOUT_GENERAL,
@@ -246,7 +246,7 @@ public:
         cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        cmd_buffer.barrier(BarrierInfo{
                                .img=draw_image,
                                .discard_current_data=false,
                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -262,7 +262,7 @@ public:
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
         cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, meshes.indices.size());
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
                                 .discard_current_data=false,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -272,7 +272,7 @@ public:
                                 .dst_access_mask=VK_ACCESS_2_TRANSFER_READ_BIT,
                                 .aspects=ImageAspects::COLOR
                            },
-                           CommandBuffer::BarrierInfo{
+                           BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
                                 .discard_current_data=true,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -289,7 +289,7 @@ public:
                                       ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        cmd_buffer.barrier(BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
                                 .discard_current_data=false,
                                 .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -302,7 +302,7 @@ public:
 
         cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
 
-        cmd_buffer.barrier(CommandBuffer::BarrierInfo{
+        cmd_buffer.barrier(BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
                                 .discard_current_data=false,
                                 .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
