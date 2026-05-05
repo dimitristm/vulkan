@@ -143,6 +143,7 @@ export struct VulkanEngine{
     struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
     struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
+    std::vector<VkSampler> created_samplers;
     std::vector<ImageTrackingInfo> created_images;
     std::unordered_set<VkImageView> created_image_views;
     std::vector<VkCommandPool> created_command_pools;
@@ -166,6 +167,27 @@ export struct VulkanEngine{
     ~VulkanEngine();
 
     void init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level = MSAALevel::OFF);
+};
+
+export struct Sampler{
+    VkSampler sampler;
+    Sampler(VulkanEngine &vk,
+            VkFilter mag_filter,
+            VkFilter min_filter,
+            VkSamplerMipmapMode mipmap_mode,
+            VkBool32 anisotropy_enable,
+            float max_anisotropy,
+            VkSamplerAddressMode address_modeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            VkSamplerAddressMode address_modeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            VkBool32 compare_enable = VK_FALSE,
+            VkCompareOp compare_op = VK_COMPARE_OP_ALWAYS,
+            float mip_lod_bias = 0,
+            float min_lod = 0.0f,
+            float max_lod = VK_LOD_CLAMP_NONE,
+            VkBorderColor border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+            VkBool32 unnormalized_coordinates = VK_FALSE,
+            VkSamplerAddressMode address_modeW = VK_SAMPLER_ADDRESS_MODE_REPEAT
+    );
 };
 
 export enum class ImageAspects:VkImageAspectFlags{
@@ -283,8 +305,12 @@ export struct DescriptorSet{
 
     DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout);
 
-    void update(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
-    void update(VulkanEngine &vk, uint32_t bind, ImageView &view);
+    void update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
+    void update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
+    void update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
+    void update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
+    void update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers);
+    void update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler);
 };
 
 struct Shader{
@@ -949,8 +975,32 @@ public:
         vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
     }
 
+private:
+    void bind_descriptor_sets_inner(VkPipelineBindPoint bind_point, std::initializer_list<DescriptorSet> sets, VkPipelineLayout layout) const{
+        const int max_sets = 4;
+        if (sets.size() > max_sets){
+            assert(false && "Too many desc sets");
+            abort();
+        };
+        VkDescriptorSet vk_sets[max_sets];
+        int i = 0;
+        for(const auto &set : sets){
+            vk_sets[i++] = set.set;
+        }
+
+        vkCmdBindDescriptorSets(this->buffer, bind_point, layout, 0, sets.size(), vk_sets, 0, nullptr);
+    }
+public:
     void bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const;
-    void bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet set) const;
+    void bind_descriptor_set(const ComputePipeline &pipeline, DescriptorSet set) const;
+    template<typename VertexType>
+    void bind_descriptor_sets(const GraphicsPipeline<VertexType> &pipeline, std::initializer_list<DescriptorSet> sets) const{
+        bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_GRAPHICS, sets, pipeline.layout.layout);
+    }
+    template<typename VertexType>
+    void bind_descriptor_set(const GraphicsPipeline<VertexType> &pipeline, DescriptorSet set) const {
+        bind_descriptor_sets(pipeline, {set});
+    }
 
     template <typename T>
     void update_push_constants(

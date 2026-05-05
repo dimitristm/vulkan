@@ -7,6 +7,7 @@ module;
 #include <VkBootstrap.h>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_float4x4.hpp>
+#include <glm/packing.hpp>
 #include <glm/trigonometric.hpp>
 #include <vulkan/vk_enum_string_helper.h>
 
@@ -56,6 +57,23 @@ static glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float h
     };
 };
 
+namespace{
+struct Texture : public Image{
+    ImageView view;
+    Texture(VulkanEngine &vk)
+    :Image(vk,
+           {.width=16,.height=16},
+           VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           1,
+           1),
+    view(vk, *this, ImageAspects::COLOR, 0, VK_REMAINING_MIP_LEVELS)
+    {
+    }
+};
+
 struct FrameInFlightData{
     GpuSemaphore swapchain_img_ready_sema;
     CommandBuffer main_cmd_buffer;
@@ -75,6 +93,7 @@ struct ComputeShaderData{
     glm::vec4 c;
     glm::vec4 d;
 };
+}
 
 export class Renderer{
 public:
@@ -118,6 +137,9 @@ public:
 
     ImmediateSubmitter immediate_submiter;
     HostToDeviceUploader uploader;
+
+    Texture texture;
+    Sampler sampler;
 
     Renderer(SDL_Window *window)
     :
@@ -165,17 +187,25 @@ public:
     gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
     sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
     vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
-    frag_shader(vk, "shaders/compiled/colored-triangle.frag.spv"),
+    frag_shader(vk, "shaders/compiled/textured.frag.spv"),
     view_proj_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
-    graphics_desc_set(ds_builder.reset().build(vk)),
-    meshes({"assets/BoxVertexColors.glb"}),
+    graphics_desc_set(ds_builder.reset()
+                      .bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT)
+                      .bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                      .build(vk)
+    ),
+    meshes({"assets/testing/BoxTextured.glb"}),
     vertex_buffer(vk, meshes.vertices.size()),
     index_buffer(vk, meshes.indices.size()),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
     immediate_submiter(vk, command_pool),
-    uploader(&vk, command_pool, 64 * 1024 * 1024)// todo performance 64MiB is small, raise it if we do more later
+    uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
+    texture(vk),
+    sampler(vk, VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_FALSE, 0)
     {
-        desc_set.update(vk, 0, draw_image_view);
+        desc_set.update_storage_image(vk, 0, draw_image_view);
+        graphics_desc_set.update_sampled_image(vk, 0, texture.view);
+        graphics_desc_set.update_sampler(vk, 1, sampler);
         vk.init_imgui(window, swapchain.get_format());
         compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
         compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
@@ -185,14 +215,52 @@ public:
         uploader.queue_upload(meshes.vertices.data(), vertex_buffer, meshes.vertex_buffer_size_in_bytes());
         uploader.begin_and_finish_uploads();
 
+	uint32_t black = glm::packUnorm4x8(glm::vec4(0, 0, 0, 1));
+
+	//checkerboard image
+	uint32_t magenta = glm::packUnorm4x8(glm::vec4(1, 0, 1, 1));
+	std::array<uint32_t, 16 *16 > pixels; //for 16x16 checkerboard texture
+	for (int x = 0; x < 16; x++) {
+		for (int y = 0; y < 16; y++) {
+			pixels[y*16 + x] = ((x % 2) ^ (y % 2)) ? magenta : black;
+		}
+	}
+
         immediate_submiter.submit(vk, [&]{
-            immediate_submiter.cmd_buffer().barrier(BarrierInfo{
-            .img = depth_image, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
-            .src_access_mask = 0,
-            .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-            .aspects = ImageAspects::DEPTH});
+            immediate_submiter.cmd_buffer().barrier(
+                BarrierInfo{
+                    .img = depth_image, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask = 0,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                    .aspects = ImageAspects::DEPTH
+                },
+                BarrierInfo{
+                    .img = texture, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask = 0,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .aspects = ImageAspects::COLOR
+                }
+            );
+        });
+
+        uploader.queue_upload(pixels.data(), texture, sizeof(pixels), 0, 0, 1, ImageAspects::COLOR);
+        uploader.begin_and_finish_uploads();
+
+        immediate_submiter.submit(vk, [&]{
+            immediate_submiter.cmd_buffer().barrier(
+                BarrierInfo{
+                    .img = texture, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .src_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_SHADER_READ_BIT_KHR,
+                    .aspects = ImageAspects::COLOR
+                }
+            );
         });
     }
 
@@ -243,7 +311,7 @@ public:
         cmd_buffer.update_push_constants(get_selected_compute_pipeline(), compute_push_const);
 
         cmd_buffer.bind_pipeline(get_selected_compute_pipeline());
-        cmd_buffer.bind_descriptor_sets(get_selected_compute_pipeline(), desc_set);
+        cmd_buffer.bind_descriptor_set(get_selected_compute_pipeline(), desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
         cmd_buffer.barrier(BarrierInfo{
@@ -258,6 +326,7 @@ public:
         );
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
+        cmd_buffer.bind_descriptor_set(graphics_pipeline, graphics_desc_set);
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
         cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, meshes.indices.size());

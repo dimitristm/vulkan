@@ -370,6 +370,7 @@ VulkanEngine::~VulkanEngine(){
     for(auto &sema : created_semaphores) vkDestroySemaphore(device, sema, nullptr);
     for(const auto &img_view : created_image_views) vkDestroyImageView(device, img_view, nullptr);
     for(auto &image : created_images) vmaDestroyImage(allocator, image.image, image.allocation);
+    for(auto &sampler : created_samplers) vkDestroySampler(device, sampler, nullptr);
     for(auto &swapchain : created_swapchains) destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
 
     vmaDestroyAllocator(allocator);
@@ -424,6 +425,48 @@ void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALev
     ImGui::NewFrame();
 
     this->imgui_is_initialized = true;
+}
+
+
+Sampler::Sampler(VulkanEngine &vk,
+                 VkFilter mag_filter,
+                 VkFilter min_filter,
+                 VkSamplerMipmapMode mipmap_mode,
+                 VkBool32 anisotropy_enable,
+                 float max_anisotropy,
+                 VkSamplerAddressMode address_modeU,
+                 VkSamplerAddressMode address_modeV,
+                 VkBool32 compare_enable,
+                 VkCompareOp compare_op,
+                 float mip_lod_bias,
+                 float min_lod,
+                 float max_lod,
+                 VkBorderColor border_color,
+                 VkBool32 unnormalized_coordinates,
+                 VkSamplerAddressMode address_modeW)
+{
+    VkSamplerCreateInfo info{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags{},
+        .magFilter = mag_filter,
+        .minFilter = min_filter,
+        .mipmapMode = mipmap_mode,
+        .addressModeU = address_modeU,
+        .addressModeV = address_modeV,
+        .addressModeW = address_modeW,
+        .mipLodBias = mip_lod_bias,
+        .anisotropyEnable = anisotropy_enable,
+        .maxAnisotropy = max_anisotropy,
+        .compareEnable = compare_enable,
+        .compareOp = compare_op,
+        .minLod = min_lod,
+        .maxLod = max_lod,
+        .borderColor = border_color,
+        .unnormalizedCoordinates = unnormalized_coordinates,
+    };
+    VK_CHECK(vkCreateSampler(vk.device, &info, nullptr, &this->sampler));
+    vk.created_samplers.push_back(sampler);
 }
 
 Image::Image(
@@ -651,8 +694,9 @@ DescriptorSet::DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
 }
 
 
-void DescriptorSet::update(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
+void DescriptorSet::update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
     std::vector<VkDescriptorImageInfo> img_infos;
+    img_infos.reserve(views.size());
     for (auto image_view : views){
         img_infos.push_back({
             .sampler{},
@@ -676,8 +720,70 @@ void DescriptorSet::update(VulkanEngine &vk, uint32_t bind, std::span<ImageView>
     vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update(VulkanEngine &vk, uint32_t bind, ImageView &view){
-    update(vk, bind, std::span<ImageView>(&view, 1));
+void DescriptorSet::update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view){
+    update_storage_images(vk, bind, std::span<ImageView>(&view, 1));
+}
+
+void DescriptorSet::update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
+    std::vector<VkDescriptorImageInfo> img_infos;
+    img_infos.reserve(views.size());
+    for (auto &image_view : views){
+        img_infos.push_back({
+            .sampler{},
+            .imageView = image_view.view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        });
+    }
+
+    VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = set,
+        .dstBinding = bind,
+        .dstArrayElement{},
+        .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        .pImageInfo = img_infos.data(),
+        .pBufferInfo{},
+        .pTexelBufferView{},
+    };
+    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+}
+
+void DescriptorSet::update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view){
+    update_sampled_images(vk, bind, std::span<ImageView>(&view, 1));
+}
+
+void DescriptorSet::update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers) {
+    std::vector<VkDescriptorImageInfo> img_infos;
+    img_infos.reserve(samplers.size());
+
+    for (auto sampler : samplers) {
+        img_infos.push_back({
+            .sampler = sampler.sampler,
+            .imageView = VK_NULL_HANDLE,
+            .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        });
+    }
+
+    VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = set,
+        .dstBinding = bind,
+        .dstArrayElement{},
+        .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+        .pImageInfo = img_infos.data(),
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr,
+    };
+
+    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+}
+
+void DescriptorSet::update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler){
+    update_samplers(vk, bind, std::span<Sampler>(&sampler, 1));
 }
 
 Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
@@ -1195,20 +1301,9 @@ void CommandBuffer::bind_pipeline(const ComputePipeline &pipeline) const{
 }
 
 void CommandBuffer::bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const{
-    const int max_sets = 4;
-    if (sets.size() > max_sets){
-        std::println("Error: cannot have more than {} descriptor sets in bind_descriptor_sets.", max_sets);
-        abort();
-    };
-    VkDescriptorSet vk_sets[max_sets];
-    int i = 0;
-    for(const auto &set : sets){
-        vk_sets[i++] = set.set;
-    }
-
-    vkCmdBindDescriptorSets(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout.layout, 0, sets.size(), vk_sets, 0, nullptr);
+    bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_COMPUTE, sets, pipeline.layout.layout);
 }
-void CommandBuffer::bind_descriptor_sets(ComputePipeline pipeline, DescriptorSet set) const{
+void CommandBuffer::bind_descriptor_set(const ComputePipeline &pipeline, DescriptorSet set) const{
     bind_descriptor_sets(pipeline, {set});
 }
 
