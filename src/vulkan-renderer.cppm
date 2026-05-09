@@ -18,6 +18,7 @@ module;
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
 #include "imgui/imgui_impl_vulkan.h"
+#include <stb/stb_image.h>
 
 #if !USE_IMPORT_STD
 #include <array>
@@ -33,7 +34,7 @@ import std;
 
 import vulkanEngine;
 import userInput;
-import models;
+import gltf;
 import vulkanUtil;
 
 static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
@@ -62,7 +63,7 @@ struct Texture : public Image{
     ImageView view;
     Texture(VulkanEngine &vk)
     :Image(vk,
-           {.width=16,.height=16},
+           {.width=256,.height=256},
            VK_FORMAT_R8G8B8A8_UNORM,
            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -128,7 +129,7 @@ public:
     FragmentShader frag_shader;
     PushConstant<glm::mat4> view_proj_transform_const;
     DescriptorSet graphics_desc_set;
-    Meshes meshes;
+    GltfScenes scenes;
     VertexBuffer<Vertex> vertex_buffer;
     IndexBuffer index_buffer;
     GraphicsPipeline<Vertex> graphics_pipeline;
@@ -150,8 +151,7 @@ public:
     draw_image(vk,
                {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
                VK_FORMAT_R16G16B16A16_SFLOAT,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-               | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
                | VK_IMAGE_USAGE_STORAGE_BIT
                | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -194,9 +194,9 @@ public:
                       .bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                       .build(vk)
     ),
-    meshes({"assets/testing/BoxTextured.glb"}),
-    vertex_buffer(vk, meshes.vertices.size()),
-    index_buffer(vk, meshes.indices.size()),
+    scenes({"assets/testing/BoxTextured.glb"}),
+    vertex_buffer(vk, scenes.vertices[0].size()),
+    index_buffer(vk, scenes.indices[0].size()),
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
@@ -210,21 +210,10 @@ public:
         compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
         compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
 
-        uploader.queue_upload(meshes.indices.data(), index_buffer, meshes.index_buffer_size_in_bytes());
+        uploader.queue_upload(scenes.indices[0].data(), index_buffer, scenes.indices[0].size() * sizeof(uint32_t));
         uploader.begin_uploads();
-        uploader.queue_upload(meshes.vertices.data(), vertex_buffer, meshes.vertex_buffer_size_in_bytes());
+        uploader.queue_upload(scenes.vertices[0].data(), vertex_buffer, scenes.vertices[0].size() * sizeof(Vertex));
         uploader.begin_and_finish_uploads();
-
-	uint32_t black = glm::packUnorm4x8(glm::vec4(0, 0, 0, 1));
-
-	//checkerboard image
-	uint32_t magenta = glm::packUnorm4x8(glm::vec4(1, 0, 1, 1));
-	std::array<uint32_t, 16 *16 > pixels; //for 16x16 checkerboard texture
-	for (int x = 0; x < 16; x++) {
-		for (int y = 0; y < 16; y++) {
-			pixels[y*16 + x] = ((x % 2) ^ (y % 2)) ? magenta : black;
-		}
-	}
 
         immediate_submiter.submit(vk, [&]{
             immediate_submiter.cmd_buffer().barrier(
@@ -246,8 +235,14 @@ public:
                 }
             );
         });
+        auto imgidx = scenes.textures[0].image_idx;
+        const auto &img = scenes.gltf_images[imgidx];
+        int x, y, ch;
+        auto *const img_loaded = stbi_load_from_memory((unsigned char*)img.image.get(), img.size, &x, &y, &ch, 4);
+        auto img_loaded_size = x * y * 4;
+        std::println("x: {}, y: {}, ch: {}, img_loaded_size: {}", x, y, ch, img_loaded_size);
 
-        uploader.queue_upload(pixels.data(), texture, sizeof(pixels), 0, 0, 1, ImageAspects::COLOR);
+        uploader.queue_upload(img_loaded, texture, img_loaded_size, 0, 0, 1, ImageAspects::COLOR);
         uploader.begin_and_finish_uploads();
 
         immediate_submiter.submit(vk, [&]{
@@ -329,7 +324,7 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, graphics_desc_set);
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, meshes.indices.size());
+        cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, scenes.indices[0].size());
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
