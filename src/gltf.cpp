@@ -378,8 +378,8 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
         return idx;
     };
 
-    auto walk_nodes = [&](const fastgltf::Scene &scene) -> GltfSceneInfo {
-        GltfSceneInfo scene_info{};
+    auto walk_nodes = [&](const fastgltf::Scene &scene) -> GltfScene {
+        GltfScene scene_info{};
 
         struct StackEntry { std::size_t node_idx; glm::mat4 parent_transform; };
         std::vector<StackEntry> stack;

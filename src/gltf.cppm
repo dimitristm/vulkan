@@ -82,7 +82,7 @@ export struct GltfMaterial {
     float roughness_factor = 1.f;
 };
 
-export struct GltfSceneInfo{
+export struct GltfScene{
     std::vector<uint32_t> mesh_idx;
 };
 
@@ -119,7 +119,7 @@ export struct GltfScenes{
 
     DeduplicationMaps deduplication_maps;
 
-    std::vector<GltfSceneInfo> scene_infos;
+    std::vector<GltfScene> scene_infos;
     std::vector<GltfMeshPrimitive> mesh_primitives;
     std::vector<GltfTexture> textures;
     std::vector<GltfSampler> samplers;
@@ -141,4 +141,20 @@ export struct GltfScenes{
     }
 
     void add_scenes(const std::filesystem::path &filepath);
+
+    size_t get_vertex_count(){
+        size_t count = 0;
+        for (const auto &subvertices : vertices){
+            count += subvertices.size();
+        }
+        return count;
+    }
+
+    size_t get_index_count(){
+        size_t count = 0;
+        for (const auto &subindices : indices){
+            count += subindices.size();
+        }
+        return count;
+    }
 };

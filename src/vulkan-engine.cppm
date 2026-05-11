@@ -815,6 +815,92 @@ export struct CommandBuffer{
         VkExtent2D draw_extent,
         const VertexBuffer<T> &vertex_buffer,
         const IndexBuffer &index_buffer,
+        std::span<VkDrawIndexedIndirectCommand> commands) const
+    {
+        VkRenderingAttachmentInfo color_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = color_attachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode{},
+            .resolveImageView{},
+            .resolveImageLayout{},
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{},
+        };
+
+        VkRenderingAttachmentInfo depth_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = depth_attachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .resolveMode{},
+            .resolveImageView{},
+            .resolveImageLayout{},
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{
+                .depthStencil{.depth = 0.0f, .stencil = 0}
+            },
+        };
+
+        const auto make_rendering_info = [](
+            VkExtent2D renderExtent,
+            VkRenderingAttachmentInfo* colorAttachment,
+            VkRenderingAttachmentInfo* depthAttachment)
+        {
+            return VkRenderingInfo{
+                .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext                = nullptr,
+                .flags{},
+                .renderArea           = {{0, 0}, renderExtent},
+                .layerCount           = 1,
+                .viewMask{},
+                .colorAttachmentCount = 1,
+                .pColorAttachments    = colorAttachment,
+                .pDepthAttachment     = depthAttachment,
+                .pStencilAttachment   = nullptr,
+            };
+        };
+
+        VkRenderingInfo rendering_info = make_rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
+
+        vkCmdBeginRendering(buffer, &rendering_info);
+
+        VkDeviceSize offsets = 0;
+        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
+        vkCmdBindIndexBuffer(buffer, index_buffer.buffer, 0, IndexBuffer::index_type);
+
+        VkViewport viewport = {
+            .x = 0,
+            .y = 0,
+            .width = static_cast<float>(draw_extent.width),
+            .height = static_cast<float>(draw_extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+        vkCmdSetViewport(buffer, 0, 1, &viewport);
+
+        VkRect2D scissor{
+            .offset{.x = 0, .y = 0},
+            .extent{draw_extent},
+        };
+        vkCmdSetScissor(buffer, 0, 1, &scissor);
+
+        for (const auto &command : commands)
+            vkCmdDrawIndexed(buffer, command.indexCount, command.instanceCount, command.firstIndex, command.vertexOffset, command.firstInstance);
+
+        vkCmdEndRendering(buffer);
+    }
+
+    template <typename T>
+    void draw_indexed(
+        ImageView color_attachment,
+        ImageView depth_attachment,
+        VkExtent2D draw_extent,
+        const VertexBuffer<T> &vertex_buffer,
+        const IndexBuffer &index_buffer,
         uint32_t index_count) const
     {
         VkRenderingAttachmentInfo color_attachment_info{
@@ -947,7 +1033,7 @@ public:
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
     }
 
-    void barrier(std::span<BarrierInfo> barrier_infos) const {
+    void barrier_span(std::span<BarrierInfo> barrier_infos) const {
         std::vector<VkImageMemoryBarrier2> image_barriers; //todo optimize out the heap allocation with a custom allocator
         image_barriers.reserve(barrier_infos.size());
         for (const auto &info : barrier_infos){

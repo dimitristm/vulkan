@@ -21,6 +21,7 @@ module;
 #include <stb/stb_image.h>
 
 #if !USE_IMPORT_STD
+#include <filesystem>
 #include <array>
 #include <cmath>
 #include <print>
@@ -61,18 +62,48 @@ static glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float h
 namespace{
 struct Texture : public Image{
     ImageView view;
-    Texture(VulkanEngine &vk)
+    Texture(VulkanEngine &vk, uint32_t width, uint32_t height, uint32_t mip_level_count)
     :Image(vk,
-           {.width=256,.height=256},
+           {.width=width,.height=height},
            VK_FORMAT_R8G8B8A8_UNORM,
            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,
-           1,
+           mip_level_count,
            1),
     view(vk, *this, ImageAspects::COLOR, 0, VK_REMAINING_MIP_LEVELS)
     {
     }
+};
+
+struct DrawImage : public Image{
+    ImageView view;
+    DrawImage(VulkanEngine &vk, glm::ivec2 window_size)
+    :Image(vk,
+           {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
+           VK_FORMAT_R16G16B16A16_SFLOAT,
+           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+           | VK_IMAGE_USAGE_STORAGE_BIT
+           | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           1, 1),
+    view(vk, *this, ImageAspects::COLOR, 0, 1)
+    {}
+};
+
+struct DepthImage : public Image{
+    ImageView view;
+    DepthImage(VulkanEngine &vk, glm::ivec2 window_size)
+    :Image(vk,
+           {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
+           VK_FORMAT_D32_SFLOAT,
+           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           1, 1),
+    view(vk, *this, ImageAspects::DEPTH, 0, 1)
+    {}
 };
 
 struct FrameInFlightData{
@@ -88,16 +119,225 @@ struct FrameInFlightData{
     {}
 };
 
-struct ComputeShaderData{
-    glm::vec4 a;
-    glm::vec4 b;
-    glm::vec4 c;
-    glm::vec4 d;
+struct Scene{
+    std::vector<uint32_t> mesh_idx;
+};
+
+struct Material {
+    glm::vec4 base_color_factor = {1.f, 1.f, 1.f, 1.f};
+    float metallic_factor = 1.f;
+    float roughness_factor = 1.f;
+};
+
+struct Mesh{
+    uint32_t unique_transform_idx;
+    std::vector<uint32_t> mesh_prim_idx;
+};
+
+struct MeshPrimitive{
+    uint32_t vertex_offset;
+    uint32_t first_index;
+    uint32_t index_count;
+    uint32_t albedo_texture_idx;
+    uint32_t material_idx;
+};
+
+struct Scenes{
+    std::vector<Scene> scenes;
+    std::vector<Mesh> meshes;
+    std::vector<MeshPrimitive> primitives;
+    std::vector<Material> materials;
+
+    std::vector<Texture> textures;
+    StorageBuffer obj_transforms;
+    VertexBuffer<Vertex> vertices;
+    IndexBuffer indices;
+    StorageBuffer albedo_texture_indices;
+    StorageBuffer obj_transform_indices;
+
+    static Scenes make_from_glb(
+        VulkanEngine &vk, 
+        HostToDeviceUploader &uploader,
+        ImmediateSubmitter &submitter,
+        const std::initializer_list<std::filesystem::path> glb_files)
+    {
+        GltfScenes gltf_scenes(glb_files);
+        using VertexType = typename std::remove_cvref_t<decltype(gltf_scenes.vertices[0])>::value_type;
+        static_assert(std::is_same_v<VertexType, Vertex>);
+        VertexBuffer<Vertex> vertices(vk, gltf_scenes.get_vertex_count());
+        IndexBuffer indices(vk, gltf_scenes.get_index_count());
+        std::vector<Texture> textures;
+        textures.reserve(gltf_scenes.textures.size());
+        uint32_t max_instance_count = [&](){
+            uint32_t sum = 0;
+            for (const auto &mesh : gltf_scenes.meshes) sum += mesh.mesh_prim_idx.size();
+            return sum;
+        }();
+        StorageBuffer albedo_texture_indices(vk, max_instance_count, false, true);
+        StorageBuffer obj_transform_indices(vk, max_instance_count, false, true);
+        StorageBuffer obj_transforms(vk, gltf_scenes.meshes.size() * sizeof(glm::mat4), false, true);
+
+        std::vector<Scene> scenes;
+        scenes.resize(gltf_scenes.scene_infos.size());
+        std::vector<Mesh> meshes;
+        meshes.resize(gltf_scenes.meshes.size());
+        std::vector<MeshPrimitive> primitives;
+        primitives.resize(gltf_scenes.mesh_primitives.size());
+        std::vector<Material> materials;
+        materials.resize(gltf_scenes.materials.size());
+
+        size_t bytes_so_far = 0;
+
+        for (int i = 0; auto &gltf_scene: gltf_scenes.scene_infos){
+            scenes[i++].mesh_idx = std::move(gltf_scene.mesh_idx);
+        }
+        for (int i = 0; auto &gltf_mesh : gltf_scenes.meshes){
+            uploader.queue_upload(&gltf_mesh.transform, obj_transforms, sizeof(glm::mat4), bytes_so_far);
+            bytes_so_far += sizeof(glm::mat4);
+            meshes[i].mesh_prim_idx = std::move(gltf_mesh.mesh_prim_idx);
+            meshes[i].unique_transform_idx = i;
+            ++i;
+        }
+        for (int i = 0; auto &gltf_primitive : gltf_scenes.mesh_primitives){
+            primitives[i].material_idx = gltf_primitive.material_idx;
+            const auto &material = gltf_scenes.materials[gltf_primitive.material_idx];
+            primitives[i].albedo_texture_idx = material.base_color_tex_idx;
+            primitives[i].index_count = gltf_scenes.indices[gltf_primitive.indices_idx].size();
+            primitives[i].first_index = [&](){
+                uint32_t sum = 0;
+                for (uint32_t j = 0; j < gltf_primitive.indices_idx; ++j) sum += gltf_scenes.indices[j].size();
+                return sum;
+            }();
+            primitives[i].vertex_offset = [&](){
+                uint32_t sum = 0;
+                for (uint32_t j = 0; j < gltf_primitive.vertices_idx; ++j) sum += gltf_scenes.vertices[j].size() * sizeof(Vertex);
+                return sum;
+            }();
+            ++i;
+        }
+        for (int i = 0; auto &gltf_material : gltf_scenes.materials){
+            materials[i].base_color_factor = gltf_material.base_color_factor;
+            materials[i].metallic_factor = gltf_material.metallic_factor;
+            materials[i].roughness_factor = gltf_material.roughness_factor;
+        }
+        bytes_so_far = 0;
+        for (auto &gltf_vertices : gltf_scenes.vertices){
+            uploader.queue_upload(gltf_vertices.data(), vertices, gltf_vertices.size() * sizeof(Vertex), bytes_so_far);
+            bytes_so_far += gltf_vertices.size() * sizeof(Vertex);
+        }
+        bytes_so_far = 0;
+        for (auto &gltf_indices : gltf_scenes.indices){
+            using T = typename std::remove_cvref_t<decltype(gltf_indices)>::value_type;
+            uploader.queue_upload(gltf_indices.data(), indices, gltf_indices.size() * sizeof(T), bytes_so_far);
+            bytes_so_far += gltf_indices.size() * sizeof(T);
+        }
+        for(auto &gltf_texture : gltf_scenes.textures){
+            const auto &img = gltf_scenes.gltf_images[gltf_texture.image_idx];
+            int x, y, channels;
+            if(!stbi_info_from_memory((stbi_uc*)img.image.get(), img.size, &x, &y, &channels)){
+                std::println("stbi: Error getting info from an image");
+                abort();
+            }
+            textures.emplace_back(vk, x, y, 1);
+        }
+        {
+            std::vector<BarrierInfo> barriers;
+            barriers.reserve(textures.size());
+            for (auto &texture : textures){
+                barriers.push_back( BarrierInfo{
+                    .img = texture, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask = 0,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .aspects = ImageAspects::COLOR
+                });
+            }
+            submitter.submit(vk,[&](){
+                submitter.cmd_buffer().barrier_span(barriers);
+            });
+        }
+        for (int i = 0; auto &gltf_texture : gltf_scenes.textures){
+            const auto &img = gltf_scenes.gltf_images[gltf_texture.image_idx];
+            int x, y, channels;
+            stbi_uc *img_loaded = stbi_load_from_memory((stbi_uc*) img.image.get(), img.size, &x, &y, &channels, 4);
+            uploader.queue_upload(img_loaded, textures[i], x*y*4, 0, 0, 1, ImageAspects::COLOR);
+            stbi_image_free(img_loaded);
+            ++i;
+        }
+        {
+            std::vector<BarrierInfo> barriers;
+            barriers.reserve(textures.size());
+            for (auto &texture : textures){
+                barriers.push_back(BarrierInfo{
+                    .img = texture, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .src_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_SHADER_READ_BIT,
+                    .aspects = ImageAspects::COLOR
+                });
+            }
+            submitter.submit(vk,[&](){
+                submitter.cmd_buffer().barrier_span(barriers);
+            });
+        }
+
+        uploader.begin_and_finish_uploads();
+        return {
+            .scenes = std::move(scenes),
+            .meshes = std::move(meshes),
+            .primitives = std::move(primitives),
+            .materials = std::move(materials),
+            .textures = std::move(textures),
+            .obj_transforms = obj_transforms,
+            .vertices = vertices,
+            .indices = indices,
+            .albedo_texture_indices = albedo_texture_indices,
+            .obj_transform_indices = obj_transform_indices,
+        };
+    }
+
+    std::vector<VkDrawIndexedIndirectCommand> prepare_to_draw_scene(uint32_t scene_idx, HostToDeviceUploader &uploader){
+        std::vector<VkDrawIndexedIndirectCommand> commands;
+        const auto &scene = scenes.at(scene_idx);
+        std::vector<uint32_t> indices_to_upload;
+        for (uint32_t uploaded_so_far = 0; const uint32_t mesh_idx : scene.mesh_idx){
+            const auto mesh = meshes[mesh_idx];
+            indices_to_upload.resize(mesh.mesh_prim_idx.size());
+            for (auto &idx : indices_to_upload) idx = mesh.unique_transform_idx;
+            uploader.queue_upload(indices_to_upload.data(), obj_transform_indices, indices_to_upload.size() * sizeof(uint32_t), uploaded_so_far);
+            uploaded_so_far += indices_to_upload.size() * sizeof(uint32_t);
+        }
+        for (uint32_t uploaded_so_far = 0; const uint32_t mesh_idx : scene.mesh_idx){
+            const auto mesh = meshes[mesh_idx];
+            for (const uint32_t &prim_idx : mesh.mesh_prim_idx){
+                const auto prim = primitives[prim_idx];
+                uploader.queue_upload(&prim.albedo_texture_idx, albedo_texture_indices, sizeof(uint32_t), uploaded_so_far);
+                uploaded_so_far += sizeof(uint32_t);
+                commands.push_back(VkDrawIndexedIndirectCommand{
+                    .indexCount = prim.index_count,
+                    .instanceCount = 1,
+                    .firstIndex = prim.first_index,
+                    .vertexOffset = static_cast<int32_t>(prim.vertex_offset),
+                    .firstInstance = static_cast<uint32_t>(commands.size()),
+                });
+            }
+        }
+        uploader.begin_and_finish_uploads();
+        return commands;
+    }
+
 };
 }
 
 export class Renderer{
 public:
+    static Renderer make_renderer(SDL_Window *window){
+        
+    }
+
+private:
     static constexpr int FRAMES_IN_FLIGHT = 2;
 
     SDL_Window *window;
@@ -105,25 +345,22 @@ public:
     VulkanEngine vk;
 
     Swapchain swapchain;
-    Image draw_image;
-    ImageView draw_image_view;
-    Image depth_image;
-    ImageView depth_image_view;
+    DrawImage draw_image;
+    DepthImage depth_image;
     std::vector<GpuSemaphore> swapchain_render_done_semas;
     CommandPool command_pool; // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
     std::array<FrameInFlightData, FRAMES_IN_FLIGHT> frame_in_flight_data;
+    uint32_t frame_count{};
 
     DescriptorSetBuilder ds_builder;
     DescriptorSet desc_set;
 
     PushConstantsBuilder pc_builder;
-    PushConstant<ComputeShaderData> compute_push_const;
+    PushConstant<glm::vec4> compute_push_const;
 
-    int selected_compute_pipeline = 0;
     SpecializationInfo specialization_info;
     PipelineLayout compute_pipeline_layout;
-    ComputePipeline gradient_pipeline;
-    ComputePipeline sky_pipeline;
+    ComputePipeline compute_pipeline;
 
     VertexShader vert_shader;
     FragmentShader frag_shader;
@@ -134,38 +371,21 @@ public:
     IndexBuffer index_buffer;
     GraphicsPipeline<Vertex> graphics_pipeline;
 
-    uint32_t frame_count{};
-
     ImmediateSubmitter immediate_submiter;
     HostToDeviceUploader uploader;
 
     Texture texture;
     Sampler sampler;
 
+public:
     Renderer(SDL_Window *window)
     :
     window(window),
     window_size(get_window_size_in_pixels(window)),
     vk(window),
     swapchain(vk, window, VK_PRESENT_MODE_FIFO_KHR),
-    draw_image(vk,
-               {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
-               VK_FORMAT_R16G16B16A16_SFLOAT,
-               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-               | VK_IMAGE_USAGE_STORAGE_BIT
-               | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-               MSAALevel::OFF,
-               1, 1),
-    draw_image_view(vk, draw_image, ImageAspects::COLOR, 0, 1),
-    depth_image(vk,
-                {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
-                VK_FORMAT_D32_SFLOAT,
-                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                MSAALevel::OFF,
-                1, 1),
-    depth_image_view(vk, depth_image, ImageAspects::DEPTH, 0, 1),
+    draw_image(vk, window_size),
+    depth_image(vk, window_size),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
             std::vector<GpuSemaphore> semas;
@@ -179,13 +399,11 @@ public:
     ),
     command_pool(vk),
     frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
-    ds_builder(),
     desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
-    compute_push_const(pc_builder.add<ComputeShaderData>(VK_SHADER_STAGE_COMPUTE_BIT)),
+    compute_push_const(pc_builder.add<glm::vec4>(VK_SHADER_STAGE_COMPUTE_BIT)),
     specialization_info((2 * sizeof(int32_t)) + sizeof(double)),
     compute_pipeline_layout(vk, desc_set, pc_builder.get_ranges()),
-    gradient_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
-    sky_pipeline(vk, ComputeShader(vk, "shaders/compiled/sky.comp.spv"), compute_pipeline_layout, &specialization_info.reset()),
+    compute_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
     vert_shader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
     frag_shader(vk, "shaders/compiled/textured.frag.spv"),
     view_proj_transform_const(pc_builder.reset().add<glm::mat4>(VK_SHADER_STAGE_VERTEX_BIT)),
@@ -200,15 +418,14 @@ public:
     graphics_pipeline(vk, vert_shader, frag_shader, PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()), vertex_buffer, draw_image.get_format(), depth_image.get_format(), MSAALevel::OFF),
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
-    texture(vk),
+    texture(vk, 256, 256, 1),
     sampler(vk, VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_FALSE, 0)
     {
-        desc_set.update_storage_image(vk, 0, draw_image_view);
+        desc_set.update_storage_image(vk, 0, draw_image.view);
         graphics_desc_set.update_sampled_image(vk, 0, texture.view);
         graphics_desc_set.update_sampler(vk, 1, sampler);
         vk.init_imgui(window, swapchain.get_format());
-        compute_push_const.data.a += glm::vec4(1, 0, 0, 1);
-        compute_push_const.data.b += glm::vec4(0, 0, 1, 1);
+        compute_push_const.data += glm::vec4(1, 0, 0, 1);
 
         uploader.queue_upload(scenes.indices[0].data(), index_buffer, scenes.indices[0].size() * sizeof(uint32_t));
         uploader.begin_uploads();
@@ -257,31 +474,14 @@ public:
                 }
             );
         });
+        //Scenes scenes = Scenes::make_from_glb(vk, uploader, immediate_submiter, {"assets/testing/BoxTextured.glb"});
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
-    ComputePipeline &get_selected_compute_pipeline(){
-        switch (selected_compute_pipeline){
-            case 0: return this->gradient_pipeline;
-            case 1: return this->sky_pipeline;
-            default: {
-                std::println("Error: Invalid compute pipeline of selected_compute_pipeline={}, aborting", selected_compute_pipeline);
-                abort();
-            }
-        }
-    }
-
     void draw(glm::mat4 view_transform){
 	ImGui::Begin("Background customizer");
-
-        const char *comp_pipeline_names[] = {"Gradient", "Sky"};
-        ImGui::Combo("Compute Pipeline", &selected_compute_pipeline, comp_pipeline_names, IM_ARRAYSIZE(comp_pipeline_names));
         ImGui::InputFloat4("data a",(float*)& compute_push_const.data.a);
-        ImGui::InputFloat4("data b",(float*)& compute_push_const.data.b);
-        ImGui::InputFloat4("data c",(float*)& compute_push_const.data.c);
-        ImGui::InputFloat4("data d",(float*)& compute_push_const.data.d);
-	
         ImGui::End();
 
 
@@ -303,10 +503,10 @@ public:
                                 .aspects=ImageAspects::COLOR}
         );
 
-        cmd_buffer.update_push_constants(get_selected_compute_pipeline(), compute_push_const);
+        cmd_buffer.update_push_constants(compute_pipeline, compute_push_const);
 
-        cmd_buffer.bind_pipeline(get_selected_compute_pipeline());
-        cmd_buffer.bind_descriptor_set(get_selected_compute_pipeline(), desc_set);
+        cmd_buffer.bind_pipeline(compute_pipeline);
+        cmd_buffer.bind_descriptor_set(compute_pipeline, desc_set);
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
         cmd_buffer.barrier(BarrierInfo{
@@ -324,7 +524,7 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, graphics_desc_set);
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image_view, depth_image_view, draw_image.extent,  vertex_buffer, index_buffer, scenes.indices[0].size());
+        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.extent,  vertex_buffer, index_buffer, scenes.indices[0].size());
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image,
