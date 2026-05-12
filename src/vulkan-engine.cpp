@@ -246,7 +246,7 @@ static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_si
     VkDescriptorPoolCreateInfo descriptor_pool_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
-        .flags = 0,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = max_sets,
         .poolSizeCount = poolsize_count,
         .pPoolSizes = sizes,
@@ -319,6 +319,12 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     features12.descriptorIndexing = VK_TRUE;
     features12.bufferDeviceAddress = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+    features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
     VkPhysicalDeviceFeatures features{};
     features.multiDrawIndirect = VK_TRUE;
@@ -346,7 +352,7 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
 
     allocator = init_vma_allocator(physical_device, device, vk_instance, api_version);
 
-    this->descriptor_pool = create_descriptor_pool(device, 1000, 200);
+    this->descriptor_pool = create_descriptor_pool(device, 2000, 200);
 }
 
 VulkanEngine::~VulkanEngine(){
@@ -784,6 +790,35 @@ void DescriptorSet::update_samplers(VulkanEngine &vk, uint32_t bind, std::span<S
 
 void DescriptorSet::update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler){
     update_samplers(vk, bind, std::span<Sampler>(&sampler, 1));
+}
+
+void DescriptorSet::update_storage_buffers(VulkanEngine &vk, uint32_t bind, std::span<StorageBuffer> buffers) {
+    std::vector<VkDescriptorBufferInfo> buf_infos;
+    buf_infos.reserve(buffers.size());
+    for (auto &buffer : buffers) {
+        buf_infos.push_back({
+            .buffer = buffer.get_vk_buffer(),
+            .offset = 0,
+            .range = buffer.capacity_in_bytes,
+        });
+    }
+    VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = set,
+        .dstBinding = bind,
+        .dstArrayElement = 0,
+        .descriptorCount = static_cast<uint32_t>(buf_infos.size()),
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .pImageInfo = nullptr,
+        .pBufferInfo = buf_infos.data(),
+        .pTexelBufferView = nullptr,
+    };
+    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+}
+
+void DescriptorSet::update_storage_buffer(VulkanEngine &vk, uint32_t bind, StorageBuffer &buffer) {
+    update_storage_buffers(vk, bind, std::span<StorageBuffer>(&buffer, 1));
 }
 
 Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
@@ -1315,12 +1350,12 @@ void CommandBuffer::end() const{
     VK_CHECK(vkEndCommandBuffer(this->buffer));
 }
 
-DescriptorSetBuilder &DescriptorSetBuilder::bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits accessible_stages_flags){
+DescriptorSetBuilder &DescriptorSetBuilder::bind(uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlagBits accessible_stages_flags){
     finalized = false;
     VkDescriptorSetLayoutBinding new_bind{
         .binding = binding,
         .descriptorType = type,
-        .descriptorCount = 1,
+        .descriptorCount = count,
         .stageFlags = accessible_stages_flags,
         .pImmutableSamplers = nullptr,
     };
@@ -1330,10 +1365,21 @@ DescriptorSetBuilder &DescriptorSetBuilder::bind(uint32_t binding, VkDescriptorT
 
 DescriptorSet DescriptorSetBuilder::build(VulkanEngine &vk){
     if (!finalized){
+        std::vector<VkDescriptorBindingFlags> binding_flags(bindings.size());
+        for (size_t i = 0; i < bindings.size(); ++i) {
+            binding_flags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+        }
+        VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_ci{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+            .pNext = nullptr,
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindingFlags = binding_flags.data(),
+        };
+
         VkDescriptorSetLayoutCreateInfo info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
+            .pNext = &binding_flags_ci,
+            .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
             .bindingCount = static_cast<uint32_t>(bindings.size()),
             .pBindings = bindings.data(),
         };

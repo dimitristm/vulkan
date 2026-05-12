@@ -299,124 +299,6 @@ export struct CommandPool{
     CommandPool(VulkanEngine &vk);
 };
 
-export struct DescriptorSet{
-    VkDescriptorSet set;
-    VkDescriptorSetLayout layout;
-
-    DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout);
-
-    void update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
-    void update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
-    void update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
-    void update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
-    void update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers);
-    void update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler);
-};
-
-struct Shader{
-    VkShaderModule module;
-
-    Shader(VulkanEngine &vk, const std::string_view filepath);
-};
-
-export struct ComputeShader : public Shader{
-    ComputeShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
-        assert(filepath.contains(".comp") && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
-    }
-};
-export struct VertexShader : public Shader {
-    VertexShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
-        assert(filepath.contains(".vert") && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
-    }
-};
-export struct FragmentShader : public Shader {
-    FragmentShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
-        assert(filepath.contains(".frag") && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
-    }
-};
-
-export struct PipelineLayout{
-    VkPipelineLayout layout;
-
-    PipelineLayout(
-        VulkanEngine &vk,
-        std::initializer_list<DescriptorSet> descriptor_sets,
-        const std::optional<std::vector<VkPushConstantRange>> &push_constants
-    );
-    PipelineLayout(VulkanEngine &vk, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants);
-};
-
-// This struct does not need to be kept alive after being used to create a pipeline, and thus can be reset for use in another pipeline's initialization.
-export struct SpecializationInfo{
-private:
-    VkSpecializationInfo info{};
-public:
-    std::vector<VkSpecializationMapEntry> entries;
-    size_t data_buffer_max_capacity_in_bytes{};
-    void *data{};
-    bool finalized{};
-    // Differs from data_buffer_in_bytes in that this is the actually used memory, while data_buffer_in_bytes includes potentially unused memory
-    // and always reflects the actual amount of bytes available in the buffer.
-    size_t data_size_in_bytes{};
-
-    SpecializationInfo(size_t total_data_size = 128);
-
-    template<typename T>
-    SpecializationInfo &add_entry(uint32_t constant_ID, T constant_value){
-        static_assert(
-            std::is_same_v<T, int32_t> ||
-            std::is_same_v<T, uint32_t> ||
-            std::is_same_v<T, float> ||
-            std::is_same_v<T, double> ||
-            std::is_same_v<T, VkBool32>,
-            "Specialization constants can only be of the following types: int32_t, uint32_t, float, double, VkBool32"
-        );
-        static_assert(sizeof(T) == 4 || sizeof(T) == 8);
-
-        if(data_size_in_bytes + sizeof(T) > data_buffer_max_capacity_in_bytes){
-            assert(false && "Exceeded limit of data buffer while adding entry to specialization info");
-            printf("%s", "Exceeded limit of data buffer while adding entry to specialization info");
-            abort();
-        }
-        assert(std::none_of(entries.begin(), entries.end(), [&](const VkSpecializationMapEntry& e){ return e.constantID == constant_ID; }) && "Duplicate specialization constant ID: can't set the same constant twice");
-
-        finalized = false;
-
-        uint32_t offset = data_size_in_bytes;
-        entries.emplace_back(constant_ID, offset, sizeof(T));
-        memcpy((std::byte*)data + offset, &constant_value, sizeof(T));
-        data_size_in_bytes += sizeof(T);
-        return *this;
-    }
-
-    SpecializationInfo &reset();
-
-    // DO NOT cache the output of this funciton. If you ever reset this instance of SpecializationInfo or let it be destroyed,
-    // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
-    const VkSpecializationInfo *get_vk_specialization_info();
-
-    ~SpecializationInfo();
-    SpecializationInfo(const SpecializationInfo&) = delete;
-    SpecializationInfo(SpecializationInfo&&) = delete;
-    SpecializationInfo& operator=(const SpecializationInfo&) = delete;
-    SpecializationInfo& operator=(SpecializationInfo&&) = delete;
-};
-
-export struct ComputePipeline{
-    VkPipeline pipeline;
-    PipelineLayout layout;
-
-    ComputePipeline(
-        VulkanEngine &vk,
-        ComputeShader shader_module,
-        PipelineLayout pipeline_layout,
-        SpecializationInfo */* _Nullable */specialization_info = nullptr
-    );
-};
-
 export struct VulkanBuffer{
     VkBuffer buffer;
     uint64_t capacity_in_bytes;
@@ -577,6 +459,126 @@ struct VertexBuffer : public VulkanBuffer{
         });
         return vertex_attribute_descriptions;
     }
+};
+
+export struct DescriptorSet{
+    VkDescriptorSet set;
+    VkDescriptorSetLayout layout;
+
+    DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout);
+
+    void update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
+    void update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
+    void update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
+    void update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
+    void update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers);
+    void update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler);
+    void update_storage_buffers(VulkanEngine &vk, uint32_t bind, std::span<StorageBuffer> buffers);
+    void update_storage_buffer(VulkanEngine &vk, uint32_t bind, StorageBuffer &buffer);
+};
+
+struct Shader{
+    VkShaderModule module;
+
+    Shader(VulkanEngine &vk, const std::string_view filepath);
+};
+
+export struct ComputeShader : public Shader{
+    ComputeShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.contains(".comp") && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
+    }
+};
+export struct VertexShader : public Shader {
+    VertexShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.contains(".vert") && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
+    }
+};
+export struct FragmentShader : public Shader {
+    FragmentShader(VulkanEngine &vk, const std::string_view filepath)
+    :Shader(vk, filepath) {
+        assert(filepath.contains(".frag") && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
+    }
+};
+
+export struct PipelineLayout{
+    VkPipelineLayout layout;
+
+    PipelineLayout(
+        VulkanEngine &vk,
+        std::initializer_list<DescriptorSet> descriptor_sets,
+        const std::optional<std::vector<VkPushConstantRange>> &push_constants
+    );
+    PipelineLayout(VulkanEngine &vk, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants);
+};
+
+// This struct does not need to be kept alive after being used to create a pipeline, and thus can be reset for use in another pipeline's initialization.
+export struct SpecializationInfo{
+private:
+    VkSpecializationInfo info{};
+public:
+    std::vector<VkSpecializationMapEntry> entries;
+    size_t data_buffer_max_capacity_in_bytes{};
+    void *data{};
+    bool finalized{};
+    // Differs from data_buffer_in_bytes in that this is the actually used memory, while data_buffer_in_bytes includes potentially unused memory
+    // and always reflects the actual amount of bytes available in the buffer.
+    size_t data_size_in_bytes{};
+
+    SpecializationInfo(size_t total_data_size = 128);
+
+    template<typename T>
+    SpecializationInfo &add_entry(uint32_t constant_ID, T constant_value){
+        static_assert(
+            std::is_same_v<T, int32_t> ||
+            std::is_same_v<T, uint32_t> ||
+            std::is_same_v<T, float> ||
+            std::is_same_v<T, double> ||
+            std::is_same_v<T, VkBool32>,
+            "Specialization constants can only be of the following types: int32_t, uint32_t, float, double, VkBool32"
+        );
+        static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+
+        if(data_size_in_bytes + sizeof(T) > data_buffer_max_capacity_in_bytes){
+            assert(false && "Exceeded limit of data buffer while adding entry to specialization info");
+            printf("%s", "Exceeded limit of data buffer while adding entry to specialization info");
+            abort();
+        }
+        assert(std::none_of(entries.begin(), entries.end(), [&](const VkSpecializationMapEntry& e){ return e.constantID == constant_ID; }) && "Duplicate specialization constant ID: can't set the same constant twice");
+
+        finalized = false;
+
+        uint32_t offset = data_size_in_bytes;
+        entries.emplace_back(constant_ID, offset, sizeof(T));
+        memcpy((std::byte*)data + offset, &constant_value, sizeof(T));
+        data_size_in_bytes += sizeof(T);
+        return *this;
+    }
+
+    SpecializationInfo &reset();
+
+    // DO NOT cache the output of this funciton. If you ever reset this instance of SpecializationInfo or let it be destroyed,
+    // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
+    const VkSpecializationInfo *get_vk_specialization_info();
+
+    ~SpecializationInfo();
+    SpecializationInfo(const SpecializationInfo&) = delete;
+    SpecializationInfo(SpecializationInfo&&) = delete;
+    SpecializationInfo& operator=(const SpecializationInfo&) = delete;
+    SpecializationInfo& operator=(SpecializationInfo&&) = delete;
+};
+
+export struct ComputePipeline{
+    VkPipeline pipeline;
+    PipelineLayout layout;
+
+    ComputePipeline(
+        VulkanEngine &vk,
+        ComputeShader shader_module,
+        PipelineLayout pipeline_layout,
+        SpecializationInfo */* _Nullable */specialization_info = nullptr
+    );
 };
 
 export template <typename T>
@@ -1129,7 +1131,7 @@ export struct DescriptorSetBuilder{
     VkDescriptorSetLayout layout{};
     bool finalized = false;
 
-    DescriptorSetBuilder &bind(uint32_t binding, VkDescriptorType type, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL);
+    DescriptorSetBuilder &bind(uint32_t binding, VkDescriptorType type, uint32_t count = 1, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL);
 
     DescriptorSet build(VulkanEngine &vk);
 
