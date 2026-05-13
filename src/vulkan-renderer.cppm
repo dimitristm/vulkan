@@ -170,7 +170,7 @@ struct Scenes{
         std::vector<Texture> textures;
         textures.reserve(gltf_scenes.textures.size());
         std::vector<ImageView> texture_views;
-        texture_views.reserve(textures.size());
+        texture_views.reserve(gltf_scenes.textures.size());
         uint32_t max_instance_count = [&](){
             uint32_t sum = 0;
             for (const auto &mesh : gltf_scenes.meshes) sum += mesh.mesh_prim_idx.size();
@@ -189,14 +189,12 @@ struct Scenes{
         std::vector<Material> materials;
         materials.resize(gltf_scenes.materials.size());
 
-        size_t bytes_so_far = 0;
-
         for (int i = 0; auto &gltf_scene: gltf_scenes.scene_infos){
             scenes[i++].mesh_idx = std::move(gltf_scene.mesh_idx);
         }
+        uploader.start_queue_upload(obj_transforms);
         for (int i = 0; auto &gltf_mesh : gltf_scenes.meshes){
-            uploader.queue_upload(&gltf_mesh.transform, obj_transforms, sizeof(glm::mat4), bytes_so_far);
-            bytes_so_far += sizeof(glm::mat4);
+            uploader.add_to_last_upload(gltf_mesh.transform);
             meshes[i].mesh_prim_idx = std::move(gltf_mesh.mesh_prim_idx);
             meshes[i].unique_transform_idx = i;
             ++i;
@@ -223,16 +221,14 @@ struct Scenes{
             materials[i].metallic_factor = gltf_material.metallic_factor;
             materials[i].roughness_factor = gltf_material.roughness_factor;
         }
-        bytes_so_far = 0;
+        uploader.start_queue_upload(vertices);
         for (auto &gltf_vertices : gltf_scenes.vertices){
-            uploader.queue_upload(gltf_vertices.data(), vertices, gltf_vertices.size() * sizeof(Vertex), bytes_so_far);
-            bytes_so_far += gltf_vertices.size() * sizeof(Vertex);
+            uploader.add_to_last_upload(gltf_vertices);
         }
-        bytes_so_far = 0;
+        uploader.start_queue_upload(indices);
         for (auto &gltf_indices : gltf_scenes.indices){
             using T = typename std::remove_cvref_t<decltype(gltf_indices)>::value_type;
-            uploader.queue_upload(gltf_indices.data(), indices, gltf_indices.size() * sizeof(T), bytes_so_far);
-            bytes_so_far += gltf_indices.size() * sizeof(T);
+            uploader.add_to_last_upload(gltf_indices);
         }
         for(auto &gltf_texture : gltf_scenes.textures){
             const auto &img = gltf_scenes.gltf_images[gltf_texture.image_idx];
@@ -307,19 +303,19 @@ struct Scenes{
         std::vector<VkDrawIndexedIndirectCommand> commands;
         const auto &scene = scenes.at(scene_idx);
         std::vector<uint32_t> indices_to_upload;
-        for (uint32_t uploaded_so_far = 0; const uint32_t mesh_idx : scene.mesh_idx){
+        uploader.start_queue_upload(obj_transform_indices);
+        for (const uint32_t mesh_idx : scene.mesh_idx){
             const auto &mesh = meshes[mesh_idx];
             indices_to_upload.resize(mesh.mesh_prim_idx.size());
             for (auto &idx : indices_to_upload) idx = mesh.unique_transform_idx;
-            uploader.queue_upload(indices_to_upload.data(), obj_transform_indices, indices_to_upload.size() * sizeof(uint32_t), uploaded_so_far);
-            uploaded_so_far += indices_to_upload.size() * sizeof(uint32_t);
+            uploader.add_to_last_upload(indices_to_upload);
         }
-        for (uint32_t uploaded_so_far = 0; const uint32_t mesh_idx : scene.mesh_idx){
+        uploader.start_queue_upload(albedo_texture_indices);
+        for (const uint32_t mesh_idx : scene.mesh_idx){
             const auto &mesh = meshes[mesh_idx];
             for (const uint32_t &prim_idx : mesh.mesh_prim_idx){
                 const auto &prim = primitives[prim_idx];
-                uploader.queue_upload(&prim.albedo_texture_idx, albedo_texture_indices, sizeof(uint32_t), uploaded_so_far);
-                uploaded_so_far += sizeof(uint32_t);
+                uploader.add_to_last_upload(prim.albedo_texture_idx);
                 commands.push_back(VkDrawIndexedIndirectCommand{
                     .indexCount = prim.index_count,
                     .instanceCount = 1,
@@ -401,8 +397,8 @@ public:
     compute_push_const(pc_builder.add<glm::vec4>(VK_SHADER_STAGE_COMPUTE_BIT)),
     compute_pipeline_layout(vk, compute_desc_set, pc_builder.get_ranges()),
     compute_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
-    scenes(Scenes::make_from_glb(vk, uploader, immediate_submiter, {"assets/mytests/1.glb", "assets/mytests/1.glb", "assets/flight-helmet.glb"})),
-    draw_commands(scenes.prepare_to_draw_scene(2, uploader)),
+    scenes(Scenes::make_from_glb(vk, uploader, immediate_submiter, {"assets/mytests/1.glb", "assets/mytests/1.glb"})),
+    draw_commands(scenes.prepare_to_draw_scene(1, uploader)),
     view_proj_transform_const(pc_builder.reset().add<glm::mat4>( VK_SHADER_STAGE_VERTEX_BIT)),
     graphics_desc_set(ds_builder.reset()
                       .bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000, VK_SHADER_STAGE_FRAGMENT_BIT)

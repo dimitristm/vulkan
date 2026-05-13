@@ -6,6 +6,7 @@ module;
 #if !USE_IMPORT_STD
 #include <bits/std_function.h>
 #include <vector>
+#include <span>
 #endif
 export module vulkanUtil;
 #if USE_IMPORT_STD
@@ -13,6 +14,12 @@ import std;
 #endif
 
 import vulkanEngine;
+
+
+template <typename T>
+concept SpanCompatible = requires(const T &t) {
+    std::span{t};
+};
 
 export class ImmediateSubmitter{
     GpuFence submit_fence;
@@ -68,6 +75,8 @@ export class HostToDeviceUploader{
     void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset);
     void stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy);
 
+    const VulkanBuffer *active_upload_dst = nullptr;
+    uint64_t active_upload_next_dst_offset = 0;
 
 public:
     HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, uint64_t staging_buffer_size);
@@ -92,12 +101,42 @@ public:
     void begin_and_finish_uploads();
     void queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
 
+    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset = {});
+
+    // Continues from the last upload you queued. Essentially appends to the buffer you were writing to.
+    // Intended for small writes. Passing an src larger than the internal staging buffer's size crashes.
+    void add_to_last_upload(const void *src, uint64_t byte_count);
+    // An empty queue_upload. Helpful for use with add_to_last_upload.
+    void start_queue_upload(const VulkanBuffer &dst, uint64_t dst_offset = 0);
+
     bool queued_uploads_exist();
     bool in_progress_uploads_exist();
     bool queued_or_in_progress_uploads_exist();
     size_t queued_uploads_count();
     size_t in_progress_uploads_count();
 
-    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset = {});
+    // Below are just helpers, no new functionality
+    template <typename T> requires (!SpanCompatible<T>)
+    void queue_upload(const T &src, const VulkanBuffer &dst, uint64_t dst_offset = 0) {
+        queue_upload(&src, dst, sizeof(T), dst_offset);
+    }
+
+    template <SpanCompatible T>
+    void queue_upload(const T &src, const VulkanBuffer &dst, uint64_t dst_offset = 0) {
+        auto s = std::span{src};
+        queue_upload(s.data(), dst, s.size_bytes(), dst_offset);
+    }
+
+    template <typename T>
+        requires (!SpanCompatible<T>)
+    void add_to_last_upload(const T &src) {
+        add_to_last_upload(&src, sizeof(T));
+    }
+
+    template <SpanCompatible T>
+    void add_to_last_upload(const T &src) {
+        auto s = std::span{src};
+        add_to_last_upload(s.data(), s.size_bytes());
+    }
 };
 
