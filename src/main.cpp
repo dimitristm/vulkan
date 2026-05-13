@@ -1,11 +1,13 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
+#include <Tracy.hpp>
 
 import vulkanRenderer;
 import userInput;
 
 int main(){
+    TracyNoop;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window{};
     SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN;

@@ -22,6 +22,11 @@ project(vulkan-project
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(TRACY_ENABLE "" OFF)
+option(TRACY_ON_DEMAND "" OFF)
+option(TRACY_LTO "" ON)
+option(TRACY_NO_EXIT "" OFF)
+option(TRACY_NO_SAMPLING "" OFF)
 
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     message(WARNING
@@ -78,7 +83,7 @@ find_package(glm CONFIG REQUIRED)
 # ---- Executable ----
 add_executable(vulkan-prog)
 
-target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored)
+target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored ${CMAKE_SOURCE_DIR}/vendored/tracy/public/tracy)
 
 target_link_libraries(vulkan-prog
     PRIVATE
@@ -106,6 +111,7 @@ target_sources(vulkan-prog
         vendored/imgui/imgui_tables.cpp
         vendored/imgui/imgui_widgets.cpp
         vendored/xxhash/xxhash.c
+        vendored/tracy/public/TracyClient.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
         src/gltf.cppm
@@ -124,6 +130,11 @@ target_compile_options(vulkan-prog PRIVATE
 
 target_compile_definitions(vulkan-prog PRIVATE
     USE_IMPORT_STD=$<BOOL:${USE_IMPORT_STD}>
+    $<$<BOOL:${TRACY_ENABLE}>:TRACY_ENABLE>
+    $<$<BOOL:${TRACY_ON_DEMAND}>:TRACY_ON_DEMAND>
+    $<$<BOOL:${TRACY_LTO}>:TRACY_LTO>
+    $<$<BOOL:${TRACY_NO_EXIT}>:TRACY_NO_EXIT>
+    $<$<BOOL:${TRACY_NO_SAMPLING}>:TRACY_NO_SAMPLING>
 )
 
 # ---- Shaders ----
