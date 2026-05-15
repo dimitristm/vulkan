@@ -129,6 +129,17 @@ export struct VulkanEngine{
     VkDescriptorPool descriptor_pool;
     APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
 
+    struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
+    struct ImageTrackingInfoHash{
+        std::size_t operator()(const ImageTrackingInfo& info) const noexcept {
+            return std::hash<VkImage>{}(info.image);
+        }
+    };
+    struct ImageTrackingInfoEqual{
+        bool operator()(const ImageTrackingInfo& a, const ImageTrackingInfo& b) const noexcept {
+            return a.image == b.image;
+        }
+    };
     // These are used in the destructor to delete everything this engine made.
 
     // The reason why we need to do this instead of just adding destructors is that this way we
@@ -139,12 +150,10 @@ export struct VulkanEngine{
     // don't need to contain an initialized member.
 
     // Might also use these in asserts in debug mode to ensure this is the engine that made them.
-    // Maybe I'll get around to deleting individual elements
     struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
-    struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
     std::vector<VkSampler> created_samplers;
-    std::vector<ImageTrackingInfo> created_images;
+    std::unordered_set<ImageTrackingInfo, ImageTrackingInfoHash, ImageTrackingInfoEqual> created_images;
     std::unordered_set<VkImageView> created_image_views;
     std::vector<VkCommandPool> created_command_pools;
     std::vector<VkFence> created_fences;
@@ -167,6 +176,7 @@ export struct VulkanEngine{
     ~VulkanEngine();
 
     void init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level = MSAALevel::OFF);
+    void wait_idle(){ vkDeviceWaitIdle(device); }
 };
 
 export struct Sampler{
@@ -220,6 +230,8 @@ export struct Image{
 
     Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count);
 
+    void erase_self(VulkanEngine &vk);
+
     bool operator==(const Image& other) const noexcept {
         return vk_image == other.vk_image;
     }
@@ -241,6 +253,7 @@ export struct ImageView{
     );
 
     ImageView(VkImageView vk_view);
+    void erase_self(VulkanEngine &vk);
 };
 
 export struct GpuFence{
@@ -270,13 +283,19 @@ export struct Swapchain{
 
     Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode);
 
-    // Returns the index of the next image in the swapchain
-    [[nodiscard]] uint32_t acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const;
+    // Returns the index of the next image in the swapchain and the result can be:
+    // VK_SUCCESS (proceed normally)
+    // VK_ERROR_OUT_OF_DATE_KHR (must remake swapchain and call acquire again)
+    // VK_SUBOPTIMAL_KHR (must use the swapchain image normally and then remake the swapchain at a later time)
+    // the non-VK_SUCCESS results are typically returned when things like the window being resized or moved to another monitor happen.
+    [[nodiscard]] std::tuple<uint32_t, VkResult> acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const;
 
-    void present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index);
+    // Only returns VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR, or VK_SUBOPTIMAL_KHR
+    // Synchronization primitives are affected even if it errors, do not attempt to present again on error
+    [[nodiscard]] VkResult present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index);
 
  private:
-    void build_swapchain(
+    void initialize_swapchain(
         VulkanEngine &vk,
         SDL_Window *window,
         VkPresentModeKHR present_mode
@@ -285,7 +304,7 @@ export struct Swapchain{
  public:
     // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
     // VulkanInstanceInfo that made it.
-    void destroy_this_swapchain(VkDevice device);
+    void erase_self(VulkanEngine &vk);
 
     void rebuild_swapchain(
         VulkanEngine &vk,

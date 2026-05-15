@@ -375,7 +375,7 @@ VulkanEngine::~VulkanEngine(){
     for(auto &fence : created_fences) vkDestroyFence(device, fence, nullptr);
     for(auto &sema : created_semaphores) vkDestroySemaphore(device, sema, nullptr);
     for(const auto &img_view : created_image_views) vkDestroyImageView(device, img_view, nullptr);
-    for(auto &image : created_images) vmaDestroyImage(allocator, image.image, image.allocation);
+    for(const auto &image : created_images) vmaDestroyImage(allocator, image.image, image.allocation);
     for(auto &sampler : created_samplers) vkDestroySampler(device, sampler, nullptr);
     for(auto &swapchain : created_swapchains) destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
 
@@ -518,12 +518,17 @@ Image::Image(
     this->vk_image = image;
     this->allocation = allocation;
 
-    vk.created_images.push_back({.image=vk_image, .allocation=allocation});
+    vk.created_images.insert({.image=vk_image, .allocation=allocation});
 }
 
 Image::Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count)
-:vk_image(img), allocation(nullptr), extent(extent), format(format), layer_count(layer_count)
+:vk_image(img), allocation(nullptr), extent(extent), format(format), mip_level_count(1), layer_count(layer_count)
 {}
+
+void Image::erase_self(VulkanEngine &vk){
+    vmaDestroyImage(vk.allocator, vk_image, allocation);
+    vk.created_images.erase({.image=vk_image, .allocation=allocation});
+}
 
 ImageView::ImageView(
     VulkanEngine &vk,
@@ -556,6 +561,10 @@ ImageView::ImageView(
 
 ImageView::ImageView(VkImageView vk_view):view(vk_view){}
 
+void ImageView::erase_self(VulkanEngine &vk){
+    vkDestroyImageView(vk.device, view, nullptr);
+    vk.created_image_views.erase(view);
+}
 
 GpuFence::GpuFence(VulkanEngine &vk, bool signaled){
     VkFenceCreateInfo fence_create_info {
@@ -600,16 +609,17 @@ static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::ve
 }
 
 Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode) {
-    build_swapchain(vk, window, present_mode);
+    initialize_swapchain(vk, window, present_mode);
 }
 
-[[nodiscard]] uint32_t Swapchain::acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
+[[nodiscard]] std::tuple<uint32_t, VkResult> Swapchain::acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
     uint32_t swapchain_image_index;
-    VK_CHECK(vkAcquireNextImageKHR(vk.device, swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index));
-    return swapchain_image_index;
+    VkResult result = vkAcquireNextImageKHR(vk.device, swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index);
+    if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) VK_CHECK(result);
+    return {swapchain_image_index, result};
 }
 
-void Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index){
+[[nodiscard]] VkResult Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index){
     VkPresentInfoKHR present_info = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = nullptr,
@@ -620,11 +630,13 @@ void Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapc
         .pImageIndices = &swapchain_image_index,
         .pResults{},
     };
-    VK_CHECK(vkQueuePresentKHR(vk.graphics_queue, &present_info));
+    VkResult result = vkQueuePresentKHR(vk.graphics_queue, &present_info);
+    if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) VK_CHECK(result);
+    return result;
 }
 
 
-void Swapchain::build_swapchain(
+void Swapchain::initialize_swapchain(
     VulkanEngine &vk,
     SDL_Window *window,
     VkPresentModeKHR present_mode)
@@ -650,21 +662,28 @@ void Swapchain::build_swapchain(
     this->swapchain = vkb_swapchain.swapchain;
 
     std::vector<VkImage> vk_images = vkb_swapchain.get_images().value();
+    this->images.reserve(vk_images.size());
     for (const auto &vk_img : vk_images){
         this->images.emplace_back(vk_img, vkb_swapchain.extent, vkb_swapchain.image_format, 1);
     }
     this->image_format = vkb_swapchain.image_format;
 
     std::vector<VkImageView> vk_image_views = vkb_swapchain.get_image_views().value();
+    this->image_views.reserve(vk_image_views.size());
     for(VkImageView vk_view : vk_image_views){
         this->image_views.emplace_back(vk_view);
     }
     vk.created_swapchains.push_back({.swapchain=swapchain, .image_views=vk_image_views});
 }
 
-void Swapchain::destroy_this_swapchain(VkDevice device){
-    //TODO: we MUST remove the swapchain from the VulkanEngine too...
-    destroy_swapchain(swapchain, device, image_views);
+void Swapchain::erase_self(VulkanEngine &vk){
+    for (int i = 0; const auto &swapchain : vk.created_swapchains){
+        if (swapchain.swapchain == this->swapchain) vk.created_swapchains.erase(vk.created_swapchains.begin() + i);
+        ++i;
+    }
+    destroy_swapchain(swapchain, vk.device, image_views);
+    image_views.clear();
+    images.clear();
 }
 
 void Swapchain::rebuild_swapchain(
@@ -672,8 +691,8 @@ void Swapchain::rebuild_swapchain(
     SDL_Window *window,
     VkPresentModeKHR present_mode)
 {
-    destroy_this_swapchain(vk.device);
-    build_swapchain(vk, window, present_mode);
+    erase_self(vk);
+    initialize_swapchain(vk, window, present_mode);
 }
 
 CommandPool::CommandPool(VulkanEngine &vk){

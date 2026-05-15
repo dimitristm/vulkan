@@ -17,7 +17,6 @@ module;
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
-#include "imgui/imgui_impl_vulkan.h"
 #include <stb/stb_image.h>
 
 #if !USE_IMPORT_STD
@@ -76,10 +75,11 @@ struct Texture : public Image{
     }
 };
 
-struct DrawImage : public Image{
+struct DrawImage{
+    Image img;
     ImageView view;
-    DrawImage(VulkanEngine &vk, glm::ivec2 window_size)
-    :Image(vk,
+    DrawImage(VulkanEngine &vk, const glm::ivec2 &window_size)
+    :img(vk,
            {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
            VK_FORMAT_R16G16B16A16_SFLOAT,
            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
@@ -88,22 +88,43 @@ struct DrawImage : public Image{
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,
            1, 1),
-    view(vk, *this, ImageAspects::COLOR, 0, 1)
+    view(vk, img, ImageAspects::COLOR, 0, 1)
     {}
+    void resize(VulkanEngine &vk, const glm::ivec2 &new_window_size){
+        img.erase_self(vk);
+        view.erase_self(vk);
+        *this = DrawImage(vk, new_window_size);
+    }
 };
 
-struct DepthImage : public Image{
+struct DepthImage{
+    Image img;
     ImageView view;
-    DepthImage(VulkanEngine &vk, glm::ivec2 window_size)
-    :Image(vk,
+    DepthImage(VulkanEngine &vk, const glm::ivec2 &window_size)
+    :img(vk,
            {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
            VK_FORMAT_D32_SFLOAT,
            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,
            1, 1),
-    view(vk, *this, ImageAspects::DEPTH, 0, 1)
+    view(vk, img, ImageAspects::DEPTH, 0, 1)
     {}
+    void resize(VulkanEngine &vk, const glm::ivec2 &new_window_size){
+        img.erase_self(vk);
+        view.erase_self(vk);
+        *this = DepthImage(vk, new_window_size);
+    }
+    void set_layout(const CommandBuffer &cmd_buffer){
+        cmd_buffer.barrier(BarrierInfo{
+            .img = img, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+            .src_access_mask = 0,
+            .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .aspects = ImageAspects::DEPTH
+        });
+    }
 };
 
 struct FrameInFlightData{
@@ -227,7 +248,6 @@ struct Scenes{
         }
         uploader.start_queue_upload(indices);
         for (auto &gltf_indices : gltf_scenes.indices){
-            using T = typename std::remove_cvref_t<decltype(gltf_indices)>::value_type;
             uploader.add_to_last_upload(gltf_indices);
         }
         for(auto &gltf_texture : gltf_scenes.textures){
@@ -336,12 +356,13 @@ export class Renderer{
     static constexpr int FRAMES_IN_FLIGHT = 2;
 
     SDL_Window *window;
-    glm::ivec2 window_size;
+    glm::ivec2 window_size;// in pixels
     VulkanEngine vk;
     CommandPool command_pool; // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
     ImmediateSubmitter immediate_submiter;
     HostToDeviceUploader uploader;
 
+    const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     Swapchain swapchain;
     DrawImage draw_image;
     DepthImage depth_image;
@@ -366,6 +387,33 @@ export class Renderer{
 
     Sampler sampler;
 
+    bool swapchain_is_suboptimal = false;
+    void update_drawing_surfaces(bool swapchain_out_of_date){
+        glm::ivec2 new_window_size = get_window_size_in_pixels(window);
+        const auto update_swapchain = [&](){
+            swapchain.rebuild_swapchain(vk, window, present_mode);
+            swapchain_is_suboptimal = false;
+        };
+        const auto update_images = [&](){
+            this->window_size = new_window_size;
+            draw_image.resize(vk, window_size);
+            depth_image.resize(vk, window_size);
+            immediate_submiter.submit(vk, [&](){depth_image.set_layout(immediate_submiter.cmd_buffer());});
+            compute_desc_set.update_storage_image(vk, 0, draw_image.view);
+        };
+
+
+        if (window_size != new_window_size){
+            vk.wait_idle();
+            update_swapchain();
+            update_images();
+        }
+        else if (swapchain_out_of_date || swapchain_is_suboptimal){
+            vk.wait_idle();
+            update_swapchain();
+        }
+    }
+
 public:
     Renderer(SDL_Window *window)
     :
@@ -375,7 +423,7 @@ public:
     command_pool(vk),
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
-    swapchain(vk, window, VK_PRESENT_MODE_FIFO_KHR),
+    swapchain(vk, window, present_mode),
     draw_image(vk, window_size),
     depth_image(vk, window_size),
     swapchain_render_done_semas(
@@ -390,13 +438,13 @@ public:
         }()
     ),
     frame_in_flight_data({FrameInFlightData(vk, command_pool), FrameInFlightData(vk, command_pool)}),
-    specialization_info((2 * sizeof(int32_t)) + sizeof(double)),
+    specialization_info((2 * sizeof(int32_t))),
     pc_builder(),
     ds_builder(),
     compute_desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
     compute_push_const(pc_builder.add<glm::vec4>(VK_SHADER_STAGE_COMPUTE_BIT)),
     compute_pipeline_layout(vk, compute_desc_set, pc_builder.get_ranges()),
-    compute_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32).add_entry(1234, 34.0)),
+    compute_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32)),
     scenes(Scenes::make_from_glb(vk, uploader, immediate_submiter, {"assets/mytests/1.glb", "assets/mytests/1.glb"})),
     draw_commands(scenes.prepare_to_draw_scene(1, uploader)),
     view_proj_transform_const(pc_builder.reset().add<glm::mat4>( VK_SHADER_STAGE_VERTEX_BIT)),
@@ -413,8 +461,8 @@ public:
                       FragmentShader(vk, "shaders/compiled/textured.frag.spv"),
                       PipelineLayout(vk, graphics_desc_set, pc_builder.get_ranges()),
                       scenes.vertices,
-                      draw_image.get_format(),
-                      depth_image.get_format(),
+                      draw_image.img.get_format(),
+                      depth_image.img.get_format(),
                       MSAALevel::OFF),
     sampler(vk, VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_FALSE, 0)
     {
@@ -429,36 +477,36 @@ public:
         graphics_desc_set.update_storage_buffer(vk, 4, scenes.obj_transforms);
 
         immediate_submiter.submit(vk, [&]{
-            immediate_submiter.cmd_buffer().barrier(
-                BarrierInfo{
-                    .img = depth_image, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
-                    .src_access_mask = 0,
-                    .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                    .aspects = ImageAspects::DEPTH
-                }
-            );
+            depth_image.set_layout(immediate_submiter.cmd_buffer());
         });
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
-    void draw(glm::mat4 view_transform){
+    void draw_gui(){
 	ImGui::Begin("Background customizer");
         ImGui::InputFloat4("data a",(float*)& compute_push_const.data.a);
         ImGui::End();
+    }
 
-
+    void draw_scene(const glm::mat4 &view_transform){
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
 
         frame_in_flight.rendering_done_fence.wait(vk);
-        uint32_t swapchain_img_idx = swapchain.acquire_next_image(vk, frame_in_flight.swapchain_img_ready_sema);
-
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
+
+        uint32_t swapchain_img_idx = [&] {
+            while (true){
+                auto [idx, result] = swapchain.acquire_next_image(vk, frame_in_flight.swapchain_img_ready_sema);
+                if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
+                if (result == VK_SUBOPTIMAL_KHR) { swapchain_is_suboptimal = true; return idx; }
+                if (result == VK_SUCCESS) return idx;
+            }
+        }();
+
         cmd_buffer.barrier(BarrierInfo{
-                                .img=draw_image,
+                                .img=draw_image.img,
                                 .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
                                 .new_layout=VK_IMAGE_LAYOUT_GENERAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
@@ -475,7 +523,7 @@ public:
         cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
 
         cmd_buffer.barrier(BarrierInfo{
-                               .img=draw_image,
+                               .img=draw_image.img,
                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_GENERAL,
                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -489,10 +537,10 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, graphics_desc_set);
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.extent,  scenes.vertices, scenes.indices, draw_commands);
+        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.img.extent,  scenes.vertices, scenes.indices, draw_commands);
 
         cmd_buffer.barrier(BarrierInfo{
-                                .img=draw_image,
+                                .img=draw_image.img,
                                 .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -513,7 +561,7 @@ public:
                            }
         );
 
-        cmd_buffer.blit_entire_images(draw_image,
+        cmd_buffer.blit_entire_images(draw_image.img,
                                       swapchain.get_images()[swapchain_img_idx],
                                       ImageAspects::COLOR
         );
@@ -552,8 +600,16 @@ public:
                            frame_in_flight.rendering_done_fence
         );
 
-        swapchain.present(vk, swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
+        VkResult result = swapchain.present(vk, swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
+        if (result == VK_SUBOPTIMAL_KHR) swapchain_is_suboptimal = true;
 
         ++frame_count;
+    }
+
+    void draw(const glm::mat4 &view_transform){
+        update_drawing_surfaces(false);
+        draw_gui();
+        draw_scene(view_transform);
     }
 };
