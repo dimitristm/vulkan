@@ -29,7 +29,7 @@ void ImmediateSubmitter::submit(VulkanEngine &vk, const std::function<void()> &f
 
     internal_cmd_buffer.end();
     internal_cmd_buffer.submit(vk, submit_fence);
-    submit_fence.wait(vk);
+    submit_fence.wait_and_reset(vk);
 }
 
 HostToDeviceUploader::HostToDeviceUploader(
@@ -161,7 +161,7 @@ void HostToDeviceUploader::begin_uploads(){
 void HostToDeviceUploader::finish_in_progress_uploads(){
     // todo: log a warning if we call this and there are no in progress uploads
     for (auto &in_progress_upload : in_progress_uploads){
-        in_progress_upload.fence.wait(*vk);
+        in_progress_upload.fence.wait_and_reset(*vk);
         fence_pool.push_back(in_progress_upload.fence);
         cmd_buffer_pool.push_back(in_progress_upload.cmd_buffer);
     }

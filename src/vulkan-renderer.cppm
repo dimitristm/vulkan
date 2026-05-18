@@ -36,27 +36,9 @@ import vulkanEngine;
 import userInput;
 import gltf;
 import vulkanUtil;
+import util;
 
-static glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
-    glm::ivec2 size;
-    SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
-    return size;
-}
-
-//Assumes a right handed coordinate system. Output Z ranges from 0 to 1, with close objects at 1.
-static glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float horizontal_to_vertical_ratio, float near_z, float far_z){
-    // todo numerical precision is there a reason to pass vertical_to_horizontal_ratio or horizontal to vertical? pick whichever has better precision or if it doesn't matter do h/v
-    const float half_fov = glm::radians(horizontal_fov_in_degrees)/2;
-    float tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
-
-    // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
-    return glm::mat4{
-        1/tan,0,0,0,
-        0,-horizontal_to_vertical_ratio/tan,0,0,
-        0,0,-near_z/(near_z-far_z),-1,
-        0,0,(far_z*near_z)/(far_z-near_z),0,
-    };
-};
+using namespace util;
 
 namespace{
 struct Texture : public Image{
@@ -78,9 +60,9 @@ struct Texture : public Image{
 struct DrawImage{
     Image img;
     ImageView view;
-    DrawImage(VulkanEngine &vk, const glm::ivec2 &window_size)
+    DrawImage(VulkanEngine &vk, const glm::ivec2 &size)
     :img(vk,
-           {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
+           {.width=static_cast<uint32_t>(size.x), .height=static_cast<uint32_t>(size.y)},
            VK_FORMAT_R16G16B16A16_SFLOAT,
            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
            | VK_IMAGE_USAGE_STORAGE_BIT
@@ -100,9 +82,9 @@ struct DrawImage{
 struct DepthImage{
     Image img;
     ImageView view;
-    DepthImage(VulkanEngine &vk, const glm::ivec2 &window_size)
+    DepthImage(VulkanEngine &vk, const glm::ivec2 &size)
     :img(vk,
-           {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
+           {.width=static_cast<uint32_t>(size.x), .height=static_cast<uint32_t>(size.y)},
            VK_FORMAT_D32_SFLOAT,
            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -354,6 +336,7 @@ struct Scenes{
 
 export class Renderer{
     static constexpr int FRAMES_IN_FLIGHT = 2;
+    const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
     SDL_Window *window;
     glm::ivec2 window_size;// in pixels
@@ -362,7 +345,6 @@ export class Renderer{
     ImmediateSubmitter immediate_submiter;
     HostToDeviceUploader uploader;
 
-    const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     Swapchain swapchain;
     DrawImage draw_image;
     DepthImage depth_image;
@@ -387,31 +369,34 @@ export class Renderer{
 
     Sampler sampler;
 
-    bool swapchain_is_suboptimal = false;
+    bool should_rebuild_swapchain = false;
+    Time last_swapchain_rebuild = Time::now();
     void update_drawing_surfaces(bool swapchain_out_of_date){
         glm::ivec2 new_window_size = get_window_size_in_pixels(window);
+        bool window_changed_size = new_window_size != window_size;
+
         const auto update_swapchain = [&](){
             swapchain.rebuild_swapchain(vk, window, present_mode);
-            swapchain_is_suboptimal = false;
+            should_rebuild_swapchain = false;
+            last_swapchain_rebuild = Time::now();
         };
         const auto update_images = [&](){
-            this->window_size = new_window_size;
-            draw_image.resize(vk, window_size);
-            depth_image.resize(vk, window_size);
+            vk.wait_idle();
+            draw_image.resize(vk, new_window_size);
+            depth_image.resize(vk, new_window_size);
             immediate_submiter.submit(vk, [&](){depth_image.set_layout(immediate_submiter.cmd_buffer());});
             compute_desc_set.update_storage_image(vk, 0, draw_image.view);
         };
 
-
-        if (window_size != new_window_size){
-            vk.wait_idle();
-            update_swapchain();
+        if (window_changed_size){
+            window_size = new_window_size;
             update_images();
+            should_rebuild_swapchain = true;
         }
-        else if (swapchain_out_of_date || swapchain_is_suboptimal){
-            vk.wait_idle();
-            update_swapchain();
-        }
+        bool optional_swapchain_rebuilds_are_not_on_cooldown = (Time::now() - last_swapchain_rebuild > Duration(30));
+        bool must_rebuild_swapchain = swapchain_out_of_date
+                                      || (should_rebuild_swapchain && optional_swapchain_rebuilds_are_not_on_cooldown);
+        if (must_rebuild_swapchain) update_swapchain();
     }
 
 public:
@@ -424,8 +409,8 @@ public:
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
     swapchain(vk, window, present_mode),
-    draw_image(vk, window_size),
-    depth_image(vk, window_size),
+    draw_image(vk, get_window_size_in_pixels(window)),
+    depth_image(vk, get_window_size_in_pixels(window)),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
             std::vector<GpuSemaphore> swapchain_render_done_semas;
@@ -492,7 +477,7 @@ public:
     void draw_scene(const glm::mat4 &view_transform){
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
 
-        frame_in_flight.rendering_done_fence.wait(vk);
+        frame_in_flight.rendering_done_fence.wait_and_reset(vk);
         CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
 
@@ -500,7 +485,7 @@ public:
             while (true){
                 auto [idx, result] = swapchain.acquire_next_image(vk, frame_in_flight.swapchain_img_ready_sema);
                 if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
-                if (result == VK_SUBOPTIMAL_KHR) { swapchain_is_suboptimal = true; return idx; }
+                if (result == VK_SUBOPTIMAL_KHR) { should_rebuild_swapchain = true; return idx; }
                 if (result == VK_SUCCESS) return idx;
             }
         }();
@@ -537,7 +522,7 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, graphics_desc_set);
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.img.extent,  scenes.vertices, scenes.indices, draw_commands);
+        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},  scenes.vertices, scenes.indices, draw_commands);
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image.img,
@@ -561,9 +546,13 @@ public:
                            }
         );
 
-        cmd_buffer.blit_entire_images(draw_image.img,
-                                      swapchain.get_images()[swapchain_img_idx],
-                                      ImageAspects::COLOR
+        cmd_buffer.blit(draw_image.img,
+                        swapchain.get_images()[swapchain_img_idx],
+                        {0,0},
+                        window_size,
+                        {0,0},
+                        {swapchain.get_images()[swapchain_img_idx].extent.width, swapchain.get_images()[swapchain_img_idx].extent.height},
+                        ImageAspects::COLOR
         );
 
         cmd_buffer.barrier(BarrierInfo{
@@ -602,7 +591,7 @@ public:
 
         VkResult result = swapchain.present(vk, swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
-        if (result == VK_SUBOPTIMAL_KHR) swapchain_is_suboptimal = true;
+        if (result == VK_SUBOPTIMAL_KHR) should_rebuild_swapchain = true;
 
         ++frame_count;
     }

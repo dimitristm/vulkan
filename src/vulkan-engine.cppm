@@ -150,7 +150,7 @@ export struct VulkanEngine{
     // don't need to contain an initialized member.
 
     // Might also use these in asserts in debug mode to ensure this is the engine that made them.
-    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views;};
+    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views; std::vector<VkFence> present_fences;};
     std::vector<SwapchainTrackingInfo> created_swapchains;
     std::vector<VkSampler> created_samplers;
     std::unordered_set<ImageTrackingInfo, ImageTrackingInfoHash, ImageTrackingInfoEqual> created_images;
@@ -253,15 +253,22 @@ export struct ImageView{
     );
 
     ImageView(VkImageView vk_view);
-    void erase_self(VulkanEngine &vk);
+    void erase_self(VulkanEngine &vk) const;
 };
 
 export struct GpuFence{
     VkFence fence;
     GpuFence(VulkanEngine &vk, bool signaled);
+    explicit GpuFence(VkFence fence):fence(fence){}
 
     void wait(const VulkanEngine &vk) const;
+    void reset(const VulkanEngine &vk) const;
+    void wait_and_reset(const VulkanEngine &vk) const;
     [[nodiscard]] bool is_signaled(const VulkanEngine &vk) const;
+
+    static void wait(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all);
+    static void reset(const VulkanEngine &vk, std::span<VkFence> fences);
+    static void wait_and_reset(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all);
 };
 
 export struct GpuSemaphore{
@@ -275,9 +282,10 @@ export struct Swapchain{
     VkExtent2D extent{};
     std::vector<Image> images;
     std::vector<ImageView> image_views;
+    std::vector<VkFence> present_fences;
 
-    [[nodiscard]] std::vector<Image> &get_images() { return images; }
-    [[nodiscard]] std::vector<ImageView> &get_image_views() { return image_views; }
+    [[nodiscard]] const std::vector<Image> &get_images() const { return images; }
+    [[nodiscard]] const std::vector<ImageView> &get_image_views() const { return image_views; }
     [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
     [[nodiscard]] VkFormat get_format() const { return image_format; }
 
@@ -298,13 +306,11 @@ export struct Swapchain{
     void initialize_swapchain(
         VulkanEngine &vk,
         SDL_Window *window,
-        VkPresentModeKHR present_mode
+        VkPresentModeKHR present_mode,
+        const VkSwapchainKHR *old_swapchain = nullptr
     );
 
  public:
-    // Almost certainly not to be used outside of the vulkan-util.cppm file. The swapchain is destroyed by the
-    // VulkanInstanceInfo that made it.
-    void erase_self(VulkanEngine &vk);
 
     void rebuild_swapchain(
         VulkanEngine &vk,
@@ -790,7 +796,7 @@ struct GraphicsPipeline{
 };
 
 export struct BarrierInfo{
-    Image &img;
+    const Image &img;
     VkImageLayout old_layout_or_undefined_to_discard_current_data;
     VkImageLayout new_layout;
     VkPipelineStageFlags2 src_stage_mask;

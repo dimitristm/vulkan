@@ -37,6 +37,7 @@ module;
 #include <print>
 #include <fstream>
 #include <optional>
+#include <utility>
 #endif
 
 module vulkanEngine;
@@ -283,17 +284,25 @@ static VmaAllocator init_vma_allocator(
     return allocator;
 }
 
-static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<VkImageView> &swapchain_image_views){
-    for(auto &swapchain_image_view : swapchain_image_views){
-        vkDestroyImageView(device, swapchain_image_view, nullptr);
+// The present fences are waited on so it's safe to delete the swapchain, but the fences themselves
+// are not deleted. That should happen independently.
+static void destroy_swapchain(const VulkanEngine &vk,
+                              VkSwapchainKHR swapchain,
+                              const std::vector<VkImageView> &swapchain_image_views,
+                              std::vector<VkFence> &present_fences){
+    GpuFence::wait(vk, std::span(present_fences), true);
+    for (const auto &swapchain_image_view : swapchain_image_views){
+        vkDestroyImageView(vk.device, swapchain_image_view, nullptr);
     }
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    vkDestroySwapchainKHR(vk.device, swapchain, nullptr);
 }
 
 VulkanEngine::VulkanEngine(SDL_Window *window){
     vkb::InstanceBuilder builder;
     vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
         .request_validation_layers(use_validation_layers)
+        .enable_extension(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)
+        .enable_extension(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
         .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT)
         .add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
         //.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT)
@@ -309,6 +318,12 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
     SDL_Vulkan_CreateSurface(window, vk_instance, nullptr, &surface);
 
     // Init physical device
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT EXT_swapchain_maintenance1{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+        .pNext = nullptr,
+        .swapchainMaintenance1 = VK_TRUE,
+    };
+
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.synchronization2 = VK_TRUE;
@@ -335,12 +350,13 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
         .set_required_features_13(features13)
         .set_required_features_12(features12)
         .set_required_features(features)
+        .add_required_extension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)
         .set_surface(this->surface)
         .select()
         .value();
 
     vkb::DeviceBuilder device_builder{vkb_physical_device};
-    vkb::Device vkb_device = device_builder.build().value();
+    vkb::Device vkb_device = device_builder.add_pNext(&EXT_swapchain_maintenance1).build().value();
     this->physical_device = vkb_physical_device.physical_device;
     this->device = vkb_device.device;
     this->graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
@@ -372,12 +388,12 @@ VulkanEngine::~VulkanEngine(){
     vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
     for(auto &layout : descriptor_set_layouts_to_delete) vkDestroyDescriptorSetLayout(device, layout, nullptr);
     for(auto &command_pool : created_command_pools) vkDestroyCommandPool(device, command_pool, nullptr);
-    for(auto &fence : created_fences) vkDestroyFence(device, fence, nullptr);
     for(auto &sema : created_semaphores) vkDestroySemaphore(device, sema, nullptr);
     for(const auto &img_view : created_image_views) vkDestroyImageView(device, img_view, nullptr);
     for(const auto &image : created_images) vmaDestroyImage(allocator, image.image, image.allocation);
     for(auto &sampler : created_samplers) vkDestroySampler(device, sampler, nullptr);
-    for(auto &swapchain : created_swapchains) destroy_swapchain(swapchain.swapchain, device, swapchain.image_views);
+    for(auto &swapchain : created_swapchains) destroy_swapchain(*this, swapchain.swapchain, swapchain.image_views, swapchain.present_fences);
+    for(auto &fence : created_fences) vkDestroyFence(device, fence, nullptr);
 
     vmaDestroyAllocator(allocator);
     vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
@@ -561,7 +577,7 @@ ImageView::ImageView(
 
 ImageView::ImageView(VkImageView vk_view):view(vk_view){}
 
-void ImageView::erase_self(VulkanEngine &vk){
+void ImageView::erase_self(VulkanEngine &vk) const{
     vkDestroyImageView(vk.device, view, nullptr);
     vk.created_image_views.erase(view);
 }
@@ -576,19 +592,41 @@ GpuFence::GpuFence(VulkanEngine &vk, bool signaled){
     vk.created_fences.push_back(fence);
 }
 
-void GpuFence::wait(const VulkanEngine &vk) const {
+void GpuFence::wait(const VulkanEngine &vk) const{
     VK_CHECK(vkWaitForFences(vk.device, 1, &fence, VK_TRUE, timeout_length));
+}
+
+void GpuFence::reset(const VulkanEngine &vk) const{
     VK_CHECK(vkResetFences(vk.device, 1, &fence));
 }
 
+void GpuFence::wait_and_reset(const VulkanEngine &vk) const {
+    wait(vk);
+    reset(vk);
+}
+
 bool GpuFence::is_signaled(const VulkanEngine &vk) const {
-    auto result = vkGetFenceStatus(vk.device, this->fence);
+    const auto result = vkGetFenceStatus(vk.device, this->fence);
     if (result == VK_SUCCESS) return true;
     else if (result == VK_NOT_READY) return false;
-    else{
-        std::println("GpuFence error, is_signalled returned {}", string_VkResult(result));
-        abort();
-    }
+    else VK_CHECK(result);
+    std::unreachable();
+}
+
+void GpuFence::wait(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all){
+    assert(fences.size() > 0 && "The spec forbids calling vkWaitForFences with a fence count of 0");
+    VK_CHECK(vkWaitForFences(vk.device, fences.size(), fences.data(), static_cast<VkBool32>(wait_all), timeout_length));
+}
+
+void GpuFence::reset(const VulkanEngine &vk, std::span<VkFence> fences){
+    assert(fences.size() > 0 && "The spec forbids calling vkResetFences with a fence count of 0");
+    VK_CHECK(vkResetFences(vk.device, fences.size(), fences.data()));
+}
+
+void GpuFence::wait_and_reset(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all){
+    assert(fences.size() > 0 && "The spec forbids calling vkWaitForFences and vkResetFences with a fence count of 0");
+    wait(vk, fences, wait_all);
+    reset(vk, fences);
 }
 
 GpuSemaphore::GpuSemaphore(VulkanEngine &vk){
@@ -601,14 +639,10 @@ GpuSemaphore::GpuSemaphore(VulkanEngine &vk){
     vk.created_semaphores.push_back(semaphore);
 }
 
-static void destroy_swapchain(VkSwapchainKHR swapchain, VkDevice device, std::vector<ImageView> &swapchain_image_views){
-    for(auto &swapchain_image_view : swapchain_image_views){
-        vkDestroyImageView(device, swapchain_image_view.view, nullptr);
-    }
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
-}
-
 Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode) {
+    auto f = GpuFence(vk, true);
+    present_fences.reserve(16);
+    present_fences.push_back(f.fence);
     initialize_swapchain(vk, window, present_mode);
 }
 
@@ -620,9 +654,34 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
 }
 
 [[nodiscard]] VkResult Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index){
+    VkFence free_present_fence = VK_NULL_HANDLE;
+    for(const auto &fence : present_fences){
+        auto f = GpuFence(fence);
+        if (f.is_signaled(vk)){
+            f.reset(vk);
+            free_present_fence = f.fence;
+            break;
+        }
+    }
+    if (free_present_fence == VK_NULL_HANDLE){
+        auto f = GpuFence(vk, false);
+        free_present_fence = f.fence;
+        present_fences.push_back(free_present_fence);
+        for(auto swap_track : vk.created_swapchains){
+            if (swap_track.swapchain == this->swapchain) swap_track.present_fences.emplace_back(free_present_fence);
+        }
+        assert(present_fences.size() < 8 && "Oddly large amount of present fences, should never be this large as far as I know");
+    }
+    VkSwapchainPresentFenceInfoKHR swapchain_present_fence_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR,
+        .pNext = nullptr,
+        .swapchainCount = 1,
+        .pFences = &free_present_fence,
+    };
+
     VkPresentInfoKHR present_info = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .pNext = nullptr,
+        .pNext = &swapchain_present_fence_info,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &wait_sema.semaphore,
         .swapchainCount = 1,
@@ -639,24 +698,49 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
 void Swapchain::initialize_swapchain(
     VulkanEngine &vk,
     SDL_Window *window,
-    VkPresentModeKHR present_mode)
+    VkPresentModeKHR present_mode,
+    const VkSwapchainKHR *old_swapchain)
 {
-    assert((vk.created_swapchains.size() == 0) && "We don't currently support multiple swapchains.");
     glm::ivec2 size;
     SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
 
+    std::array present_modes{
+        VK_PRESENT_MODE_FIFO_KHR,
+        VK_PRESENT_MODE_MAILBOX_KHR,
+    };
+
+    VkSwapchainPresentModesCreateInfoEXT present_modes_create_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT,
+        .pNext = nullptr,
+        .presentModeCount = static_cast<uint32_t>(present_modes.size()),
+        .pPresentModes = present_modes.data(),
+    };
+
+    VkSwapchainPresentScalingCreateInfoEXT present_scaling_create_info{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT,
+        .pNext = nullptr,
+        .scalingBehavior = 0,
+        .presentGravityX{},
+        .presentGravityY{},
+    };
+
     vkb::SwapchainBuilder swapchain_builder{vk.physical_device, vk.device, vk.surface};
-    vkb::Swapchain vkb_swapchain = swapchain_builder
-        // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
-        // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
-        // as the last thing before blitting to swapchain and presenting.
-        .set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_UNORM, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-        .set_desired_present_mode(present_mode)
-        .set_desired_extent(size.x, size.y)
-        .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-        .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING)
-        .build()
-        .value();
+    // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
+    // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
+    // as the last thing before blitting to swapchain and presenting.
+    swapchain_builder.set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_UNORM, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+                     .add_pNext(&present_modes_create_info)
+                     .add_pNext(&present_scaling_create_info)
+                     .set_desired_present_mode(present_mode)
+                     .set_desired_extent(size.x, size.y)
+                     .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+                     .set_create_flags(VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT)
+                     .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING);
+    if (old_swapchain != nullptr) swapchain_builder.set_old_swapchain(*old_swapchain);
+    vkb::Swapchain vkb_swapchain = swapchain_builder.build().value();
+
+    image_views.clear();
+    images.clear();
 
     this->extent = vkb_swapchain.extent;
     this->swapchain = vkb_swapchain.swapchain;
@@ -673,17 +757,7 @@ void Swapchain::initialize_swapchain(
     for(VkImageView vk_view : vk_image_views){
         this->image_views.emplace_back(vk_view);
     }
-    vk.created_swapchains.push_back({.swapchain=swapchain, .image_views=vk_image_views});
-}
-
-void Swapchain::erase_self(VulkanEngine &vk){
-    for (int i = 0; const auto &swapchain : vk.created_swapchains){
-        if (swapchain.swapchain == this->swapchain) vk.created_swapchains.erase(vk.created_swapchains.begin() + i);
-        ++i;
-    }
-    destroy_swapchain(swapchain, vk.device, image_views);
-    image_views.clear();
-    images.clear();
+    vk.created_swapchains.push_back({.swapchain=swapchain, .image_views=vk_image_views, .present_fences=present_fences});
 }
 
 void Swapchain::rebuild_swapchain(
@@ -691,8 +765,17 @@ void Swapchain::rebuild_swapchain(
     SDL_Window *window,
     VkPresentModeKHR present_mode)
 {
-    erase_self(vk);
-    initialize_swapchain(vk, window, present_mode);
+    VkSwapchainKHR old_swapchain = this->swapchain;
+
+    initialize_swapchain(vk, window, present_mode, &old_swapchain);
+    // Get rid of the old swapchain in the VulkanEngine and destroy its views
+    for (int i = 0; const auto &swapchain : vk.created_swapchains){
+        if (swapchain.swapchain == old_swapchain) {
+            destroy_swapchain(vk, swapchain.swapchain, swapchain.image_views, present_fences);
+            vk.created_swapchains.erase(vk.created_swapchains.begin() + i);
+        }
+        ++i;
+    }
 }
 
 CommandPool::CommandPool(VulkanEngine &vk){

@@ -120,6 +120,7 @@ target_sources(vulkan-prog
         src/vulkan-engine.cppm
         src/vulkan-renderer.cppm
         src/vulkan-util.cppm
+        src/util.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE
