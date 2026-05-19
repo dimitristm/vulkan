@@ -299,6 +299,7 @@ static void destroy_swapchain(const VulkanEngine &vk,
 
 VulkanEngine::VulkanEngine(SDL_Window *window){
     vkb::InstanceBuilder builder;
+    std::println("validation layers = {}", use_validation_layers);
     vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
         .request_validation_layers(use_validation_layers)
         .enable_extension(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)
@@ -733,7 +734,7 @@ void Swapchain::initialize_swapchain(
                      .add_pNext(&present_scaling_create_info)
                      .set_desired_present_mode(present_mode)
                      .set_desired_extent(size.x, size.y)
-                     .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+                     .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
                      .set_create_flags(VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT)
                      .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING);
     if (old_swapchain != nullptr) swapchain_builder.set_old_swapchain(*old_swapchain);
@@ -773,6 +774,7 @@ void Swapchain::rebuild_swapchain(
         if (swapchain.swapchain == old_swapchain) {
             destroy_swapchain(vk, swapchain.swapchain, swapchain.image_views, present_fences);
             vk.created_swapchains.erase(vk.created_swapchains.begin() + i);
+            break;
         }
         ++i;
     }

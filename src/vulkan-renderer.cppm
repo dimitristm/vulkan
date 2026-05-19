@@ -336,7 +336,7 @@ struct Scenes{
 
 export class Renderer{
     static constexpr int FRAMES_IN_FLIGHT = 2;
-    const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    const VkPresentModeKHR present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
 
     SDL_Window *window;
     glm::ivec2 window_size;// in pixels
@@ -370,7 +370,6 @@ export class Renderer{
     Sampler sampler;
 
     bool should_rebuild_swapchain = false;
-    Time last_swapchain_rebuild = Time::now();
     void update_drawing_surfaces(bool swapchain_out_of_date){
         glm::ivec2 new_window_size = get_window_size_in_pixels(window);
         bool window_changed_size = new_window_size != window_size;
@@ -378,25 +377,20 @@ export class Renderer{
         const auto update_swapchain = [&](){
             swapchain.rebuild_swapchain(vk, window, present_mode);
             should_rebuild_swapchain = false;
-            last_swapchain_rebuild = Time::now();
         };
         const auto update_images = [&](){
-            vk.wait_idle();
             draw_image.resize(vk, new_window_size);
             depth_image.resize(vk, new_window_size);
             immediate_submiter.submit(vk, [&](){depth_image.set_layout(immediate_submiter.cmd_buffer());});
             compute_desc_set.update_storage_image(vk, 0, draw_image.view);
         };
 
-        if (window_changed_size){
+        if (window_changed_size || swapchain_out_of_date || should_rebuild_swapchain){
             window_size = new_window_size;
+            vk.wait_idle();
             update_images();
-            should_rebuild_swapchain = true;
+            update_swapchain();
         }
-        bool optional_swapchain_rebuilds_are_not_on_cooldown = (Time::now() - last_swapchain_rebuild > Duration(30));
-        bool must_rebuild_swapchain = swapchain_out_of_date
-                                      || (should_rebuild_swapchain && optional_swapchain_rebuilds_are_not_on_cooldown);
-        if (must_rebuild_swapchain) update_swapchain();
     }
 
 public:

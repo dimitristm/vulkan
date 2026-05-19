@@ -5,6 +5,7 @@
 
 import vulkanRenderer;
 import userInput;
+import util;
 
 int main(){
     TracyNoop;
@@ -21,14 +22,18 @@ int main(){
     );
 
     UserInputHandler input_handler(window);
+    util::FrameTimer frame_timer;
 
     {
         Renderer renderer{window};
         while (!input_handler.should_quit){
+            frame_timer.begin_frame();
             input_handler.handle_input();
+            //ImGui::ShowDemoWindow();
 
-            ImGui::ShowDemoWindow();
+            frame_timer.imgui();
             renderer.draw(input_handler.get_camera().get_view_transform());
+            frame_timer.end_frame();
         }
     }
 

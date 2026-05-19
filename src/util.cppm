@@ -1,9 +1,12 @@
 module;
+#include "imgui/imgui.h"
 #include <glm/vec2.hpp>
 #include <glm/trigonometric.hpp>
 #include <glm/mat4x4.hpp>
 #include <SDL3/SDL_video.h>
+#include <emmintrin.h>
 #if !USE_IMPORT_STD
+#include <thread>
 #include <chrono>
 #include <print>
 #include <cmath>
@@ -57,6 +60,7 @@ export glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float h
 
 
 class Duration {
+    double ms = 0.0;
 public:
     constexpr Duration() = default;
     explicit constexpr Duration(double ms):ms(ms){}
@@ -100,15 +104,13 @@ public:
         ms -= other.ms;
         return *this;
     }
-
-private:
-    double ms = 0.0;
 };
 
 class Time{
-public:
     using Clock = std::chrono::steady_clock;
+    Clock::time_point time_point;
 
+public:
     constexpr Time() = default;
 
     explicit Time(Clock::time_point tp):time_point(tp){}
@@ -130,12 +132,12 @@ public:
     friend Time operator-(const Time& t, const Duration& d){
         return Time(std::chrono::time_point_cast<Clock::duration>(t.time_point - d.chrono()));
     }
-
-private:
-    Clock::time_point time_point;
 };
 
 export class Timer {
+    Time start_time{};
+    std::optional<Time> end_time;
+
 public:
     void start(){
         start_time = Time::now();
@@ -151,14 +153,10 @@ public:
     }
 
     [[nodiscard]] Duration elapsed() const{
-        if (!end_time) return Time::now() - start_time;
+        if (!ended()) return Time::now() - start_time;
 
         return *end_time - start_time;
     }
-
-private:
-    Time start_time{};
-    std::optional<Time> end_time;
 };
 }
 
@@ -194,6 +192,9 @@ struct std::formatter<util::Timer> : std::formatter<std::string>{
 
 namespace util{
 export class LagDetect {
+    Duration threshold;
+    Timer timer;
+
 public:
     explicit LagDetect(Duration threshold):threshold(threshold){}
 
@@ -210,9 +211,53 @@ public:
             std::println("{} ({})", msg, elapsed);
         }
     }
+};
 
-private:
-    Duration threshold;
-    Timer timer;
+export class FrameTimer{
+    Time frame_start{};
+    Timer frame_timer{};
+    Duration frame_duration{};
+
+    double ema_fps = 0.0; // EMA = exponential moving average
+    bool frame_limit_enabled = true;
+    int max_fps = 120.0f;
+
+public:
+    void begin_frame(){
+        frame_start = Time::now();
+        frame_timer.start();
+    }
+
+    void end_frame(){
+        if (Duration target = Duration::from_sec(1.0 / static_cast<double>(max_fps));
+            frame_limit_enabled && frame_timer.elapsed() < target)
+        {
+            Duration remaining = target - frame_timer.elapsed();
+
+            if (remaining > Duration::from_ms(1.0)){
+                std::this_thread::sleep_for((remaining - Duration::from_ms(1.0)).chrono());
+            }
+
+            while (Time::now() < frame_start + target) _mm_pause();
+        }
+        frame_timer.end();
+        frame_duration = frame_timer.elapsed();
+
+        double instant_fps = 1.0 / frame_duration.to_sec();
+        ema_fps = ema_fps * 0.9 + instant_fps * 0.1;
+    }
+
+    void imgui(){
+        ImGui::Begin("Performance");
+        ImGui::Text("%s Frame time", std::format("{}", frame_duration).c_str());
+        ImGui::Text("%.1f Instant FPS", 1.0 / frame_duration.to_sec());
+        ImGui::Text("%.1f Exponential moving average FPS", ema_fps);
+        ImGui::Checkbox("Limit FPS", &frame_limit_enabled);
+        ImGui::SliderInt("Max FPS", &max_fps, 5, 1000);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputInt("##input", &max_fps);
+        ImGui::End();
+    }
 };
 }
