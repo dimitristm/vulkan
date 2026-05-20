@@ -145,7 +145,7 @@ public:
             case ControlMode::USER_CONTROLLING_THE_CAMERA: break;
             }
         };
-        if (event.type == SDL_EVENT_QUIT) { should_quit = true; return; }
+        if (event.type == SDL_EVENT_QUIT) should_quit = true;
         else if (event.type == SDL_EVENT_KEY_DOWN) handle_key_press(event.key);
         else if (event.type == SDL_EVENT_MOUSE_MOTION) handle_mouse_motion(event.motion);
         else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) handle_mouse_press(event.button);
