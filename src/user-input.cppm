@@ -69,6 +69,31 @@ public:
 
 
 export class UserInputHandler{
+public:
+    bool should_quit{};
+
+    UserInputHandler(SDL_Window *window)
+    :window(window)
+    {
+        assert(!SDL_GetWindowRelativeMouseMode(window) && "Do not set relative mouse mode outside of UserInputHandler. Getting that right is its responsibility. Instead use set_control_mode and possibly other UserInputHandler functions.");
+        control_mode = ControlMode::USER_CONTROLLING_THE_GUI;
+    }
+
+    const Camera &get_camera() { return camera; }
+
+    void handle_input(){
+        assert(!should_quit && "You were supposed to quit, but didn't.");
+        assert(control_mode_and_relative_mode_are_synced() && "Error: Either you set the relative mode outside of UserInput (don't do that, UserInput decides whether relative mode should be enabled) or there is an issue with UserInput");
+
+        handle_key_hold();
+        SDL_Event event;
+        while (SDL_PollEvent(&event) && !should_quit){
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            handle_event(event);
+        }
+    }
+
+private:
     SDL_Window *window;
     Camera camera;
     enum class ControlMode : char{
@@ -84,9 +109,6 @@ export class UserInputHandler{
             return false;
         }
     }
-
-public:
-    bool should_quit{};
 
     void set_control_mode(ControlMode new_control_mode){
         assert(new_control_mode != control_mode && "You set the UserInputHandler::control_mode to a value it already had. This is probably a bug.");
@@ -106,15 +128,6 @@ public:
         }
         assert(false && "Unhandled ControlMode value passed to UserInput::set_control_mode");
     }
-
-    UserInputHandler(SDL_Window *window)
-    :window(window)
-    {
-        assert(!SDL_GetWindowRelativeMouseMode(window) && "Do not set relative mouse mode outside of UserInputHandler. Getting that right is its responsibility. Instead use set_control_mode and possibly other UserInputHandler functions.");
-        control_mode = ControlMode::USER_CONTROLLING_THE_GUI;
-    }
-
-    const Camera &get_camera() { return camera; }
 
     void handle_event(const SDL_Event &event){
         const auto handle_key_press = [this](const SDL_KeyboardEvent &key){
@@ -159,17 +172,5 @@ public:
         if (keys[SDL_SCANCODE_A]) { camera.move_left(); }
         if (keys[SDL_SCANCODE_S]) { camera.move_back(); }
         if (keys[SDL_SCANCODE_D]) { camera.move_right(); }
-    }
-
-    void handle_input(){
-        assert(!should_quit && "You were supposed to quit, but didn't.");
-        assert(control_mode_and_relative_mode_are_synced() && "Error: Either you set the relative mode outside of UserInput (don't do that, UserInput decides whether relative mode should be enabled) or there is an issue with UserInput");
-
-        handle_key_hold();
-        SDL_Event event;
-        while (SDL_PollEvent(&event) && !should_quit){
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            handle_event(event);
-        }
     }
 };
