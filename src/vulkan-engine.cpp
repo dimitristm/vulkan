@@ -450,6 +450,11 @@ void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALev
     this->imgui_is_initialized = true;
 }
 
+VkSurfaceCapabilitiesKHR VulkanEngine::get_surface_capabilities() const{
+    VkSurfaceCapabilitiesKHR capabilities;
+    VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities));
+    return capabilities;
+}
 
 Sampler::Sampler(VulkanEngine &vk,
                  VkFilter mag_filter,
@@ -695,6 +700,36 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
     return result;
 }
 
+[[nodiscard]] static bool presentable_swapchain_exists_inner(const VkExtent2D &surface_extent, const glm::ivec2 &window_size){
+    return surface_extent != VkExtent2D{0, 0} && window_size != glm::ivec2{0,0};
+}
+
+[[nodiscard]] bool Swapchain::presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window){
+    VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
+    glm::ivec2 window_size = util::get_window_size_in_pixels(window);
+    return presentable_swapchain_exists_inner(capabilities.currentExtent, window_size);
+}
+
+[[nodiscard]] std::optional<VkExtent2D> Swapchain::decide_extent(VulkanEngine &vk, SDL_Window *window){
+    VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
+    const glm::ivec2 window_size = util::get_window_size_in_pixels(window);
+    const VkExtent2D &surface_extent = capabilities.currentExtent;
+
+    const auto decide_based_on_window_size = [&](){
+        const VkExtent2D &max_extent = capabilities.maxImageExtent;
+        const VkExtent2D &min_extent = capabilities.minImageExtent;
+        return VkExtent2D{
+            .width = std::clamp(static_cast<uint32_t>(window_size.x), min_extent.width, max_extent.width),
+            .height = std::clamp(static_cast<uint32_t>(window_size.y), min_extent.height, max_extent.height),
+        };
+    };
+
+    if (!presentable_swapchain_exists_inner(surface_extent, window_size)) return std::nullopt;
+
+    bool program_decides_extent = (surface_extent == VkExtent2D{UINT32_MAX, UINT32_MAX});
+    return program_decides_extent ? decide_based_on_window_size() : surface_extent;
+}
+
 
 void Swapchain::initialize_swapchain(
     VulkanEngine &vk,
@@ -702,8 +737,16 @@ void Swapchain::initialize_swapchain(
     VkPresentModeKHR present_mode,
     const VkSwapchainKHR *old_swapchain)
 {
-    glm::ivec2 size;
-    SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
+    std::optional<VkExtent2D> maybe_size = decide_extent(vk, window);
+    if (!maybe_size.has_value()){
+        auto window_size = util::get_window_size_in_pixels(window);
+        auto surface_extent = vk.get_surface_capabilities().currentExtent;
+        std::println("Tried to initialize swapchain while either window or surface capabilities has size of {{0,0}}.");
+        std::println("window size = {}, {}", window_size.x, window_size.y);
+        std::println("surface_extent= {}, {}", surface_extent.width, surface_extent.height);
+        abort();
+    }
+    auto &size = *maybe_size;
 
     std::array present_modes{
         VK_PRESENT_MODE_FIFO_KHR,
@@ -733,7 +776,7 @@ void Swapchain::initialize_swapchain(
                      .add_pNext(&present_modes_create_info)
                      .add_pNext(&present_scaling_create_info)
                      .set_desired_present_mode(present_mode)
-                     .set_desired_extent(size.x, size.y)
+                     .set_desired_extent(size.width, size.height)
                      .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
                      .set_create_flags(VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT)
                      .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING);

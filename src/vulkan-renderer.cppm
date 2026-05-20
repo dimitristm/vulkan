@@ -591,6 +591,10 @@ public:
     }
 
     void draw(const glm::mat4 &view_transform){
+        if (!Swapchain::presentable_swapchain_exists(vk, window)){
+            std::println("Can't build swapchain");
+            return;
+        }
         update_drawing_surfaces(false);
         draw_gui();
         draw_scene(view_transform);

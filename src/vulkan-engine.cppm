@@ -41,6 +41,7 @@ module;
 
 export module vulkanEngine;
 import vertexBufferAttributeTypes;
+import util;
 #if USE_IMPORT_STD
 import std;
 #endif
@@ -55,6 +56,13 @@ struct APIVersionVulkan{
         return VK_MAKE_VERSION(major, minor, patch);
     }
 };
+
+export bool operator==(const VkExtent2D& lhs, const VkExtent2D& rhs) noexcept{
+    return lhs.width == rhs.width && lhs.height == rhs.height;
+}
+export bool operator!=(const VkExtent2D& lhs, const VkExtent2D& rhs) noexcept{
+    return !(lhs == rhs);
+}
 
 export enum class MSAALevel : std::uint8_t{
     //todo: check physical device limits, they might not support one of these
@@ -176,7 +184,8 @@ export struct VulkanEngine{
     ~VulkanEngine();
 
     void init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level = MSAALevel::OFF);
-    void wait_idle(){ vkDeviceWaitIdle(device); }
+    void wait_idle() const{ vkDeviceWaitIdle(device); }
+    VkSurfaceCapabilitiesKHR get_surface_capabilities() const;
 };
 
 export struct Sampler{
@@ -301,6 +310,12 @@ export struct Swapchain{
     // Only returns VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR, or VK_SUBOPTIMAL_KHR
     // Synchronization primitives are affected even if it errors, do not attempt to present again on error
     [[nodiscard]] VkResult present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index);
+    // Returns true only if a valid swapchain that can be presented to the window can be made constructed.
+    // This is true unless the window size or surface extent is {0,0}.
+    [[nodiscard]] static bool presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window);
+    // If there is not VkExtent2D, that means we can't make a swapchain because either the window size or the
+    // surface extent is {0,0}.
+    [[nodiscard]] static std::optional<VkExtent2D> decide_extent(VulkanEngine &vk, SDL_Window *window);
 
  private:
     void initialize_swapchain(

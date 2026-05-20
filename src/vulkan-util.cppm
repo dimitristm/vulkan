@@ -139,4 +139,3 @@ public:
         add_to_last_upload(s.data(), s.size_bytes());
     }
 };
-
