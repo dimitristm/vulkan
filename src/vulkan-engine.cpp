@@ -44,6 +44,7 @@ module vulkanEngine;
 #if USE_IMPORT_STD
 import std;
 #endif
+import types;
 
 void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){
@@ -143,9 +144,9 @@ static VkRenderingInfo rendering_info(
 static VkBufferImageCopy2 buffer_image_copy2(
     const Image &image,
     uint64_t buffer_offset,
-    uint32_t mip_level,
-    uint32_t base_layer,
-    uint32_t layer_count,
+    u32 mip_level,
+    u32 base_layer,
+    u32 layer_count,
     ImageAspects aspects,
     VkOffset3D img_offset)
 {
@@ -176,7 +177,7 @@ static VkCopyBufferToImageInfo2 copy_buffer_to_image_info2(
     const VulkanBuffer &buffer,
     const Image &image,
     const VkBufferImageCopy2 *regions,
-    uint32_t region_count,
+    u32 region_count,
     VkImageLayout layout)
 {
     return VkCopyBufferToImageInfo2{
@@ -194,7 +195,7 @@ static VkCopyImageToBufferInfo2 copy_image_to_buffer_info2(
     const Image &image,
     const VulkanBuffer &buffer,
     const VkBufferImageCopy2 *regions,
-    uint32_t region_count,
+    u32 region_count,
     VkImageLayout layout)
 {
     return VkCopyImageToBufferInfo2{
@@ -228,8 +229,8 @@ PushConstantsBuilder &PushConstantsBuilder::reset(){
     return *this;
 }
 
-static VkDescriptorPool create_descriptor_pool(VkDevice device, uint32_t pool_size, uint32_t max_sets){
-    const int poolsize_count = 11;
+static VkDescriptorPool create_descriptor_pool(VkDevice device, u32 pool_size, u32 max_sets){
+    const i32 poolsize_count = 11;
     VkDescriptorPoolSize sizes[poolsize_count] = {
         { .type=VK_DESCRIPTOR_TYPE_SAMPLER,                .descriptorCount=pool_size },
         { .type=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount=pool_size },
@@ -461,14 +462,14 @@ Sampler::Sampler(VulkanEngine &vk,
                  VkFilter min_filter,
                  VkSamplerMipmapMode mipmap_mode,
                  VkBool32 anisotropy_enable,
-                 float max_anisotropy,
+                 f32 max_anisotropy,
                  VkSamplerAddressMode address_modeU,
                  VkSamplerAddressMode address_modeV,
                  VkBool32 compare_enable,
                  VkCompareOp compare_op,
-                 float mip_lod_bias,
-                 float min_lod,
-                 float max_lod,
+                 f32 mip_lod_bias,
+                 f32 min_lod,
+                 f32 max_lod,
                  VkBorderColor border_color,
                  VkBool32 unnormalized_coordinates,
                  VkSamplerAddressMode address_modeW)
@@ -504,8 +505,8 @@ Image::Image(
     VkImageUsageFlags image_usage_flags,
     VkMemoryPropertyFlagBits memory_property_flags,
     MSAALevel msaa_level,
-    uint32_t mip_level_count,
-    uint32_t layer_count)
+    u32 mip_level_count,
+    u32 layer_count)
     :
     extent(extent),
     format(format),
@@ -543,7 +544,7 @@ Image::Image(
     vk.created_images.insert({.image=vk_image, .allocation=allocation});
 }
 
-Image::Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count)
+Image::Image(VkImage img, VkExtent2D extent, VkFormat format, u32 layer_count)
 :vk_image(img), allocation(nullptr), extent(extent), format(format), mip_level_count(1), layer_count(layer_count)
 {}
 
@@ -556,8 +557,8 @@ ImageView::ImageView(
     VulkanEngine &vk,
     const Image &img,
     ImageAspects aspects,
-    uint32_t base_mip_level,
-    uint32_t mip_level_count)
+    u32 base_mip_level,
+    u32 mip_level_count)
 {
     // todo add asserts that make sure the aspect you gave makes sense
         VkImageViewCreateInfo view_info{
@@ -652,14 +653,14 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
     initialize_swapchain(vk, window, present_mode);
 }
 
-[[nodiscard]] std::tuple<uint32_t, VkResult> Swapchain::acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
-    uint32_t swapchain_image_index;
+[[nodiscard]] std::tuple<u32, VkResult> Swapchain::acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
+    u32 swapchain_image_index;
     VkResult result = vkAcquireNextImageKHR(vk.device, swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index);
     if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) VK_CHECK(result);
     return {swapchain_image_index, result};
 }
 
-[[nodiscard]] VkResult Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index){
+[[nodiscard]] VkResult Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, u32 swapchain_image_index){
     VkFence free_present_fence = VK_NULL_HANDLE;
     for(const auto &fence : present_fences){
         auto f = GpuFence(fence);
@@ -700,27 +701,27 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
     return result;
 }
 
-[[nodiscard]] static bool presentable_swapchain_exists_inner(const VkExtent2D &surface_extent, const glm::ivec2 &window_size){
-    return surface_extent != VkExtent2D{0, 0} && window_size != glm::ivec2{0,0};
+[[nodiscard]] static bool presentable_swapchain_exists_inner(const VkExtent2D &surface_extent, const ivec2 &window_size){
+    return surface_extent != VkExtent2D{0, 0} && window_size != ivec2{0,0};
 }
 
 [[nodiscard]] bool Swapchain::presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window){
     VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
-    glm::ivec2 window_size = util::get_window_size_in_pixels(window);
+    ivec2 window_size = util::get_window_size_in_pixels(window);
     return presentable_swapchain_exists_inner(capabilities.currentExtent, window_size);
 }
 
 [[nodiscard]] std::optional<VkExtent2D> Swapchain::decide_extent(VulkanEngine &vk, SDL_Window *window){
     VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
-    const glm::ivec2 window_size = util::get_window_size_in_pixels(window);
+    const ivec2 window_size = util::get_window_size_in_pixels(window);
     const VkExtent2D &surface_extent = capabilities.currentExtent;
 
     const auto decide_based_on_window_size = [&](){
         const VkExtent2D &max_extent = capabilities.maxImageExtent;
         const VkExtent2D &min_extent = capabilities.minImageExtent;
         return VkExtent2D{
-            .width = std::clamp(static_cast<uint32_t>(window_size.x), min_extent.width, max_extent.width),
-            .height = std::clamp(static_cast<uint32_t>(window_size.y), min_extent.height, max_extent.height),
+            .width = std::clamp(static_cast<u32>(window_size.x), min_extent.width, max_extent.width),
+            .height = std::clamp(static_cast<u32>(window_size.y), min_extent.height, max_extent.height),
         };
     };
 
@@ -756,7 +757,7 @@ void Swapchain::initialize_swapchain(
     VkSwapchainPresentModesCreateInfoEXT present_modes_create_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_EXT,
         .pNext = nullptr,
-        .presentModeCount = static_cast<uint32_t>(present_modes.size()),
+        .presentModeCount = static_cast<u32>(present_modes.size()),
         .pPresentModes = present_modes.data(),
     };
 
@@ -847,7 +848,7 @@ DescriptorSet::DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
 }
 
 
-void DescriptorSet::update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
+void DescriptorSet::update_storage_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views){
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(views.size());
     for (auto image_view : views){
@@ -864,7 +865,7 @@ void DescriptorSet::update_storage_images(VulkanEngine &vk, uint32_t bind, std::
         .dstSet = set,
         .dstBinding = bind,
         .dstArrayElement{},
-        .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+        .descriptorCount = static_cast<u32>(img_infos.size()),
         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         .pImageInfo = img_infos.data(),
         .pBufferInfo{},
@@ -873,11 +874,11 @@ void DescriptorSet::update_storage_images(VulkanEngine &vk, uint32_t bind, std::
     vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view){
+void DescriptorSet::update_storage_image(VulkanEngine &vk, u32 bind, ImageView &view){
     update_storage_images(vk, bind, std::span<ImageView>(&view, 1));
 }
 
-void DescriptorSet::update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views){
+void DescriptorSet::update_sampled_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views){
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(views.size());
     for (auto &image_view : views){
@@ -894,7 +895,7 @@ void DescriptorSet::update_sampled_images(VulkanEngine &vk, uint32_t bind, std::
         .dstSet = set,
         .dstBinding = bind,
         .dstArrayElement{},
-        .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+        .descriptorCount = static_cast<u32>(img_infos.size()),
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         .pImageInfo = img_infos.data(),
         .pBufferInfo{},
@@ -903,11 +904,11 @@ void DescriptorSet::update_sampled_images(VulkanEngine &vk, uint32_t bind, std::
     vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view){
+void DescriptorSet::update_sampled_image(VulkanEngine &vk, u32 bind, ImageView &view){
     update_sampled_images(vk, bind, std::span<ImageView>(&view, 1));
 }
 
-void DescriptorSet::update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers) {
+void DescriptorSet::update_samplers(VulkanEngine &vk, u32 bind, std::span<Sampler> samplers) {
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(samplers.size());
 
@@ -925,7 +926,7 @@ void DescriptorSet::update_samplers(VulkanEngine &vk, uint32_t bind, std::span<S
         .dstSet = set,
         .dstBinding = bind,
         .dstArrayElement{},
-        .descriptorCount = static_cast<uint32_t>(img_infos.size()),
+        .descriptorCount = static_cast<u32>(img_infos.size()),
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
         .pImageInfo = img_infos.data(),
         .pBufferInfo = nullptr,
@@ -935,11 +936,11 @@ void DescriptorSet::update_samplers(VulkanEngine &vk, uint32_t bind, std::span<S
     vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler){
+void DescriptorSet::update_sampler(VulkanEngine &vk, u32 bind, Sampler &sampler){
     update_samplers(vk, bind, std::span<Sampler>(&sampler, 1));
 }
 
-void DescriptorSet::update_storage_buffers(VulkanEngine &vk, uint32_t bind, std::span<StorageBuffer> buffers) {
+void DescriptorSet::update_storage_buffers(VulkanEngine &vk, u32 bind, std::span<StorageBuffer> buffers) {
     std::vector<VkDescriptorBufferInfo> buf_infos;
     buf_infos.reserve(buffers.size());
     for (auto &buffer : buffers) {
@@ -955,7 +956,7 @@ void DescriptorSet::update_storage_buffers(VulkanEngine &vk, uint32_t bind, std:
         .dstSet = set,
         .dstBinding = bind,
         .dstArrayElement = 0,
-        .descriptorCount = static_cast<uint32_t>(buf_infos.size()),
+        .descriptorCount = static_cast<u32>(buf_infos.size()),
         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .pImageInfo = nullptr,
         .pBufferInfo = buf_infos.data(),
@@ -964,7 +965,7 @@ void DescriptorSet::update_storage_buffers(VulkanEngine &vk, uint32_t bind, std:
     vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_storage_buffer(VulkanEngine &vk, uint32_t bind, StorageBuffer &buffer) {
+void DescriptorSet::update_storage_buffer(VulkanEngine &vk, u32 bind, StorageBuffer &buffer) {
     update_storage_buffers(vk, bind, std::span<StorageBuffer>(&buffer, 1));
 }
 
@@ -982,7 +983,7 @@ Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
     // find what the size of the file is by looking up the location of the cursor
     // because the cursor is at the end, it gives the size directly in bytes
     size_t fileSize = (size_t)file.tellg();
-    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+    std::vector<u32> buffer(fileSize / sizeof(u32));
     file.seekg(0);
     file.read((char*)buffer.data(), fileSize);
     file.close();
@@ -991,7 +992,7 @@ Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
     VkShaderModuleCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     createInfo.pNext = nullptr;
-    createInfo.codeSize = buffer.size() * sizeof(uint32_t);
+    createInfo.codeSize = buffer.size() * sizeof(u32);
     createInfo.pCode = buffer.data();
 
     if (vkCreateShaderModule(vk.device, &createInfo, nullptr, &module) != VK_SUCCESS) {
@@ -1002,7 +1003,7 @@ Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
 }
 
 static bool push_constants_valid(const std::optional<std::vector<VkPushConstantRange>> &push_constants){
-    const int max_push_constant_size_bytes = 128;
+    const i32 max_push_constant_size_bytes = 128;
     if (push_constants.has_value()){
         for (const auto &pconstant : push_constants.value()){
             if (pconstant.offset + pconstant.size > max_push_constant_size_bytes){
@@ -1037,12 +1038,12 @@ PipelineLayout::PipelineLayout(
     const std::optional<std::vector<VkPushConstantRange>> &push_constants)
 {
     // These are the minimums required by vulkan 1.3 for all devices, exceeding them would mean not supporting some devices.
-    const int max_descriptor_sets_in_shader = 4;
+    const i32 max_descriptor_sets_in_shader = 4;
     assert(descriptor_sets.size() <= max_descriptor_sets_in_shader && "Error: over 4 descriptor sets bound to one shader. This would make the shader not run on all hardware.");
     assert(push_constants_valid(push_constants));
 
     std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
-    int i = 0;
+    i32 i = 0;
     for (const auto &set : descriptor_sets) {
         desc_set_layouts.at(i++) = set.layout;
     }
@@ -1051,9 +1052,9 @@ PipelineLayout::PipelineLayout(
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags{},
-        .setLayoutCount = static_cast<uint32_t>(descriptor_sets.size()),
+        .setLayoutCount = static_cast<u32>(descriptor_sets.size()),
         .pSetLayouts = desc_set_layouts.data(),
-        .pushConstantRangeCount = push_constants.has_value() ? static_cast<uint32_t>(push_constants->size()) : 0,
+        .pushConstantRangeCount = push_constants.has_value() ? static_cast<u32>(push_constants->size()) : 0,
         .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
     };
     VK_CHECK(vkCreatePipelineLayout(vk.device, &layout_create_info, nullptr, &layout));
@@ -1071,7 +1072,7 @@ data(malloc(data_buffer_max_capacity_in_bytes))
 {
     assert(total_data_size >= 4 && "Specialization info data must be at least 4 bytes large");
     assert(total_data_size % 4 == 0 && "It only ever makes sense for the size of a specialization data buffer to be a multiple of 4");
-    entries.reserve(data_buffer_max_capacity_in_bytes/sizeof(int32_t));
+    entries.reserve(data_buffer_max_capacity_in_bytes/sizeof(i32));
     if(data == nullptr) { abort(); }
 }
 
@@ -1087,7 +1088,7 @@ SpecializationInfo &SpecializationInfo::reset(){
 const VkSpecializationInfo *SpecializationInfo::get_vk_specialization_info(){
     if (!finalized){
         info =  VkSpecializationInfo{
-            .mapEntryCount = static_cast<uint32_t>(entries.size()),
+            .mapEntryCount = static_cast<u32>(entries.size()),
             .pMapEntries = entries.data(),
             .dataSize = data_size_in_bytes,
             .pData = data,
@@ -1215,12 +1216,12 @@ ReadbackBuffer::ReadbackBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
 
 IndexBuffer::IndexBuffer(VulkanEngine &vk, uint64_t total_indexes)
 :VulkanBuffer(vk,
-                total_indexes * sizeof(uint32_t),
+                total_indexes * sizeof(u32),
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 0, 0)
 {}
 
-static VkCommandBufferAllocateInfo make_VkCommandBufferAllocateInfo(const CommandPool &pool, uint32_t command_buffer_count){
+static VkCommandBufferAllocateInfo make_VkCommandBufferAllocateInfo(const CommandPool &pool, u32 command_buffer_count){
     return VkCommandBufferAllocateInfo{
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
@@ -1235,7 +1236,7 @@ CommandBuffer::CommandBuffer(const VulkanEngine &vk, const CommandPool &pool){
     VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, &buffer));
 }
 
-void CommandBuffer::make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, int how_many_buffers_to_append){
+void CommandBuffer::make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append){
     auto alloc_info = make_VkCommandBufferAllocateInfo(pool, how_many_buffers_to_append);
     thread_local std::vector<VkCommandBuffer> vk_buffers;
     vk_buffers.resize(how_many_buffers_to_append);
@@ -1305,7 +1306,7 @@ void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst
         .pNext = nullptr,
         .srcBuffer = src.buffer,
         .dstBuffer = dst.buffer,
-        .regionCount = static_cast<uint32_t>(ranges.size()),
+        .regionCount = static_cast<u32>(ranges.size()),
         .pRegions = ranges.data()
     };
     vkCmdCopyBuffer2(buffer, &copy_info);
@@ -1330,9 +1331,9 @@ void CommandBuffer::copy_buffer_to_image(
     const VulkanBuffer &buffer,
     const Image &image,
     uint64_t buffer_offset,
-    uint32_t mip_level,
-    uint32_t base_layer,
-    uint32_t layer_count,
+    u32 mip_level,
+    u32 base_layer,
+    u32 layer_count,
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{}) const
 {
@@ -1358,9 +1359,9 @@ void CommandBuffer::copy_image_to_buffer(
     const Image &image,
     const VulkanBuffer &buffer,
     uint64_t buffer_offset,
-    uint32_t mip_level,
-    uint32_t base_layer,
-    uint32_t layer_count,
+    u32 mip_level,
+    u32 base_layer,
+    u32 layer_count,
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{}) const
 {
@@ -1384,7 +1385,7 @@ void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC/DST_OPTIMAL.
-void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const {
+void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, u32 src_mip_level, u32 dst_mip_level) const {
     assert((src.extent.height == dst.extent.height) && "copy_image is designed for images of the same extent.");// todo make copy_image_regions
     assert((src.extent.width == dst.extent.width) && "copy_image is designed for images of the same extent.");
     assert(src.layer_count == dst.layer_count && "cop_image is designed for images with the same amount of layers.");
@@ -1425,10 +1426,10 @@ void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects 
 void CommandBuffer::blit(
     const Image &src,
     const Image &dst,
-    glm::ivec2 src_top_left,
-    glm::ivec2 src_bottom_right,
-    glm::ivec2 dst_top_left,
-    glm::ivec2 dst_bottom_right,
+    ivec2 src_top_left,
+    ivec2 src_bottom_right,
+    ivec2 dst_top_left,
+    ivec2 dst_bottom_right,
     ImageAspects aspects) const // todo add VkCmdCopyImage function for when we don't need to blit
 {
     assert(src.layer_count == dst.layer_count);
@@ -1489,7 +1490,7 @@ void CommandBuffer::bind_descriptor_set(const ComputePipeline &pipeline, Descrip
     bind_descriptor_sets(pipeline, {set});
 }
 
-void CommandBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z) const{
+void CommandBuffer::dispatch(u32 x, u32 y, u32 z) const{
     vkCmdDispatch(this->buffer, x, y, z);
 }
 
@@ -1497,7 +1498,7 @@ void CommandBuffer::end() const{
     VK_CHECK(vkEndCommandBuffer(this->buffer));
 }
 
-DescriptorSetBuilder &DescriptorSetBuilder::bind(uint32_t binding, VkDescriptorType type, uint32_t count, VkShaderStageFlagBits accessible_stages_flags){
+DescriptorSetBuilder &DescriptorSetBuilder::bind(u32 binding, VkDescriptorType type, u32 count, VkShaderStageFlagBits accessible_stages_flags){
     finalized = false;
     VkDescriptorSetLayoutBinding new_bind{
         .binding = binding,
@@ -1519,7 +1520,7 @@ DescriptorSet DescriptorSetBuilder::build(VulkanEngine &vk){
         VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_ci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
             .pNext = nullptr,
-            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .bindingCount = static_cast<u32>(bindings.size()),
             .pBindingFlags = binding_flags.data(),
         };
 
@@ -1527,7 +1528,7 @@ DescriptorSet DescriptorSetBuilder::build(VulkanEngine &vk){
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = &binding_flags_ci,
             .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .bindingCount = static_cast<u32>(bindings.size()),
             .pBindings = bindings.data(),
         };
         VK_CHECK(vkCreateDescriptorSetLayout(vk.device, &info, nullptr, &layout));

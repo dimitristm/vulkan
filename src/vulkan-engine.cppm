@@ -40,7 +40,7 @@ module;
 #endif
 
 export module vulkanEngine;
-import vertexBufferAttributeTypes;
+import types;
 import util;
 #if USE_IMPORT_STD
 import std;
@@ -48,11 +48,11 @@ import std;
 
 
 struct APIVersionVulkan{
-    uint32_t major;
-    uint32_t minor;
-    uint32_t patch;
+    u32 major;
+    u32 minor;
+    u32 patch;
 
-    [[nodiscard]] uint32_t to_vk_enum()const{
+    [[nodiscard]] u32 to_vk_enum()const{
         return VK_MAKE_VERSION(major, minor, patch);
     }
 };
@@ -64,7 +64,7 @@ export bool operator!=(const VkExtent2D& lhs, const VkExtent2D& rhs) noexcept{
     return !(lhs == rhs);
 }
 
-export enum class MSAALevel : std::uint8_t{
+export enum class MSAALevel : u8{
     //todo: check physical device limits, they might not support one of these
     // Can be cast into a VkSampleCountFlagBits
     OFF = VK_SAMPLE_COUNT_1_BIT,
@@ -77,12 +77,12 @@ export template <typename T>
 struct PushConstant {
     static_assert(std::is_trivially_copyable_v<T>, "Push constant type must be trivially copyable");
 
-    const uint32_t offset;
-    const uint32_t size;
+    const u32 offset;
+    const u32 size;
     const VkShaderStageFlags shader_stages;
     T data;
 
-    PushConstant(uint32_t offset, VkShaderStageFlags shader_stages, const T& data = {})
+    PushConstant(u32 offset, VkShaderStageFlags shader_stages, const T& data = {})
     :
     offset(offset),
     size(sizeof(T)),
@@ -92,7 +92,7 @@ struct PushConstant {
 };
 
 export class PushConstantsBuilder{
-    uint32_t current_last_byte_used = 0;
+    u32 current_last_byte_used = 0;
     std::vector<VkPushConstantRange> ranges;
 
     static bool range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags);
@@ -132,7 +132,7 @@ export struct VulkanEngine{
     VkPhysicalDevice physical_device;
     VkDevice device;
     VkQueue graphics_queue;
-    uint32_t graphics_queue_family;
+    u32 graphics_queue_family;
     VmaAllocator allocator;
     VkDescriptorPool descriptor_pool;
     APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
@@ -195,14 +195,14 @@ export struct Sampler{
             VkFilter min_filter,
             VkSamplerMipmapMode mipmap_mode,
             VkBool32 anisotropy_enable,
-            float max_anisotropy,
+            f32 max_anisotropy,
             VkSamplerAddressMode address_modeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             VkSamplerAddressMode address_modeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             VkBool32 compare_enable = VK_FALSE,
             VkCompareOp compare_op = VK_COMPARE_OP_ALWAYS,
-            float mip_lod_bias = 0,
-            float min_lod = 0.0f,
-            float max_lod = VK_LOD_CLAMP_NONE,
+            f32 mip_lod_bias = 0,
+            f32 min_lod = 0.0f,
+            f32 max_lod = VK_LOD_CLAMP_NONE,
             VkBorderColor border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
             VkBool32 unnormalized_coordinates = VK_FALSE,
             VkSamplerAddressMode address_modeW = VK_SAMPLER_ADDRESS_MODE_REPEAT
@@ -221,8 +221,8 @@ export struct Image{
     VmaAllocation allocation;
     VkExtent2D extent;
     VkFormat format;
-    uint32_t mip_level_count;
-    uint32_t layer_count;
+    u32 mip_level_count;
+    u32 layer_count;
 
     [[nodiscard]] VkFormat get_format() const { return format; }
 
@@ -233,11 +233,11 @@ export struct Image{
         VkImageUsageFlags image_usage_flags,
         VkMemoryPropertyFlagBits memory_property_flags,
         MSAALevel msaa_level,
-        uint32_t mip_level_count,
-        uint32_t layer_count
+        u32 mip_level_count,
+        u32 layer_count
     );
 
-    Image(VkImage img, VkExtent2D extent, VkFormat format, uint32_t layer_count);
+    Image(VkImage img, VkExtent2D extent, VkFormat format, u32 layer_count);
 
     void erase_self(VulkanEngine &vk);
 
@@ -257,8 +257,8 @@ export struct ImageView{
         VulkanEngine &vk,
         const Image &img,
         ImageAspects aspects,
-        uint32_t base_mip_level,
-        uint32_t mip_level_count
+        u32 base_mip_level,
+        u32 mip_level_count
     );
 
     ImageView(VkImageView vk_view);
@@ -305,11 +305,11 @@ export struct Swapchain{
     // VK_ERROR_OUT_OF_DATE_KHR (must remake swapchain and call acquire again)
     // VK_SUBOPTIMAL_KHR (must use the swapchain image normally and then remake the swapchain at a later time)
     // the non-VK_SUCCESS results are typically returned when things like the window being resized or moved to another monitor happen.
-    [[nodiscard]] std::tuple<uint32_t, VkResult> acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const;
+    [[nodiscard]] std::tuple<u32, VkResult> acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const;
 
     // Only returns VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR, or VK_SUBOPTIMAL_KHR
     // Synchronization primitives are affected even if it errors, do not attempt to present again on error
-    [[nodiscard]] VkResult present(VulkanEngine &vk, GpuSemaphore wait_sema, uint32_t swapchain_image_index);
+    [[nodiscard]] VkResult present(VulkanEngine &vk, GpuSemaphore wait_sema, u32 swapchain_image_index);
     // Returns true only if a valid swapchain that can be presented to the window can be made constructed.
     // This is true unless the window size or surface extent is {0,0}.
     [[nodiscard]] static bool presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window);
@@ -341,7 +341,7 @@ export struct CommandPool{
 
 export struct VulkanBuffer{
     VkBuffer buffer;
-    uint64_t capacity_in_bytes;
+    u64 capacity_in_bytes;
     VmaAllocation allocation;
 private:
     VkDeviceAddress device_address;
@@ -351,7 +351,7 @@ public:
 
     VulkanBuffer(
         VulkanEngine &vk,
-        uint64_t capacity_in_bytes,
+        u64 capacity_in_bytes,
         VkBufferUsageFlags usage_flags,
         VmaAllocationCreateFlags vma_flags,
         VkMemoryPropertyFlags memory_property_flags_required,
@@ -369,7 +369,7 @@ public:
 
 // A GPU-side buffer for the gpu to read from and write to.
 export struct StorageBuffer : public VulkanBuffer{
-    StorageBuffer(VulkanEngine &vk, uint64_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
+    StorageBuffer(VulkanEngine &vk, u64 size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
 };
 
 // Used to get data from Host to Device. For performance reasons, host should write into it in sequentially, not at random.
@@ -380,7 +380,7 @@ private:
 public:
     void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes);
+    StagingBuffer(VulkanEngine &vk, u64 size_in_bytes);
 };
 
 // The opposite of a staging buffer, can be used to copy gpu resources to the cpu or the gpu might store its result in it directly
@@ -391,20 +391,20 @@ private:
 public:
     void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    ReadbackBuffer(VulkanEngine &vk, uint64_t size_in_bytes);
+    ReadbackBuffer(VulkanEngine &vk, u64 size_in_bytes);
 };
 
 export struct IndexBuffer : public VulkanBuffer{
     static const VkIndexType index_type = VK_INDEX_TYPE_UINT32;
-    IndexBuffer(VulkanEngine &vk, uint64_t total_indexes);
+    IndexBuffer(VulkanEngine &vk, u64 total_indexes);
 };
 
 export template <typename VertexStruct>
 struct VertexBuffer : public VulkanBuffer{
     static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
-    static const uint32_t stride = sizeof(VertexStruct);
+    static const u32 stride = sizeof(VertexStruct);
 
-    VertexBuffer(VulkanEngine &vk, uint64_t element_count)
+    VertexBuffer(VulkanEngine &vk, u64 element_count)
     :VulkanBuffer(vk,
                  sizeof(VertexStruct) * element_count,
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -418,18 +418,18 @@ struct VertexBuffer : public VulkanBuffer{
         using U = std::remove_cvref_t<T>;
 
         // This list contains only widely supported formats.
-        if constexpr      (std::is_same_v<U, int8_norm_t>)   return VK_FORMAT_R8_SNORM;
-        else if constexpr (std::is_same_v<U, int16_norm_t>)  return VK_FORMAT_R16_SNORM;
-        else if constexpr (std::is_same_v<U, int8_t>)        return VK_FORMAT_R8_SINT;
-        else if constexpr (std::is_same_v<U, int16_t>)       return VK_FORMAT_R16_SINT;
-        else if constexpr (std::is_same_v<U, int32_t>)       return VK_FORMAT_R32_SINT;
-        else if constexpr (std::is_same_v<U, uint8_norm_t>)  return VK_FORMAT_R8_UNORM;
-        else if constexpr (std::is_same_v<U, uint16_norm_t>) return VK_FORMAT_R16_UNORM;
-        else if constexpr (std::is_same_v<U, uint8_t>)       return VK_FORMAT_R8_UINT;
-        else if constexpr (std::is_same_v<U, uint16_t>)      return VK_FORMAT_R16_UINT;
-        else if constexpr (std::is_same_v<U, uint32_t>)      return VK_FORMAT_R32_UINT;
-        else if constexpr (std::is_same_v<U, float>)         return VK_FORMAT_R32_SFLOAT;
-        //else if constexpr (std::is_same_v<U, double>)        return VK_FORMAT_R64_SFLOAT; unsupported by most hardware (~27% support on gpuinfo.org)
+        if constexpr      (std::is_same_v<U, i8_norm_t>)   return VK_FORMAT_R8_SNORM;
+        else if constexpr (std::is_same_v<U, i16_norm_t>)  return VK_FORMAT_R16_SNORM;
+        else if constexpr (std::is_same_v<U, i8>)          return VK_FORMAT_R8_SINT;
+        else if constexpr (std::is_same_v<U, i16>)         return VK_FORMAT_R16_SINT;
+        else if constexpr (std::is_same_v<U, i32>)         return VK_FORMAT_R32_SINT;
+        else if constexpr (std::is_same_v<U, u8_norm_t>)   return VK_FORMAT_R8_UNORM;
+        else if constexpr (std::is_same_v<U, u16_norm_t>)  return VK_FORMAT_R16_UNORM;
+        else if constexpr (std::is_same_v<U, u8>)          return VK_FORMAT_R8_UINT;
+        else if constexpr (std::is_same_v<U, u16>)         return VK_FORMAT_R16_UINT;
+        else if constexpr (std::is_same_v<U, u32>)         return VK_FORMAT_R32_UINT;
+        else if constexpr (std::is_same_v<U, f32>)         return VK_FORMAT_R32_SFLOAT;
+        //else if constexpr (std::is_same_v<U, f64>)         return VK_FORMAT_R64_SFLOAT; unsupported by most hardware (~27% support on gpuinfo.org)
 
         else if constexpr (std::is_same_v<U, ivec2_norm8>)   return VK_FORMAT_R8G8_SNORM;
         else if constexpr (std::is_same_v<U, ivec2_norm16>)  return VK_FORMAT_R16G16_SNORM;
@@ -444,34 +444,33 @@ struct VertexBuffer : public VulkanBuffer{
         else if constexpr (std::is_same_v<U, uvec4_norm8>)   return VK_FORMAT_R8G8B8A8_UNORM;
         else if constexpr (std::is_same_v<U, uvec4_norm16>)  return VK_FORMAT_R16G16B16A16_UNORM;
 
-        else if constexpr (std::is_same_v<U, glm::i8vec2>)   return VK_FORMAT_R8G8_SINT;
-        else if constexpr (std::is_same_v<U, glm::i8vec3>)   return VK_FORMAT_R8G8B8_SINT; // ~82%
-        else if constexpr (std::is_same_v<U, glm::i8vec4>)   return VK_FORMAT_R8G8B8A8_SINT;
-        else if constexpr (std::is_same_v<U, glm::i16vec2>)  return VK_FORMAT_R16G16_SINT;
-        else if constexpr (std::is_same_v<U, glm::i16vec3>)  return VK_FORMAT_R16G16B16_SINT; // ~78%
-        else if constexpr (std::is_same_v<U, glm::i16vec4>)  return VK_FORMAT_R16G16B16A16_SINT;
-        else if constexpr (std::is_same_v<U, glm::ivec2>)    return VK_FORMAT_R32G32_SINT;
-        else if constexpr (std::is_same_v<U, glm::ivec3>)    return VK_FORMAT_R32G32B32_SINT;
-        else if constexpr (std::is_same_v<U, glm::ivec4>)    return VK_FORMAT_R32G32B32A32_SINT;
-        else if constexpr (std::is_same_v<U, glm::u8vec2>)   return VK_FORMAT_R8G8_UINT;
-        else if constexpr (std::is_same_v<U, glm::u8vec3>)   return VK_FORMAT_R8G8B8_UINT; // ~82%
-        else if constexpr (std::is_same_v<U, glm::u8vec4>)   return VK_FORMAT_R8G8B8A8_UINT;
-        else if constexpr (std::is_same_v<U, glm::u16vec2>)  return VK_FORMAT_R16G16_UINT;
-        else if constexpr (std::is_same_v<U, glm::u16vec3>)  return VK_FORMAT_R16G16B16_UINT; // ~78%
-        else if constexpr (std::is_same_v<U, glm::u16vec4>)  return VK_FORMAT_R16G16B16A16_UINT;
-        else if constexpr (std::is_same_v<U, glm::uvec2>)    return VK_FORMAT_R32G32_UINT;
-        else if constexpr (std::is_same_v<U, glm::uvec3>)    return VK_FORMAT_R32G32B32_UINT;
-        else if constexpr (std::is_same_v<U, glm::uvec4>)    return VK_FORMAT_R32G32B32A32_UINT;
+        else if constexpr (std::is_same_v<U, i8vec2>)        return VK_FORMAT_R8G8_SINT;
+        else if constexpr (std::is_same_v<U, i8vec3>)        return VK_FORMAT_R8G8B8_SINT; // ~82%
+        else if constexpr (std::is_same_v<U, i8vec4>)        return VK_FORMAT_R8G8B8A8_SINT;
+        else if constexpr (std::is_same_v<U, i16vec2>)       return VK_FORMAT_R16G16_SINT;
+        else if constexpr (std::is_same_v<U, i16vec3>)       return VK_FORMAT_R16G16B16_SINT; // ~78%
+        else if constexpr (std::is_same_v<U, i16vec4>)       return VK_FORMAT_R16G16B16A16_SINT;
+        else if constexpr (std::is_same_v<U, ivec2>)         return VK_FORMAT_R32G32_SINT;
+        else if constexpr (std::is_same_v<U, ivec3>)         return VK_FORMAT_R32G32B32_SINT;
+        else if constexpr (std::is_same_v<U, ivec4>)         return VK_FORMAT_R32G32B32A32_SINT;
+        else if constexpr (std::is_same_v<U, u8vec2>)        return VK_FORMAT_R8G8_UINT;
+        else if constexpr (std::is_same_v<U, u8vec3>)        return VK_FORMAT_R8G8B8_UINT; // ~82%
+        else if constexpr (std::is_same_v<U, u8vec4>)        return VK_FORMAT_R8G8B8A8_UINT;
+        else if constexpr (std::is_same_v<U, u16vec2>)       return VK_FORMAT_R16G16_UINT;
+        else if constexpr (std::is_same_v<U, u16vec3>)       return VK_FORMAT_R16G16B16_UINT; // ~78%
+        else if constexpr (std::is_same_v<U, u16vec4>)       return VK_FORMAT_R16G16B16A16_UINT;
+        else if constexpr (std::is_same_v<U, uvec2>)         return VK_FORMAT_R32G32_UINT;
+        else if constexpr (std::is_same_v<U, uvec3>)         return VK_FORMAT_R32G32B32_UINT;
+        else if constexpr (std::is_same_v<U, uvec4>)         return VK_FORMAT_R32G32B32A32_UINT;
 
-        else if constexpr (std::is_same_v<U, glm::vec2>)     return VK_FORMAT_R32G32_SFLOAT;
-        else if constexpr (std::is_same_v<U, glm::vec3>)     return VK_FORMAT_R32G32B32_SFLOAT;
-        else if constexpr (std::is_same_v<U, glm::vec4>)     return VK_FORMAT_R32G32B32A32_SFLOAT;
+        else if constexpr (std::is_same_v<U, fvec2>)         return VK_FORMAT_R32G32_SFLOAT;
+        else if constexpr (std::is_same_v<U, fvec3>)         return VK_FORMAT_R32G32B32_SFLOAT;
+        else if constexpr (std::is_same_v<U, fvec4>)         return VK_FORMAT_R32G32B32A32_SFLOAT;
 
-        else if constexpr (std::is_same_v<U, int32_A2R10G10B10_t>)          return VK_FORMAT_A2R10G10B10_SINT_PACK32;
-        else if constexpr (std::is_same_v<U, int32_A2R10G10B10_norm_t>)     return VK_FORMAT_A2B10G10R10_SNORM_PACK32;
-        else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_t>)         return VK_FORMAT_A2R10G10B10_UINT_PACK32;
-        else if constexpr (std::is_same_v<U, uint32_A2R10G10B10_norm_t>)    return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-
+        else if constexpr (std::is_same_v<U, i32_A2R10G10B10_t>)           return VK_FORMAT_A2R10G10B10_SINT_PACK32;
+        else if constexpr (std::is_same_v<U, i32_A2R10G10B10_norm_t>)      return VK_FORMAT_A2B10G10R10_SNORM_PACK32;
+        else if constexpr (std::is_same_v<U, u32_A2R10G10B10_t>)           return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+        else if constexpr (std::is_same_v<U, u32_A2R10G10B10_norm_t>)      return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
 
         std::string name{field_name};
         printf("Your vertex struct conainted a field named %s which has a type that isn't supported as a vertex attribute.", name.c_str());
@@ -481,12 +480,12 @@ struct VertexBuffer : public VulkanBuffer{
     }
 
     [[nodiscard]] static constexpr std::array<VkVertexInputAttributeDescription, vertex_attribute_count>
-    get_vertex_attribute_descriptions(uint32_t binding = 0, uint32_t first_location = 0)
+    get_vertex_attribute_descriptions(u32 binding = 0, u32 first_location = 0)
     {
         std::array<VkVertexInputAttributeDescription, vertex_attribute_count> vertex_attribute_descriptions;
-        uint32_t curr_location = first_location;
-        uint32_t curr_offset = 0;
-        int i = 0;
+        u32 curr_location = first_location;
+        u32 curr_offset = 0;
+        i32 i = 0;
         boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
             vertex_attribute_descriptions[i++] = {
                 .location = curr_location,
@@ -507,14 +506,14 @@ export struct DescriptorSet{
 
     DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout);
 
-    void update_storage_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
-    void update_storage_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
-    void update_sampled_images(VulkanEngine &vk, uint32_t bind, std::span<ImageView> views);
-    void update_sampled_image(VulkanEngine &vk, uint32_t bind, ImageView &view);
-    void update_samplers(VulkanEngine &vk, uint32_t bind, std::span<Sampler> samplers);
-    void update_sampler(VulkanEngine &vk, uint32_t bind, Sampler &sampler);
-    void update_storage_buffers(VulkanEngine &vk, uint32_t bind, std::span<StorageBuffer> buffers);
-    void update_storage_buffer(VulkanEngine &vk, uint32_t bind, StorageBuffer &buffer);
+    void update_storage_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views);
+    void update_storage_image(VulkanEngine &vk, u32 bind, ImageView &view);
+    void update_sampled_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views);
+    void update_sampled_image(VulkanEngine &vk, u32 bind, ImageView &view);
+    void update_samplers(VulkanEngine &vk, u32 bind, std::span<Sampler> samplers);
+    void update_sampler(VulkanEngine &vk, u32 bind, Sampler &sampler);
+    void update_storage_buffers(VulkanEngine &vk, u32 bind, std::span<StorageBuffer> buffers);
+    void update_storage_buffer(VulkanEngine &vk, u32 bind, StorageBuffer &buffer);
 };
 
 struct Shader{
@@ -569,14 +568,14 @@ public:
     SpecializationInfo(size_t total_data_size = 128);
 
     template<typename T>
-    SpecializationInfo &add_entry(uint32_t constant_ID, T constant_value){
+    SpecializationInfo &add_entry(u32 constant_ID, T constant_value){
         static_assert(
-            std::is_same_v<T, int32_t> ||
-            std::is_same_v<T, uint32_t> ||
-            std::is_same_v<T, float> ||
-            std::is_same_v<T, double> ||
+            std::is_same_v<T, i32> ||
+            std::is_same_v<T, u32> ||
+            std::is_same_v<T, f32> ||
+            std::is_same_v<T, f64> ||
             std::is_same_v<T, VkBool32>,
-            "Specialization constants can only be of the following types: int32_t, uint32_t, float, double, VkBool32"
+            "Specialization constants can only be of the following types: i32, u32, f32, f64, VkBool32"
         );
         static_assert(sizeof(T) == 4 || sizeof(T) == 8);
 
@@ -589,7 +588,7 @@ public:
 
         finalized = false;
 
-        uint32_t offset = data_size_in_bytes;
+        u32 offset = data_size_in_bytes;
         entries.emplace_back(constant_ID, offset, sizeof(T));
         memcpy((std::byte*)data + offset, &constant_value, sizeof(T));
         data_size_in_bytes += sizeof(T);
@@ -690,7 +689,7 @@ struct GraphicsPipeline{
             .flags{},
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &vertex_binding_description,
-            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_attribute_descriptions.size()),
+            .vertexAttributeDescriptionCount = static_cast<u32>(vertex_attribute_descriptions.size()),
             .pVertexAttributeDescriptions = vertex_attribute_descriptions.data(),
         };
 
@@ -819,15 +818,15 @@ export struct BarrierInfo{
     VkPipelineStageFlags2 dst_stage_mask;
     VkAccessFlags2 dst_access_mask;
     ImageAspects aspects;
-    uint32_t base_mip_level = 0;
-    uint32_t mip_level_count = VK_REMAINING_MIP_LEVELS;
+    u32 base_mip_level = 0;
+    u32 mip_level_count = VK_REMAINING_MIP_LEVELS;
 };
 
 export struct CommandBuffer{
     VkCommandBuffer buffer;
     CommandBuffer(const VulkanEngine &vk, const CommandPool &pool);
     CommandBuffer(VkCommandBuffer vk_buffer):buffer(vk_buffer){}
-    static void make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, int how_many_buffers_to_append);
+    static void make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append);
     void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const;
     void restart(bool one_time_submit) const;
     void submit(
@@ -842,13 +841,13 @@ export struct CommandBuffer{
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
     void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
     void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, uint64_t buffer_offset, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
     void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const;
     void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, uint64_t buffer_offset, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
     void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const;
     void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const;
-    void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, uint32_t src_mip_level, uint32_t dst_mip_level) const;
+    void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, u32 src_mip_level, u32 dst_mip_level) const;
 
     template <typename T>
     void draw_indexed(
@@ -917,8 +916,8 @@ export struct CommandBuffer{
         VkViewport viewport = {
             .x = 0,
             .y = 0,
-            .width = static_cast<float>(draw_extent.width),
-            .height = static_cast<float>(draw_extent.height),
+            .width = static_cast<f32>(draw_extent.width),
+            .height = static_cast<f32>(draw_extent.height),
             .minDepth = 0.0f,
             .maxDepth = 1.0f,
         };
@@ -943,7 +942,7 @@ export struct CommandBuffer{
         VkExtent2D draw_extent,
         const VertexBuffer<T> &vertex_buffer,
         const IndexBuffer &index_buffer,
-        uint32_t index_count) const
+        u32 index_count) const
     {
         VkRenderingAttachmentInfo color_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -1003,8 +1002,8 @@ export struct CommandBuffer{
         VkViewport viewport = {
             .x = 0,
             .y = 0,
-            .width = static_cast<float>(draw_extent.width),
-            .height = static_cast<float>(draw_extent.height),
+            .width = static_cast<f32>(draw_extent.width),
+            .height = static_cast<f32>(draw_extent.height),
             .minDepth = 0.0f,
             .maxDepth = 1.0f,
         };
@@ -1053,7 +1052,7 @@ private:
         .pMemoryBarriers{},
         .bufferMemoryBarrierCount{},
         .pBufferMemoryBarriers{},
-        .imageMemoryBarrierCount = static_cast<uint32_t>(image_barriers.size()),
+        .imageMemoryBarrierCount = static_cast<u32>(image_barriers.size()),
         .pImageMemoryBarriers = image_barriers.data(),
         };
     }
@@ -1064,7 +1063,7 @@ public:
         static_assert((std::is_same_v<std::remove_cvref_t<BarrierInfo_T>, BarrierInfo> && ...), "Arguments to CommandBuffer::barrier must be BarrierInfo types.");
         std::array<VkImageMemoryBarrier2, sizeof...(BarrierInfo_T)> image_barriers;
 
-        int i = 0;
+        i32 i = 0;
         const auto add_image_barrier = [&](const BarrierInfo& barrier_info){
             image_barriers[i++] = image_memory_barrier2(barrier_info);
         };
@@ -1088,10 +1087,10 @@ public:
     void blit(
         const Image &src,
         const Image &dst,
-        glm::ivec2 src_top_left,
-        glm::ivec2 src_bottom_right,
-        glm::ivec2 dst_top_left,
-        glm::ivec2 dst_bottom_right,
+        ivec2 src_top_left,
+        ivec2 src_bottom_right,
+        ivec2 dst_top_left,
+        ivec2 dst_bottom_right,
         ImageAspects aspects
     )const;
 
@@ -1105,13 +1104,13 @@ public:
 
 private:
     void bind_descriptor_sets_inner(VkPipelineBindPoint bind_point, std::initializer_list<DescriptorSet> sets, VkPipelineLayout layout) const{
-        const int max_sets = 4;
+        const i32 max_sets = 4;
         if (sets.size() > max_sets){
             assert(false && "Too many desc sets");
             abort();
         };
         VkDescriptorSet vk_sets[max_sets];
-        int i = 0;
+        i32 i = 0;
         for(const auto &set : sets){
             vk_sets[i++] = set.set;
         }
@@ -1160,7 +1159,7 @@ public:
                            &push_constant.data);
     }
 
-    void dispatch(uint32_t x, uint32_t y, uint32_t z) const;
+    void dispatch(u32 x, u32 y, u32 z) const;
     void end() const;
 };
 
@@ -1171,7 +1170,7 @@ export struct DescriptorSetBuilder{
     VkDescriptorSetLayout layout{};
     bool finalized = false;
 
-    DescriptorSetBuilder &bind(uint32_t binding, VkDescriptorType type, uint32_t count = 1, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL);
+    DescriptorSetBuilder &bind(u32 binding, VkDescriptorType type, u32 count = 1, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL);
 
     DescriptorSet build(VulkanEngine &vk);
 

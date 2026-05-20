@@ -2,6 +2,7 @@ module;
 
 #include <vulkan/vulkan_core.h>
 #include <bits/stdint-uintn.h>
+#include <glm/vec2.hpp>
 
 #if !USE_IMPORT_STD
 #include <bits/std_function.h>
@@ -14,6 +15,7 @@ import std;
 #endif
 
 import vulkanEngine;
+import types;
 
 
 template <typename T>
@@ -66,20 +68,20 @@ export class HostToDeviceUploader{
     std::vector<QueuedBufferUpload> queued_buffer_uploads;
     std::vector<QueuedImageUpload> queued_image_uploads;
  
-    uint64_t used_staging_buffer_bytes;
+    u64 used_staging_buffer_bytes;
     struct FreeStagingRegion{
-        uint64_t offset;
-        uint64_t size;
+        u64 offset;
+        u64 size;
     };
-    FreeStagingRegion get_free_staging_region(uint64_t desired_size, bool require_desired_size);
-    void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset);
+    FreeStagingRegion get_free_staging_region(u64 desired_size, bool require_desired_size);
+    void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, u64 dst_offset);
     void stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy);
 
     const VulkanBuffer *active_upload_dst = nullptr;
-    uint64_t active_upload_next_dst_offset = 0;
+    u64 active_upload_next_dst_offset = 0;
 
 public:
-    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, uint64_t staging_buffer_size);
+    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, u64 staging_buffer_size);
 
     // The next three functions and their comments describe the core of how this class is used.
 
@@ -87,7 +89,7 @@ public:
     // If you have multiple uploads for a single destination buffer, there will be less driver overhead if you stage them
     // all before calling begin_uploads.
     // The uploads made with this function are put into the "Queued" category.
-    void queue_upload(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
+    void queue_upload(const void *src, const VulkanBuffer &dst, u64 byte_count, u64 dst_offset = 0);
     // Non-blocking. You must call finish_uploads before doing anything that assumes the data has been uploaded to the GPU.
     // Uploads affected by this function are put into the "In Progress" category. They are REMOVED from the "Queued" category.
     // Uploads may be coalesced into one, so if you have X "Queued" uploads you may get Y "In Progress" uploads where Y<X.
@@ -99,15 +101,15 @@ public:
     // Finished uploads are removed from all categories.
     void finish_in_progress_uploads();
     void begin_and_finish_uploads();
-    void queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset = 0);
+    void queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, u64 byte_count, u64 dst_offset = 0);
 
-    void queue_upload(const void *src, const Image &dst, uint64_t byte_count, uint32_t mip_level, uint32_t base_layer, uint32_t layer_count, ImageAspects aspects, const VkOffset3D &img_offset = {});
+    void queue_upload(const void *src, const Image &dst, u64 byte_count, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset = {});
 
     // Continues from the last upload you queued. Essentially appends to the buffer you were writing to.
     // Intended for small writes. Passing an src larger than the internal staging buffer's size crashes.
-    void add_to_last_upload(const void *src, uint64_t byte_count);
+    void add_to_last_upload(const void *src, u64 byte_count);
     // An empty queue_upload. Helpful for use with add_to_last_upload.
-    void start_queue_upload(const VulkanBuffer &dst, uint64_t dst_offset = 0);
+    void start_queue_upload(const VulkanBuffer &dst, u64 dst_offset = 0);
 
     bool queued_uploads_exist();
     bool in_progress_uploads_exist();
@@ -117,12 +119,12 @@ public:
 
     // Below are just helpers, no new functionality
     template <typename T> requires (!SpanCompatible<T>)
-    void queue_upload(const T &src, const VulkanBuffer &dst, uint64_t dst_offset = 0) {
+    void queue_upload(const T &src, const VulkanBuffer &dst, u64 dst_offset = 0) {
         queue_upload(&src, dst, sizeof(T), dst_offset);
     }
 
     template <SpanCompatible T>
-    void queue_upload(const T &src, const VulkanBuffer &dst, uint64_t dst_offset = 0) {
+    void queue_upload(const T &src, const VulkanBuffer &dst, u64 dst_offset = 0) {
         auto s = std::span{src};
         queue_upload(s.data(), dst, s.size_bytes(), dst_offset);
     }
@@ -137,5 +139,73 @@ public:
     void add_to_last_upload(const T &src) {
         auto s = std::span{src};
         add_to_last_upload(s.data(), s.size_bytes());
+    }
+};
+
+export struct Texture : public Image{
+    Texture(VulkanEngine &vk, u32 width, u32 height, u32 mip_level_count)
+    :Image(vk,
+           {.width=width,.height=height},
+           VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           mip_level_count,
+           1){}
+    ImageView make_view(VulkanEngine &vk)
+    {
+        return  {vk, *this, ImageAspects::COLOR, 0, VK_REMAINING_MIP_LEVELS};
+    }
+};
+
+export struct DrawImage{
+    Image img;
+    ImageView view;
+    DrawImage(VulkanEngine &vk, const ivec2 &size)
+    :img(vk,
+           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+           VK_FORMAT_R16G16B16A16_SFLOAT,
+           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+           | VK_IMAGE_USAGE_STORAGE_BIT
+           | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           1, 1),
+    view(vk, img, ImageAspects::COLOR, 0, 1)
+    {}
+    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
+        img.erase_self(vk);
+        view.erase_self(vk);
+        *this = DrawImage(vk, new_window_size);
+    }
+};
+
+export struct DepthImage{
+    Image img;
+    ImageView view;
+    DepthImage(VulkanEngine &vk, const ivec2 &size)
+    :img(vk,
+           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+           VK_FORMAT_D32_SFLOAT,
+           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           MSAALevel::OFF,
+           1, 1),
+    view(vk, img, ImageAspects::DEPTH, 0, 1)
+    {}
+    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
+        img.erase_self(vk);
+        view.erase_self(vk);
+        *this = DepthImage(vk, new_window_size);
+    }
+    void set_layout(const CommandBuffer &cmd_buffer){
+        cmd_buffer.barrier(BarrierInfo{
+            .img = img, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+            .src_access_mask = 0,
+            .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .aspects = ImageAspects::DEPTH
+        });
     }
 };

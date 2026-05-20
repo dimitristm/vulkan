@@ -1,6 +1,5 @@
 module;
 
-
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -72,7 +71,7 @@ struct LocalDeduplicationMaps{
     // on each new file. Go through this first instead of rehashing every time.
     // Global idx is the idx into the vectors of GltfScenes.
     // Not being in local does not mean it can't already be in global.
-    using LocalToGlobalIdx = std::unordered_map<uint32_t, uint32_t>;
+    using LocalToGlobalIdx = std::unordered_map<u32, u32>;
     LocalToGlobalIdx gltf_meshes;
     LocalToGlobalIdx gltf_materials;
     LocalToGlobalIdx gltf_textures;
@@ -107,7 +106,7 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
     }
     const auto asset_dir = filepath.parent_path();
 
-    auto get_or_add_sampler = [&](uint32_t local_idx) -> uint32_t {
+    auto get_or_add_sampler = [&](u32 local_idx) -> u32 {
         if (auto it = local_dedup.gltf_samplers.find(local_idx);
             it != local_dedup.gltf_samplers.end())
             return it->second;
@@ -125,14 +124,14 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             it != deduplication_maps.gltf_samplers.end()) {
             local_dedup.gltf_samplers[local_idx] = it->second;
             return it->second; }
-        auto idx = static_cast<uint32_t>(samplers.size());
+        auto idx = static_cast<u32>(samplers.size());
         samplers.push_back(gs);
         deduplication_maps.gltf_samplers[h] = idx;
         local_dedup.gltf_samplers[local_idx] = idx;
         return idx;
     };
 
-    auto get_or_add_image = [&](uint32_t local_img_idx) -> uint32_t {
+    auto get_or_add_image = [&](u32 local_img_idx) -> u32 {
         if (auto it = local_dedup.gltf_images.find(local_img_idx);
             it != local_dedup.gltf_images.end())
             return it->second;
@@ -177,36 +176,36 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
 
         auto img_data = std::make_unique<std::byte[]>(raw_bytes.size());
         std::memcpy(img_data.get(), raw_bytes.data(), raw_bytes.size());
-        auto idx = static_cast<uint32_t>(gltf_images.size());
-        gltf_images.push_back(GltfImage{ .image=std::move(img_data), .size=static_cast<uint32_t>(raw_bytes.size()) });
+        auto idx = static_cast<u32>(gltf_images.size());
+        gltf_images.push_back(GltfImage{ .image=std::move(img_data), .size=static_cast<u32>(raw_bytes.size()) });
         deduplication_maps.gltf_images[h] = idx;
         local_dedup.gltf_images[local_img_idx] = idx;
         return idx;
     };
 
-    auto get_or_add_texture = [&](uint32_t local_tex_idx) -> uint32_t {
+    auto get_or_add_texture = [&](u32 local_tex_idx) -> u32 {
         if (auto it = local_dedup.gltf_textures.find(local_tex_idx);
             it != local_dedup.gltf_textures.end())
             return it->second;
 
         const auto &fg_tex = asset.textures[local_tex_idx];
 
-        uint32_t sampler_idx = fg_tex.samplerIndex.has_value()
-            ? get_or_add_sampler(static_cast<uint32_t>(*fg_tex.samplerIndex))
-            : [&]() -> uint32_t {
+        u32 sampler_idx = fg_tex.samplerIndex.has_value()
+            ? get_or_add_sampler(static_cast<u32>(*fg_tex.samplerIndex))
+            : [&]() -> u32 {
                 GltfSampler def = make_default_sampler();
                 XXH64_hash_t h  = XXH64(&def, sizeof(def), 0);
                 if (auto it = deduplication_maps.gltf_samplers.find(h);
                     it != deduplication_maps.gltf_samplers.end())
                     return it->second;
-                auto idx = static_cast<uint32_t>(samplers.size());
+                auto idx = static_cast<u32>(samplers.size());
                 samplers.push_back(def);
                 deduplication_maps.gltf_samplers[h] = idx;
                 return idx;
             }();
 
-        uint32_t image_idx = get_or_add_image(
-            static_cast<uint32_t>(fg_tex.imageIndex.value()));
+        u32 image_idx = get_or_add_image(
+            static_cast<u32>(fg_tex.imageIndex.value()));
 
         GltfTexture gt{ .image_idx=image_idx, .sampler_idx=sampler_idx };
         XXH64_hash_t tex_h = XXH64(&gt, sizeof(gt), 0);
@@ -217,14 +216,14 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             return it->second;
         }
 
-        auto idx = static_cast<uint32_t>(textures.size());
+        auto idx = static_cast<u32>(textures.size());
         textures.push_back(gt);
         deduplication_maps.gltf_textures[tex_h] = idx;
         local_dedup.gltf_textures[local_tex_idx] = idx;
         return idx;
     };
 
-    auto get_or_add_material = [&](uint32_t local_mat_idx) -> uint32_t {
+    auto get_or_add_material = [&](u32 local_mat_idx) -> u32 {
         if (auto it = local_dedup.gltf_materials.find(local_mat_idx);
             it != local_dedup.gltf_materials.end())
             return it->second;
@@ -234,15 +233,15 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
 
         if (fm.pbrData.baseColorTexture.has_value())
             mat.base_color_tex_idx =
-                get_or_add_texture(static_cast<uint32_t>(fm.pbrData.baseColorTexture->textureIndex));
+                get_or_add_texture(static_cast<u32>(fm.pbrData.baseColorTexture->textureIndex));
 
         if (fm.normalTexture.has_value())
             mat.normal_tex_idx =
-                get_or_add_texture(static_cast<uint32_t>(fm.normalTexture->textureIndex));
+                get_or_add_texture(static_cast<u32>(fm.normalTexture->textureIndex));
 
         if (fm.pbrData.metallicRoughnessTexture.has_value())
             mat.metallic_roughness_tex_idx =
-                get_or_add_texture(static_cast<uint32_t>(fm.pbrData.metallicRoughnessTexture->textureIndex));
+                get_or_add_texture(static_cast<u32>(fm.pbrData.metallicRoughnessTexture->textureIndex));
 
         const auto &bc = fm.pbrData.baseColorFactor;
         mat.base_color_factor = { bc[0], bc[1], bc[2], bc[3] };
@@ -256,14 +255,14 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             return it->second;
         }
 
-        auto idx = static_cast<uint32_t>(materials.size());
+        auto idx = static_cast<u32>(materials.size());
         materials.push_back(mat);
         deduplication_maps.gltf_materials[h] = idx;
         local_dedup.gltf_materials[local_mat_idx] = idx;
         return idx;
     };
 
-    auto get_or_add_vertices = [&](const fastgltf::Primitive &prim) -> uint32_t {
+    auto get_or_add_vertices = [&](const fastgltf::Primitive &prim) -> u32 {
         const auto *pos_it  = prim.findAttribute("POSITION");
         const auto *norm_it = prim.findAttribute("NORMAL");
         const auto *uv_it   = prim.findAttribute("TEXCOORD_0");
@@ -308,35 +307,35 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             it != deduplication_maps.vertices.end())
             return it->second;
 
-        auto idx = static_cast<uint32_t>(vertices.size());
+        auto idx = static_cast<u32>(vertices.size());
         vertices.push_back(std::move(verts));
         deduplication_maps.vertices[h] = idx;
         return idx;
     };
 
-    auto get_or_add_indices = [&](const fastgltf::Primitive &prim) -> uint32_t {
-        std::vector<uint32_t> idx_buf;
-        fastgltf::iterateAccessorWithIndex<uint32_t>(
+    auto get_or_add_indices = [&](const fastgltf::Primitive &prim) -> u32 {
+        std::vector<u32> idx_buf;
+        fastgltf::iterateAccessorWithIndex<u32>(
             asset, asset.accessors[prim.indicesAccessor.value()],
-            [&](uint32_t v, std::size_t) { idx_buf.push_back(v); });
+            [&](u32 v, std::size_t) { idx_buf.push_back(v); });
 
-        XXH64_hash_t h = XXH64(idx_buf.data(), idx_buf.size() * sizeof(uint32_t), 0);
+        XXH64_hash_t h = XXH64(idx_buf.data(), idx_buf.size() * sizeof(u32), 0);
         if (auto it = deduplication_maps.indices.find(h);
             it != deduplication_maps.indices.end())
             return it->second;
 
-        auto idx = static_cast<uint32_t>(indices.size());
+        auto idx = static_cast<u32>(indices.size());
         indices.push_back(std::move(idx_buf));
         deduplication_maps.indices[h] = idx;
         return idx;
     };
 
-    auto get_or_add_mesh_primitive = [&](const fastgltf::Primitive &prim) -> uint32_t {
+    auto get_or_add_mesh_primitive = [&](const fastgltf::Primitive &prim) -> u32 {
         GltfMeshPrimitive mp{};
         mp.vertices_idx = get_or_add_vertices(prim);
         mp.indices_idx  = get_or_add_indices(prim);
         mp.material_idx = prim.materialIndex.has_value()
-            ? get_or_add_material(static_cast<uint32_t>(*prim.materialIndex))
+            ? get_or_add_material(static_cast<u32>(*prim.materialIndex))
             : UINT32_MAX;
 
         XXH64_hash_t h = XXH64(&mp, sizeof(mp), 0);
@@ -344,14 +343,14 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             it != deduplication_maps.gltf_mesh_primitives.end())
             return it->second;
 
-        auto idx = static_cast<uint32_t>(mesh_primitives.size());
+        auto idx = static_cast<u32>(mesh_primitives.size());
         mesh_primitives.push_back(mp);
         deduplication_maps.gltf_mesh_primitives[h] = idx;
         return idx;
     };
 
-    auto make_mesh = [&](uint32_t local_mesh_idx,
-                         const glm::mat4 &world_transform) -> uint32_t {
+    auto make_mesh = [&](u32 local_mesh_idx,
+                         const fmat4 &world_transform) -> u32 {
         const auto &fg_mesh = asset.meshes[local_mesh_idx];
         GltfMesh gm{};
         gm.transform = world_transform;
@@ -364,7 +363,7 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
         XXH64_reset(state, 0);
         XXH64_update(state, &gm.transform, sizeof(gm.transform));
         XXH64_update(state, gm.mesh_prim_idx.data(),
-                     gm.mesh_prim_idx.size() * sizeof(uint32_t));
+                     gm.mesh_prim_idx.size() * sizeof(u32));
         XXH64_hash_t h = XXH64_digest(state);
         XXH64_freeState(state);
 
@@ -372,7 +371,7 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             it != deduplication_maps.gltf_meshes.end())
             return it->second;
 
-        auto idx = static_cast<uint32_t>(meshes.size());
+        auto idx = static_cast<u32>(meshes.size());
         meshes.push_back(std::move(gm));
         deduplication_maps.gltf_meshes[h] = idx;
         return idx;
@@ -381,12 +380,12 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
     auto walk_nodes = [&](const fastgltf::Scene &scene) -> GltfScene {
         GltfScene scene_info{};
 
-        struct StackEntry { std::size_t node_idx; glm::mat4 parent_transform; };
+        struct StackEntry { std::size_t node_idx; fmat4 parent_transform; };
         std::vector<StackEntry> stack;
         stack.reserve(64);
 
         for (auto root_idx : scene.nodeIndices)
-            stack.push_back({ .node_idx=root_idx, .parent_transform=glm::mat4(1.f) });
+            stack.push_back({ .node_idx=root_idx, .parent_transform=fmat4(1.f) });
 
         while (!stack.empty()) {
             auto [node_idx, parent_xform] = stack.back();
@@ -395,22 +394,22 @@ void GltfScenes::add_scenes(const std::filesystem::path &filepath){
             const auto &node = asset.nodes[node_idx];
 
             // DecomposeNodeMatrices option guarantees TRS variant
-            glm::mat4 local_xform(1.f);
+            fmat4 local_xform(1.f);
             if (const auto *trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-                glm::mat4 T = glm::translate(glm::mat4(1.f),
-                    glm::vec3(trs->translation[0], trs->translation[1], trs->translation[2]));
+                fmat4 T = glm::translate(fmat4(1.f),
+                    fvec3(trs->translation[0], trs->translation[1], trs->translation[2]));
                 glm::quat q(trs->rotation[3], trs->rotation[0],
                             trs->rotation[1], trs->rotation[2]);
-                glm::mat4 R = glm::mat4_cast(q);
-                glm::mat4 S = glm::scale(glm::mat4(1.f),
-                    glm::vec3(trs->scale[0], trs->scale[1], trs->scale[2]));
+                fmat4 R = glm::mat4_cast(q);
+                fmat4 S = glm::scale(fmat4(1.f),
+                    fvec3(trs->scale[0], trs->scale[1], trs->scale[2]));
                 local_xform = T * R * S;
             }
-            glm::mat4 world_xform = parent_xform * local_xform;
+            fmat4 world_xform = parent_xform * local_xform;
 
             if (node.meshIndex.has_value()) {
-                uint32_t mesh_idx = make_mesh(
-                    static_cast<uint32_t>(*node.meshIndex), world_xform);
+                u32 mesh_idx = make_mesh(
+                    static_cast<u32>(*node.meshIndex), world_xform);
                 scene_info.mesh_idx.push_back(mesh_idx);
             }
 

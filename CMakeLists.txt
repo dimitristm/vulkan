@@ -116,11 +116,12 @@ target_sources(vulkan-prog
     PRIVATE FILE_SET CXX_MODULES FILES
         src/gltf.cppm
         src/user-input.cppm
-        src/vertex-buffer-attribute-types.cppm
+        src/types.cppm
         src/vulkan-engine.cppm
         src/vulkan-renderer.cppm
         src/vulkan-util.cppm
         src/util.cppm
+        src/assets.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE

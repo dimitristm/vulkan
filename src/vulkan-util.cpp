@@ -18,6 +18,7 @@ module vulkanUtil;
 import std;
 #endif
 import vulkanEngine;
+import types;
 
 ImmediateSubmitter::ImmediateSubmitter(VulkanEngine &vk, const CommandPool &cmd_pool)
 :submit_fence(vk, false), internal_cmd_buffer(vk, cmd_pool){}
@@ -34,7 +35,7 @@ void ImmediateSubmitter::submit(VulkanEngine &vk, const std::function<void()> &f
 
 HostToDeviceUploader::HostToDeviceUploader(
     VulkanEngine *const vk, const CommandPool cmd_pool,
-    uint64_t staging_buffer_size)
+    u64 staging_buffer_size)
 :vk(vk),
 staging_buffer(*vk, staging_buffer_size),
 cmd_pool(cmd_pool),
@@ -51,9 +52,9 @@ used_staging_buffer_bytes(0)
     CommandBuffer::make_command_buffers(*vk, cmd_buffer_pool, cmd_pool, 64);
 }
 
-HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(uint64_t desired_size, bool require_desired_size){
-    uint64_t remaining_size = staging_buffer.capacity_in_bytes - used_staging_buffer_bytes;
-    assert((int64_t)remaining_size > -1);
+HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(u64 desired_size, bool require_desired_size){
+    u64 remaining_size = staging_buffer.capacity_in_bytes - used_staging_buffer_bytes;
+    assert((i64)remaining_size > -1);
     if (remaining_size == 0 || (require_desired_size && remaining_size < desired_size)) {
         begin_and_finish_uploads();
         remaining_size = staging_buffer.capacity_in_bytes;
@@ -64,7 +65,7 @@ HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_r
     }
 
     FreeStagingRegion region{
-        .offset = static_cast<uint64_t>(used_staging_buffer_bytes),
+        .offset = static_cast<u64>(used_staging_buffer_bytes),
         .size = std::min(desired_size, remaining_size),
     };
     used_staging_buffer_bytes += region.size;
@@ -74,7 +75,7 @@ HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_r
 
 // todo clearer naming convention for dst_offset. which dst? we have the staging as a dst in the memcpy
 // and then we have the dst vulkan buffer. maybe just rename it to dst_vk_buffer.
-void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, uint64_t dst_offset){
+void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, u64 dst_offset){
     std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
                 (char*)src,
                 free_region.size
@@ -109,16 +110,16 @@ void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const voi
     queued_image_uploads.emplace_back(dst, copy);
 }
 
-void HostToDeviceUploader::queue_upload(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset){
+void HostToDeviceUploader::queue_upload(const void *src, const VulkanBuffer &dst, u64 byte_count, u64 dst_offset){
     assert(byte_count != 0);
     active_upload_dst = &dst;
     active_upload_next_dst_offset = dst_offset;
 
-    uint64_t remaining_size = byte_count;
+    u64 remaining_size = byte_count;
     while (remaining_size > 0){
         FreeStagingRegion free_region = get_free_staging_region(remaining_size, false);
 
-        uint64_t bytes_already_written = byte_count - remaining_size;
+        u64 bytes_already_written = byte_count - remaining_size;
         stage_upload(free_region, (const char*)src + bytes_already_written, dst, dst_offset + bytes_already_written );
 
         remaining_size -= free_region.size;
@@ -175,7 +176,7 @@ void HostToDeviceUploader::begin_and_finish_uploads(){
     finish_in_progress_uploads();
 }
 
-void HostToDeviceUploader::queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, uint64_t byte_count, uint64_t dst_offset){
+void HostToDeviceUploader::queue_begin_finish_uploads(const void *src, const VulkanBuffer &dst, u64 byte_count, u64 dst_offset){
     queue_upload(src, dst, byte_count, dst_offset);
     begin_and_finish_uploads();
 }
@@ -199,10 +200,10 @@ size_t HostToDeviceUploader::in_progress_uploads_count(){
 // todo unify this with struct_makers from vulkan-engine.cpp and put it in its own file
 static VkBufferImageCopy2 buffer_image_copy2(
     const Image &image,
-    uint64_t buffer_offset,
-    uint32_t mip_level,
-    uint32_t base_layer,
-    uint32_t layer_count,
+    u64 buffer_offset,
+    u32 mip_level,
+    u32 base_layer,
+    u32 layer_count,
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{})
 {
@@ -232,10 +233,10 @@ static VkBufferImageCopy2 buffer_image_copy2(
 void HostToDeviceUploader::queue_upload(
     const void *src,
     const Image &dst,
-    uint64_t byte_count,
-    uint32_t mip_level,
-    uint32_t base_layer,
-    uint32_t layer_count,
+    u64 byte_count,
+    u32 mip_level,
+    u32 base_layer,
+    u32 layer_count,
     ImageAspects aspects,
     const VkOffset3D &img_offset)
 {
@@ -244,12 +245,12 @@ void HostToDeviceUploader::queue_upload(
     stage_upload(free_region, src, dst, img_region);
 }
 
-void HostToDeviceUploader::start_queue_upload(const VulkanBuffer &dst, uint64_t dst_offset){
+void HostToDeviceUploader::start_queue_upload(const VulkanBuffer &dst, u64 dst_offset){
     active_upload_dst = &dst;
     active_upload_next_dst_offset = dst_offset;
 }
 
-void HostToDeviceUploader::add_to_last_upload(const void *src, uint64_t byte_count){
+void HostToDeviceUploader::add_to_last_upload(const void *src, u64 byte_count){
     assert(active_upload_dst != nullptr);
     assert(byte_count != 0);
 

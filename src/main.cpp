@@ -6,14 +6,15 @@
 import vulkanRenderer;
 import userInput;
 import util;
+import types;
 
 int main(){
     TracyNoop;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window{};
     SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
-    int window_width = 1700;
-    int window_height = 900;
+    i32 window_width = 1700;
+    i32 window_height = 900;
     window = SDL_CreateWindow(
         "Vulkan app",
         window_width,

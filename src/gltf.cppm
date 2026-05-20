@@ -1,8 +1,5 @@
 module;
 
-#include <glm/vec2.hpp>
-#include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan_core.h>
 #include <xxhash/xxhash.h>
@@ -17,6 +14,7 @@ export module gltf;
 import std;
 #endif
 import fastgltf;
+import types;
 
 // Sadly, fastgltf doesn't expose these in the module so we need to keep them here.
 namespace fastgltf {
@@ -44,15 +42,6 @@ template<> struct ElementTraits<glm::mat4> : ElementTraitsBase<glm::mat4, Access
 } // namespace fastgltf
 
 
-
-export struct Vertex {
-    glm::vec3 pos;
-    float u;
-    glm::vec3 normal;
-    float v;
-    glm::vec4 color;
-};
-
 export struct GltfSampler{
     VkFilter mag_filter;
     VkFilter min_filter;
@@ -63,43 +52,43 @@ export struct GltfSampler{
 
 export struct GltfImage {
     std::unique_ptr<std::byte[]> image;
-    uint32_t size;
+    u32 size;
 };
 
 export struct GltfTexture {
-    uint32_t image_idx;
-    uint32_t sampler_idx;
+    u32 image_idx;
+    u32 sampler_idx;
 };
 
 export struct GltfMaterial {
     // texture indices into GltfScenes::textures (UINT32_MAX = not present)
-    uint32_t base_color_tex_idx = UINT32_MAX;
-    uint32_t normal_tex_idx = UINT32_MAX;
-    uint32_t metallic_roughness_tex_idx = UINT32_MAX;
+    u32 base_color_tex_idx = UINT32_MAX;
+    u32 normal_tex_idx = UINT32_MAX;
+    u32 metallic_roughness_tex_idx = UINT32_MAX;
 
     glm::vec4 base_color_factor = {1.f, 1.f, 1.f, 1.f};
-    float metallic_factor = 1.f;
-    float roughness_factor = 1.f;
+    f32 metallic_factor = 1.f;
+    f32 roughness_factor = 1.f;
 };
 
 export struct GltfScene{
-    std::vector<uint32_t> mesh_idx;
+    std::vector<u32> mesh_idx;
 };
 
 export struct GltfMesh{
     glm::mat4 transform;
-    std::vector<uint32_t> mesh_prim_idx;
+    std::vector<u32> mesh_prim_idx;
     std::string name; // Not in the hash
 };
 
 export struct GltfMeshPrimitive{
-    uint32_t vertices_idx;
-    uint32_t indices_idx;
-    uint32_t material_idx;
+    u32 vertices_idx;
+    u32 indices_idx;
+    u32 material_idx;
 };
 
 export struct GltfScenes{
-    using HashToGlobalIdx = std::unordered_map<XXH64_hash_t, uint32_t>;
+    using HashToGlobalIdx = std::unordered_map<XXH64_hash_t, u32>;
     struct DeduplicationMaps{
         // The key of everything that starts with gltf_ is the hash of the actual struct, for instance
         // gltf_mesh contains a hash of a GltfMesh struct.
@@ -125,7 +114,7 @@ export struct GltfScenes{
     std::vector<GltfSampler> samplers;
     std::vector<GltfMaterial> materials;
     std::vector<std::vector<Vertex>> vertices;
-    std::vector<std::vector<uint32_t>> indices;
+    std::vector<std::vector<u32>> indices;
     std::vector<GltfMesh> meshes;
     std::vector<GltfImage> gltf_images;
 

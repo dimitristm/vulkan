@@ -14,6 +14,7 @@ export module userInput;
 #if USING_IMPORT_STD
 import std;
 #endif
+import types;
 
 static bool is_fullscreen(SDL_Window *window) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);
@@ -29,17 +30,17 @@ static void toggle_fullscreen(SDL_Window *window) {
 
 class Camera{
 public:
-    glm::vec3 pos = glm::vec3(0.0f, 0.0f, 3.0f);
-    float mouse_sensitivity = 0.1f;
+    fvec3 pos{0.0f, 0.0f, 3.0f};
+    f32 mouse_sensitivity = 0.1f;
 private:
-    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::vec3 direction = glm::vec3(0.0f, 0.0f, -1.0f);
-    float yaw = -90.f;
-    float pitch = 0.0f;
-    float speed = 0.02;
+    fvec3 up{0.0f, 1.0f, 0.0f};
+    fvec3 direction{0.0f, 0.0f, -1.0f};
+    f32 yaw = -90.f;
+    f32 pitch = 0.0f;
+    f32 speed = 0.02;
 
 public:
-    void update_direction(float mouse_movement_x, float mouse_movement_y){
+    void update_direction(f32 mouse_movement_x, f32 mouse_movement_y){
         yaw += mouse_movement_x * mouse_sensitivity;
         pitch -= mouse_movement_y * mouse_sensitivity;
 
@@ -52,14 +53,14 @@ public:
         direction = glm::normalize(direction);
     }
 
-    [[nodiscard]] glm::mat4 get_view_transform() const {
+    [[nodiscard]] fmat4 get_view_transform() const {
         return glm::lookAt(pos, pos + get_direction(), up);
     }
 
-    [[nodiscard]] float get_yaw() const { return yaw; }
-    [[nodiscard]] float get_pitch() const { return pitch; }
-    [[nodiscard]] const glm::vec3 &get_direction() const { return direction; }
-    [[nodiscard]] const glm::vec3 &get_upwards_vector() const {return up; }
+    [[nodiscard]] f32 get_yaw() const { return yaw; }
+    [[nodiscard]] f32 get_pitch() const { return pitch; }
+    [[nodiscard]] const fvec3 &get_direction() const { return direction; }
+    [[nodiscard]] const fvec3 &get_upwards_vector() const { return up; }
 
     void move_forward(){ pos += speed * direction; }
     void move_left()   { pos -= glm::normalize(glm::cross(direction, up)) * speed; }
@@ -120,7 +121,7 @@ private:
                 return;
             case ControlMode::USER_CONTROLLING_THE_GUI:
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-                glm::ivec2 window_size;
+                ivec2 window_size;
                 SDL_GetWindowSize(window, &window_size.x, &window_size.y);
                 SDL_WarpMouseInWindow(window, window_size.x/2, window_size.y/2);
                 SDL_SetWindowRelativeMouseMode(window, false);

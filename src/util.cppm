@@ -16,19 +16,20 @@ export module util;
 #if USE_IMPORT_STD
 import std;
 #endif
+import types;
 
 
 namespace util{
 export class Duration;
 export class Time;
 
-export glm::ivec2 get_window_size_in_pixels(SDL_Window *window){
-    glm::ivec2 size;
+export ivec2 get_window_size_in_pixels(SDL_Window *window){
+    ivec2 size;
     SDL_GetWindowSizeInPixels(window, &size.x, &size.y);
     return size;
 }
 
-export glm::ivec2 get_monitor_size_in_pixels(SDL_Window *window){
+export ivec2 get_monitor_size_in_pixels(SDL_Window *window){
     SDL_DisplayID display = SDL_GetDisplayForWindow(window);
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
 
@@ -44,13 +45,13 @@ export glm::ivec2 get_monitor_size_in_pixels(SDL_Window *window){
 }
 
 //Assumes a right handed coordinate system. Output Z ranges from 0 to 1, with close objects at 1.
-export glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float horizontal_to_vertical_ratio, float near_z, float far_z){
+export fmat4 perspective_projection(f32 horizontal_fov_in_degrees, f32 horizontal_to_vertical_ratio, f32 near_z, f32 far_z){
     // todo numerical precision is there a reason to pass vertical_to_horizontal_ratio or horizontal to vertical? pick whichever has better precision or if it doesn't matter do h/v
-    const float half_fov = glm::radians(horizontal_fov_in_degrees)/2;
-    float tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
+    const f32 half_fov = glm::radians(horizontal_fov_in_degrees)/2;
+    f32 tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
 
     // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
-    return glm::mat4{
+    return fmat4{
         1/tan,0,0,0,
         0,-horizontal_to_vertical_ratio/tan,0,0,
         0,0,-near_z/(near_z-far_z),-1,
@@ -60,29 +61,29 @@ export glm::mat4 perspective_projection(float horizontal_fov_in_degrees, float h
 
 
 class Duration {
-    double ms = 0.0;
+    f64 ms = 0.0;
 public:
     constexpr Duration() = default;
-    explicit constexpr Duration(double ms):ms(ms){}
+    explicit constexpr Duration(f64 ms):ms(ms){}
 
-    static constexpr Duration from_ms(double ms){
+    static constexpr Duration from_ms(f64 ms){
         return Duration(ms);
     }
 
-    static constexpr Duration from_sec(double sec){
+    static constexpr Duration from_sec(f64 sec){
         return Duration(sec * 1000.0);
     }
 
-    static constexpr Duration from_min(double min){
+    static constexpr Duration from_min(f64 min){
         return Duration(min * 60.0 * 1000.0);
     }
 
-    [[nodiscard]] constexpr double to_ms() const { return ms; }
-    [[nodiscard]] constexpr double to_sec() const { return ms / 1000.0; }
-    [[nodiscard]] constexpr double to_min() const { return ms / (60.0 * 1000.0); }
+    [[nodiscard]] constexpr f64 to_ms() const { return ms; }
+    [[nodiscard]] constexpr f64 to_sec() const { return ms / 1000.0; }
+    [[nodiscard]] constexpr f64 to_min() const { return ms / (60.0 * 1000.0); }
 
     [[nodiscard]] constexpr auto chrono() const{
-        return std::chrono::duration<double, std::milli>(ms);
+        return std::chrono::duration<f64, std::milli>(ms);
     }
 
     constexpr auto operator<=>(const Duration&) const = default;
@@ -122,7 +123,7 @@ public:
     constexpr auto operator<=>(const Time&) const = default;
 
     friend Duration operator-(const Time& a, const Time& b){
-        return Duration::from_ms(std::chrono::duration<double, std::milli>(a.time_point - b.time_point) .count());
+        return Duration::from_ms(std::chrono::duration<f64, std::milli>(a.time_point - b.time_point) .count());
     }
 
     friend Time operator+(const Time& t, const Duration& d){
@@ -218,9 +219,9 @@ export class FrameTimer{
     Timer frame_timer{};
     Duration frame_duration{};
 
-    double ema_fps = 0.0; // EMA = exponential moving average
+    f64 ema_fps = 0.0; // EMA = exponential moving average
     bool frame_limit_enabled = true;
-    int max_fps = 120.0f;
+    i32 max_fps = 120.0f;
 
 public:
     void begin_frame(){
@@ -229,7 +230,7 @@ public:
     }
 
     void end_frame(){
-        if (Duration target = Duration::from_sec(1.0 / static_cast<double>(max_fps));
+        if (Duration target = Duration::from_sec(1.0 / static_cast<f64>(max_fps));
             frame_limit_enabled && frame_timer.elapsed() < target)
         {
             Duration remaining = target - frame_timer.elapsed();
@@ -243,7 +244,7 @@ public:
         frame_timer.end();
         frame_duration = frame_timer.elapsed();
 
-        double instant_fps = 1.0 / frame_duration.to_sec();
+        f64 instant_fps = 1.0 / frame_duration.to_sec();
         ema_fps = ema_fps * 0.9 + instant_fps * 0.1;
     }
 
