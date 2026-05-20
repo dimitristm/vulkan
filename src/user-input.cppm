@@ -116,31 +116,39 @@ public:
 
     const Camera &get_camera() { return camera; }
 
-    void handle_gui_mode_mouse_press(const SDL_MouseButtonEvent &button){
-        if (button.button == SDL_BUTTON_LEFT && control_mode == ControlMode::USER_CONTROLLING_THE_GUI) {
-            set_control_mode(ControlMode::USER_CONTROLLING_THE_CAMERA);
-        }
-    }
-
-    void handle_camera_mode_mouse_motion(const SDL_MouseMotionEvent motion){
-        if (SDL_GetWindowRelativeMouseMode(window)) { camera.update_direction(motion.xrel, motion.yrel); };
-    }
-
-    void handle_camera_mode_key_press(const SDL_KeyboardEvent &key){
-        if (key.scancode == SDL_SCANCODE_ESCAPE && control_mode == ControlMode::USER_CONTROLLING_THE_CAMERA){
-            set_control_mode(ControlMode::USER_CONTROLLING_THE_GUI);
-        }
-        else if (key.scancode == SDL_SCANCODE_P){
-            SDL_WarpMouseInWindow(window, 1697.2461,884.6719);
-        }
-    }
-
     void handle_event(const SDL_Event &event){
         const auto handle_key_press = [this](const SDL_KeyboardEvent &key){
             if (key.scancode == SDL_SCANCODE_F11) toggle_fullscreen(window);
+
+            switch (control_mode){
+            case ControlMode::USER_CONTROLLING_THE_GUI: break;
+            case ControlMode::USER_CONTROLLING_THE_CAMERA:
+                if (key.scancode == SDL_SCANCODE_ESCAPE) set_control_mode(ControlMode::USER_CONTROLLING_THE_GUI);
+                break;
+            }
+        };
+        const auto handle_mouse_motion = [this](const SDL_MouseMotionEvent &motion){
+            switch (control_mode){
+            case ControlMode::USER_CONTROLLING_THE_GUI: break;
+            case ControlMode::USER_CONTROLLING_THE_CAMERA:
+                if (SDL_GetWindowRelativeMouseMode(window)) camera.update_direction(motion.xrel, motion.yrel);
+                break;
+            }
+        };
+        const auto handle_mouse_press = [this](const SDL_MouseButtonEvent &button){
+            switch (control_mode){
+            case ControlMode::USER_CONTROLLING_THE_GUI:
+                if (button.button == SDL_BUTTON_LEFT && !ImGui::GetIO().WantCaptureMouse) {
+                    set_control_mode(ControlMode::USER_CONTROLLING_THE_CAMERA);
+                }
+                break;
+            case ControlMode::USER_CONTROLLING_THE_CAMERA: break;
+            }
         };
         if (event.type == SDL_EVENT_QUIT) { should_quit = true; return; }
         else if (event.type == SDL_EVENT_KEY_DOWN) handle_key_press(event.key);
+        else if (event.type == SDL_EVENT_MOUSE_MOTION) handle_mouse_motion(event.motion);
+        else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) handle_mouse_press(event.button);
     }
 
 
@@ -159,19 +167,9 @@ public:
 
         handle_key_hold();
         SDL_Event event;
-        while (SDL_PollEvent(&event)){
+        while (SDL_PollEvent(&event) && !should_quit){
             ImGui_ImplSDL3_ProcessEvent(&event);
             handle_event(event);
-            switch (control_mode){
-                case ControlMode::USER_CONTROLLING_THE_GUI:
-                    //std::println("WantCaptureMouse: {}, is hovered: {}", ImGui::GetIO().WantCaptureMouse ,ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow));
-                    if (!ImGui::GetIO().WantCaptureMouse && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) { handle_gui_mode_mouse_press(event.button); }
-                    break;
-                case ControlMode::USER_CONTROLLING_THE_CAMERA:
-                    if (event.type == SDL_EVENT_MOUSE_MOTION) { handle_camera_mode_mouse_motion(event.motion); }
-                    else if (event.type == SDL_EVENT_KEY_DOWN) { handle_camera_mode_key_press(event.key); }
-                    break;
-            }
         }
     }
 };
