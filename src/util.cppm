@@ -261,4 +261,14 @@ public:
         ImGui::End();
     }
 };
+
+export struct ByteRange{
+    u64 offset;
+    u64 size;
+};
+
+export template<typename T>
+u64 get_data_size(std::vector<T> vec){
+    return std::size(vec) * sizeof(T);
+}
 }

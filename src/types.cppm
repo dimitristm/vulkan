@@ -149,12 +149,3 @@ export using uvec4_norm8  = norm_vec<u8vec4>;
 export using uvec2_norm16 = norm_vec<u16vec2>;
 export using uvec3_norm16 = norm_vec<u16vec3>;
 export using uvec4_norm16 = norm_vec<u16vec4>;
-
-export struct Vertex {
-    fvec3 pos;
-    f32   u;
-    fvec3 normal;
-    f32   v;
-    fvec4 color;
-};
-

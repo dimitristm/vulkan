@@ -76,6 +76,21 @@ set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_CPP_MODULES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
 
+FetchContent_Declare(
+    KTX
+    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+    GIT_TAG v4.4.2
+    GIT_SHALLOW TRUE
+)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(LIBKTX_VERSION_READ_ONLY OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(KTX)
+
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -93,12 +108,12 @@ target_link_libraries(vulkan-prog
         GPUOpen::VulkanMemoryAllocator
         glm::glm
         fastgltf::module
+        ktx
 )
 
 target_sources(vulkan-prog
     PRIVATE
         src/main.cpp
-        src/gltf.cpp
         src/vulkan-engine.cpp
         src/vulkan-util.cpp
         vendored/vma_compilation_unit.cpp
@@ -114,7 +129,6 @@ target_sources(vulkan-prog
         vendored/tracy/public/TracyClient.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
-        src/gltf.cppm
         src/user-input.cppm
         src/types.cppm
         src/vulkan-engine.cppm
@@ -137,6 +151,8 @@ target_compile_definitions(vulkan-prog PRIVATE
     $<$<BOOL:${TRACY_LTO}>:TRACY_LTO>
     $<$<BOOL:${TRACY_NO_EXIT}>:TRACY_NO_EXIT>
     $<$<BOOL:${TRACY_NO_SAMPLING}>:TRACY_NO_SAMPLING>
+
+    KHRONOS_STATIC
 )
 
 # ---- Shaders ----
