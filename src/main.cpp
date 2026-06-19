@@ -28,22 +28,17 @@ int main(){
     UserInputHandler input_handler(window);
     util::FrameTimer frame_timer;
     std::string a("main assetpack");
-    std::fstream s("/home/user/Projects/vulkan/assets/main.assetpack", std::ios::binary | std::ios::trunc | std::ios::in | std::ios::out);
 
     std::println("1");
-    AssetpackBuilder b(a, s);
+    Assetpack::Builder b(a);
     std::println("2");
     b.add_from_gltf("assets/mytests/BoxTextured.glb")
        // .add_from_gltf("assets/mytests/BoxTextured.glb")
-        .build_shard()
         .add_from_gltf("assets/mytests/1.glb")
         //.add_from_gltf("assets/flight-helmet.glb")
         .build();
-    s.flush();
     std::println("3");
     AssetLoader l;
-    l.check_assetpack(s);
-    std::println("4");
 
     // {
     //     Renderer renderer{window};
