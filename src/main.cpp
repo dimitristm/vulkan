@@ -25,22 +25,21 @@ int main(){
         window_flags
     );
 
-    UserInputHandler input_handler(window);
-    util::FrameTimer frame_timer;
-    std::string a("main assetpack");
+    {
+        UserInputHandler input_handler(window);
+        util::FrameTimer frame_timer;
+        std::string a("assets/mytests/main.assetpack");
 
-    std::println("1");
-    Assetpack::Builder b(a);
-    std::println("2");
-    b.add_from_gltf("assets/mytests/BoxTextured.glb")
-       // .add_from_gltf("assets/mytests/BoxTextured.glb")
-        .add_from_gltf("assets/mytests/1.glb")
-        //.add_from_gltf("assets/flight-helmet.glb")
-        .build();
-    std::println("3");
-    AssetLoader l;
+        // Assetpack::Builder b(a);
+        // b.add_from_gltf("assets/mytests/BoxTextured.glb")
+        //     .add_from_gltf("assets/mytests/BoxTextured.glb")
+        //     .add_from_gltf("assets/mytests/1.glb")
+        //     .build();
+        // std::println("built");
+        AssetLoader l;
+        l.load_assetpack(a);
+        std::println("loaded");
 
-    // {
     //     Renderer renderer{window};
     //     while (!input_handler.should_quit){
     //         frame_timer.begin_frame();
@@ -51,7 +50,7 @@ int main(){
     //         renderer.draw(input_handler.get_camera().get_view_transform());
     //         frame_timer.end_frame();
     //     }
-    // }
+    }
 
     SDL_DestroyWindow(window);
     SDL_Quit();

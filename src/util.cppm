@@ -268,7 +268,7 @@ export struct ByteRange{
 };
 
 export template<typename T>
-u64 get_data_size(std::vector<T> vec){
+u64 get_data_size(const std::vector<T> &vec){
     return std::size(vec) * sizeof(T);
 }
 }

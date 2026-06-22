@@ -1,6 +1,8 @@
 module;
 
 #include "ktx.h"
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
 #include <vulkan/vulkan_core.h>
 #include <glm/glm.hpp>
@@ -8,6 +10,7 @@ module;
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <boost/pfr.hpp>
+#include <SDL3/SDL_asyncio.h>
 
 #if !USE_IMPORT_STD
 #include <unordered_map>
@@ -17,6 +20,7 @@ module;
 #include <cstring>
 #include <variant>
 #include <concepts>
+#include <unordered_set>
 #endif
 
 export module assets;
@@ -140,6 +144,8 @@ struct Sampler {
     [[nodiscard]] XXH128_hash_t hash() const{
         return XXH3_128bits(this, sizeof(Sampler));
     }
+
+    bool operator==(const Sampler&) const = default;
 
 private:
     static VkFilter to_vk_filter(fastgltf::Filter filter) {
@@ -270,9 +276,10 @@ struct IndexedVertices{
 
     // We want to hash before processing to avoid useless work
     bool is_processed = false;
-    XXH128_hash_t hash() const{
+    [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process before hashing");
         XXH3_state_t* state = XXH3_createState();
+        XXH3_128bits_reset(state);
         XXH3_128bits_update(state, verts.data(), util::get_data_size(verts));
         XXH3_128bits_update(state, indices.data(), util::get_data_size(indices));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
@@ -414,6 +421,7 @@ struct Image{
     [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process an image before hashing it");
         XXH3_state_t* state = XXH3_createState();
+        XXH3_128bits_reset(state);
         XXH3_128bits_update(state, pixels, meta.width * meta.height * 4);
         XXH3_128bits_update(state, &type, sizeof(type));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
@@ -432,22 +440,25 @@ struct Header{
         invalid_end_of_file = 0x88F19A99ED09E0C7,
     } signature;
 };
-// Between the Header and ToC, there will be data: images, vertices, indices.
+// Between the Header and ToC, there will be:
+// 1. Data blob: images, vertices, indices.
+// 2. The samplers.
 
 struct TableOfContents{
     std::vector<Scene> scenes;
-    std::vector<Sampler> samplers;
     std::vector<Mesh> meshes;
     std::vector<MeshPrimitive> mesh_primitives;
     std::vector<ImageMetadata> image_metadata;
     std::vector<IndexedVerticesMetadata> indexed_verts_metadata;
 };
 struct Footer{
+    u64 offset_to_samplers;
     u64 offset_to_toc;
+    u64 assetpack_version;
     enum class EndSignature : u64{
         valid_end_of_file = 0x2B7FE37FC301CB84,
         invalid_end_of_file = 0x88F19A99ED09E0C7,
-    } end_sig;
+    } end_signature;
 };
 
 export class Builder{
@@ -462,6 +473,7 @@ export class Builder{
     };
     DeduplicationMaps dedup;
 
+    std::vector<Sampler> samplers;
     TableOfContents toc;
     std::fstream out;
 
@@ -514,8 +526,9 @@ public:
 
         const auto asset_dir = path.parent_path();
 
-        //returns the index of the entry
-        static constexpr auto deduplicate_and_add_ToC_entry =
+        // If "item" is not already in storage, adds "item" as an entry into "storage". Return the index of the entry.
+        // "dedup" must track the entries of storage.
+        static constexpr auto deduplicate_and_add_entry =
         []<Hashable T>(HashToIdx &dedup, T &item, std::vector<T> &storage)->u32
         {
             XXH128_hash_t hash = item.hash();
@@ -545,7 +558,7 @@ public:
 
         const auto create_or_get_default_sampler_idx = [&]()->u32{
             Sampler sampler{};
-            return deduplicate_and_add_ToC_entry(dedup.samplers, sampler, toc.samplers);
+            return deduplicate_and_add_entry(dedup.samplers, sampler, samplers);
         };
 
         const auto create_or_get_default_image_meta_idx = [&](Image::Type type)->u32{
@@ -566,7 +579,7 @@ public:
 
         const auto get_or_add_sampler = [&](u32 gltf_sampler_idx) -> u32{
             Sampler sampler(asset.samplers[gltf_sampler_idx]);
-            return deduplicate_and_add_ToC_entry(dedup.samplers, sampler, toc.samplers);
+            return deduplicate_and_add_entry(dedup.samplers, sampler, samplers);
         };
 
         const auto get_or_add_image = [&](u32 gltf_img_idx, Image::Type type) -> u32{
@@ -698,7 +711,7 @@ public:
                 .metallic_factor = mat.metallic_factor,
                 .roughness_factor = mat.roughness_factor,
             };
-            return deduplicate_and_add_ToC_entry(dedup.mesh_primitives, mp, toc.mesh_primitives);
+            return deduplicate_and_add_entry(dedup.mesh_primitives, mp, toc.mesh_primitives);
         };
 
         const auto get_or_add_mesh = [&](u32 gltf_mesh_idx)->u32{
@@ -706,7 +719,7 @@ public:
             for (const auto &prim : asset.meshes[gltf_mesh_idx].primitives){
                 mesh.mesh_prim_idx.push_back(get_or_add_mesh_primitive(prim));
             }
-            return deduplicate_and_add_ToC_entry(dedup.meshes, mesh, toc.meshes);
+            return deduplicate_and_add_entry(dedup.meshes, mesh, toc.meshes);
         };
 
         const auto walk_nodes = [&](const fastgltf::Scene &fastgltf_scene){
@@ -750,13 +763,23 @@ public:
     }
 
     Builder &build(){
+
+        u64 offset_to_samplers = out.tellp();
+        write_vector(samplers);
+
+        Footer footer{
+            .offset_to_samplers = offset_to_samplers,
+            .offset_to_toc = static_cast<u64>(out.tellp()),
+            .assetpack_version = 0,
+            .end_signature = Footer::EndSignature::valid_end_of_file
+        };
+        static_assert(no_added_padding<Footer>());
+
         write(toc.scenes.size());
         for (const auto &scene : toc.scenes){
             write_vector(scene.mesh_idx);
             write_vector(scene.transforms);
         }
-
-        write_vector(toc.samplers);
 
         write(toc.meshes.size());
         for (const auto &mesh: toc.meshes) write_vector(mesh.mesh_prim_idx);
@@ -774,90 +797,287 @@ public:
         write(toc.indexed_verts_metadata.size());
         for (const auto &idx_ver_meta : toc.indexed_verts_metadata) write_vector(idx_ver_meta.lods);
 
-        Footer footer{.offset_to_toc = static_cast<u64>(out.tellp()), .end_sig = Footer::EndSignature::valid_end_of_file};
-        static_assert(no_added_padding<Footer>());
         write(footer);
 
         Header done{.signature = Header::Signatures::valid};
         out.seekp(0, std::ios::beg);
         write(done.signature);
+        out.flush();
         return *this;
     }
 };
 }
 
+
 export class AssetLoader{
-    struct Offsets{
-        u64 vertex_offset;
-        u64 first_index_offset;
-        bool operator==(const Offsets &other) const noexcept = default;
-    };
-    struct OffsetsHasher{
-        size_t operator()(const Offsets &offsets){
-            static_assert(no_added_padding<Offsets>());
-            return XXH3_64bits(&offsets, sizeof(offsets));
+    class File{
+    public:
+        const std::filesystem::path filepath;
+        SDL_AsyncIO * in;
+        File(const std::filesystem::path &filepath)
+        :filepath(std::filesystem::canonical(filepath)),//todo: make sure we always give a canonical so we don't have to transform it here
+        in(SDL_AsyncIOFromFile(this->filepath.string().c_str(), "r"))
+        {
+            if(in == nullptr){
+                std::println("AssetLoader::File couldn't open file {}. SDL Error: {}", this->filepath.string(), SDL_GetError());
+                abort();
+            }
         }
     };
+    using FileID = u32; //FileID will just be the index into the files vector
 
     struct Scene{
         std::vector<u32> mesh_idx;
-        std::vector<u32> mesh_idx_in_file;
         std::vector<fmat4> transforms;
     };
+
     struct Mesh{
         std::vector<u32> mesh_prim_idx;
-        std::vector<u32> mesh_prim_idx_in_file;
     };
+
     struct MeshPrimitive{
-        u32 index_count;
+        u32 indexed_verts_idx;
         u32 sampler_idx;
-        // Offsets into storage buffers, indexes into vector of Textures
-        struct Loaded{
-            Offsets offsets;
-            u32 albedo_idx;
-            u32 normal_map_idx;
-            u32 metallic_roughness_idx;
-        } loaded;
-        // Offsets into the file, indexes into vector of ImageAssets
-        // which in turn contains offets into files.
-        struct InFile{
-            Offsets offsets;
-            u32 albedo_idx;
-            u32 normal_map_idx;
-            u32 metallic_roughness_idx;
-        } in_file;
+        // Offsets into image assets
+        u32 albedo_idx;
+        u32 normal_map_idx;
+        u32 metallic_roughness_idx;
 
         fvec4 base_color_factor;
         f32 metallic_factor;
         f32 roughness_factor;
     };
+
     struct ImageAsset{
+        FileID file_idx;
         u32 width;
         u32 height;
         VkFormat format;
         std::vector<ByteRange> mips_in_file;
-    };
-    struct AssetFile{
-        std::vector<Scene> scenes;
-        std::vector<Mesh> meshes;
-        std::vector<MeshPrimitive> primitives;
-        std::vector<ImageAsset> image_assets;
-    };
-    std::vector<AssetFile> files;
-    u32 sampler_count = 0;//temporary. todo: remove.
 
-    // Count how many loaded
-    // struct Refcount{
-    //     std::unordered_map<Offsets, u64, OffsetsHasher> vertex;
-    //     std::unordered_map<Offsets, u64, OffsetsHasher> index;
-    //     std::unordered_map<u64, u64> texture;
-    // } refcount;
-    //std::vector<Texture> textures;
-    //std::vector<ImageView> texture_views;
+        static constexpr u32 VULKAN_IMAGE_NOT_LOADED = std::numeric_limits<u32>::max();
+        u32 vulkan_image_idx;
+    };
+
+    struct IndexedVerticesAsset{
+        struct Lod{
+            static constexpr u64 INDEXED_VERTICES_NOT_LOADED = std::numeric_limits<u64>::max();
+            // Index into the vertex buffer, not a byte offset
+            u64 gpu_first_vertex_idx;
+            // Index into the index buffer, not a byte offset
+            u64 gpu_first_index_idx;
+
+            u64 file_vertex_offset;
+            u64 file_index_offset;
+            u32 index_count;
+            [[nodiscard]] u64 vertex_data_size() const { return file_index_offset - file_vertex_offset; }
+            [[nodiscard]] u64 vertex_count() const { return vertex_data_size() / sizeof(Vertex); }
+            [[nodiscard]] u64 index_data_size() const { return index_count * sizeof(u32); }
+        };
+        FileID file_idx;
+        std::vector<Lod> lods;
+    };
+
+    SDL_AsyncIOQueue *queue;
+    std::vector<File> files;
+    std::vector<Scene> scenes;
+    std::vector<Mesh> meshes;
+    std::vector<MeshPrimitive> primitives;
+    std::vector<ImageAsset> image_assets;
+    std::vector<IndexedVerticesAsset> indexed_verts;
+
+    struct SamplerHash {
+        XXH64_hash_t operator()(const Assetpack::Sampler &s) const noexcept{
+            return XXH3_64bits(&s, sizeof(s));
+        }
+    };
+    // Indexes into the vulkan Samplers
+    std::unordered_map<Assetpack::Sampler, u32, SamplerHash> sampler_idx;
+
+    // std::vector<Texture> textures;
+    // std::vector<ImageView> texture_views;
     // StorageBuffer object_transforms;
     // VertexBuffer<Vertex> vertices;
     // StorageBuffer albedo_texture_indices;
     // StorageBuffer normal_map_indices;
     // StorageBuffer matallic_roughness_map;
     // StorageBuffer obj_transform_indices;
+
+public:
+    AssetLoader():queue(SDL_CreateAsyncIOQueue()){
+        if (queue == nullptr){
+            std::println("Could not create async I/O queue: {}", SDL_GetError());
+            abort();
+        }
+    }
+    ~AssetLoader(){
+        for (const auto &file : files){
+            if (!SDL_CloseAsyncIO(file.in, false, queue, nullptr)) {
+                std::println("close failed: {}", SDL_GetError());
+            }
+        }
+        SDL_DestroyAsyncIOQueue(queue);
+    }
+
+    FileID load_assetpack(const std::filesystem::path &filepath){
+        files.emplace_back(filepath);
+        FileID file_id = files.size() - 1;
+        const File& file = files.back();
+
+        u64 file_size = [&](){
+            i64 raw_size = SDL_GetAsyncIOSize(file.in);
+            if (raw_size < 0) {
+                std::println("Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
+                abort();
+            }
+            return raw_size;
+        }();
+
+        if (file_size < sizeof(Assetpack::Header) + sizeof(Assetpack::Footer)) {
+            std::println("'{}': file too small", file.filepath.string());
+            abort();
+        }
+
+        std::vector<std::byte> buf(file_size);
+        {
+            SDL_AsyncIOOutcome outcome{};
+            SDL_ReadAsyncIO(file.in, buf.data(), 0, file_size, queue, nullptr);
+            if (!SDL_WaitAsyncIOResult(queue, &outcome, -1) || outcome.result != SDL_ASYNCIO_COMPLETE) {
+                std::println("Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
+                abort();
+            }
+        }
+
+        const std::byte* p = buf.data();
+        const std::byte* end = buf.data() + file_size;
+
+        const auto read = [&]<typename T>(T& v) {
+            assert(p + sizeof(T) <= end && "read past end of file");
+            std::memcpy(&v, p, sizeof(T));
+            p += sizeof(T);
+        };
+        const auto read_vec = [&]<typename T>(std::vector<T>& v) {
+            size_t n{}; read(n);
+            assert(p + n * sizeof(T) <= end && "read_vec past end of file");
+            v.resize(n);
+            std::memcpy(v.data(), p, n * sizeof(T));
+            p += n * sizeof(T);
+        };
+        const auto seek = [&](u64 offset) {
+            assert(offset <= file_size && "seek past end of file");
+            p = buf.data() + offset;
+        };
+
+        // Header
+        Assetpack::Header header{};
+        read(header);
+        if (header.signature == Assetpack::Header::Signatures::unfinished) {
+            std::println("'{}': build() did not complete", file.filepath.string());
+            abort();
+        }
+        if (header.signature != Assetpack::Header::Signatures::valid) {
+            std::println("'{}': unrecognised header signature 0x{:016X}", file.filepath.string(),
+                static_cast<u64>(header.signature));
+            abort();
+        }
+
+        // Footer
+        Assetpack::Footer footer{};
+        seek(file_size - sizeof(Assetpack::Footer));
+        read(footer);
+        if (footer.end_signature != Assetpack::Footer::EndSignature::valid_end_of_file) {
+            std::println("'{}': bad footer end signature", file.filepath.string());
+            abort();
+        }
+
+        // Samplers
+        std::vector<Assetpack::Sampler> file_samplers;
+        seek(footer.offset_to_samplers);
+        read_vec(file_samplers);
+        for (const auto& s : file_samplers) {
+            if (!sampler_idx.contains(s)) {
+                u32 idx = sampler_idx.size();
+                sampler_idx[s] = idx;
+            }
+        }
+
+        seek(footer.offset_to_toc);
+
+        u32 mesh_base = meshes.size();
+        u32 prim_base = primitives.size();
+        u32 img_base = image_assets.size();
+        u32 iv_base = indexed_verts.size();
+
+        // Scenes
+        size_t scene_count{}; read(scene_count);
+        for (size_t i = 0; i < scene_count; ++i) {
+            Scene sc{};
+            read_vec(sc.mesh_idx);
+            read_vec(sc.transforms);
+            for (auto& idx : sc.mesh_idx) idx += mesh_base;
+            scenes.push_back(std::move(sc));
+        }
+
+        // Meshes
+        size_t mesh_count{}; read(mesh_count);
+        for (size_t i = 0; i < mesh_count; ++i) {
+            Mesh m{};
+            read_vec(m.mesh_prim_idx);
+            for (auto& idx : m.mesh_prim_idx) idx += prim_base;
+            meshes.push_back(std::move(m));
+        }
+
+        // Primitives
+        {
+            std::vector<Assetpack::MeshPrimitive> file_prims;
+            read_vec(file_prims);
+            for (const auto& fp : file_prims) {
+                primitives.push_back({
+                    .indexed_verts_idx = fp.indexed_verts_meta_idx + iv_base,
+                    .sampler_idx = sampler_idx.at(file_samplers[fp.sampler_idx]),
+                    .albedo_idx = fp.albedo_meta_idx + img_base,
+                    .normal_map_idx = fp.normal_map_meta_idx + img_base,
+                    .metallic_roughness_idx = fp.metallic_roughness_meta_idx + img_base,
+                    .base_color_factor = fp.base_color_factor,
+                    .metallic_factor = fp.metallic_factor,
+                    .roughness_factor = fp.roughness_factor,
+                });
+            }
+        }
+
+        // Image metadata
+        size_t img_count{}; read(img_count);
+        for (size_t i = 0; i < img_count; ++i) {
+            ImageAsset ia{};
+            ia.file_idx = file_id;
+            ia.vulkan_image_idx = ImageAsset::VULKAN_IMAGE_NOT_LOADED;
+            read(ia.width);
+            read(ia.height);
+            read(ia.format);
+            read_vec(ia.mips_in_file);
+            image_assets.push_back(std::move(ia));
+        }
+
+        // Indexed vertices metadata
+        size_t iv_count{}; read(iv_count);
+        for (size_t i = 0; i < iv_count; ++i) {
+            IndexedVerticesAsset iva{};
+            iva.file_idx = file_id;
+            size_t lod_count{}; read(lod_count);
+            for (size_t l = 0; l < lod_count; ++l) {
+                Assetpack::IndexedVerticesMetadata::Lod file_lod{};
+                read(file_lod);
+                iva.lods.push_back({
+                    .gpu_first_vertex_idx = IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED,
+                    .gpu_first_index_idx = IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED,
+                    .file_vertex_offset = file_lod.vertex_offset,
+                    .file_index_offset = file_lod.first_index_offset,
+                    .index_count = file_lod.index_count,
+                });
+            }
+            indexed_verts.push_back(std::move(iva));
+        }
+
+        return file_id;
+    }
 };
