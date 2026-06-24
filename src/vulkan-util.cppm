@@ -118,7 +118,7 @@ public:
     size_t in_progress_uploads_count();
 
     // Below are just helpers, no new functionality
-    template <typename T> requires (!SpanCompatible<T>)
+    template <typename T> requires (!SpanCompatible<T> && !std::is_pointer_v<std::remove_reference_t<T>>)
     void queue_upload(const T &src, const VulkanBuffer &dst, u64 dst_offset = 0) {
         queue_upload(&src, dst, sizeof(T), dst_offset);
     }
@@ -143,10 +143,10 @@ public:
 };
 
 export struct Texture : public Image{
-    Texture(VulkanEngine &vk, u32 width, u32 height, u32 mip_level_count)
+    Texture(VulkanEngine &vk, u32 width, u32 height, VkFormat format, u32 mip_level_count)
     :Image(vk,
            {.width=width,.height=height},
-           VK_FORMAT_R8G8B8A8_UNORM,
+           format,
            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,

@@ -809,7 +809,7 @@ public:
 }
 
 
-export class AssetLoader{
+export class ResourceLoader{
     class File{
     public:
         const std::filesystem::path filepath;
@@ -894,23 +894,73 @@ export class AssetLoader{
     // Indexes into the vulkan Samplers
     std::unordered_map<Assetpack::Sampler, u32, SamplerHash> sampler_idx;
 
-    // std::vector<Texture> textures;
-    // std::vector<ImageView> texture_views;
-    // StorageBuffer object_transforms;
-    // VertexBuffer<Vertex> vertices;
-    // StorageBuffer albedo_texture_indices;
-    // StorageBuffer normal_map_indices;
-    // StorageBuffer matallic_roughness_map;
-    // StorageBuffer obj_transform_indices;
+    struct VulkanResources{
+        static constexpr u64 INSTANCE_BUFFER_SIZE = 10000;
+        VulkanEngine &vk;
+        CommandPool cmd_pool;
+        ImmediateSubmitter submitter;
+        HostToDeviceUploader uploader;
 
+        std::vector<Texture> textures;
+        std::vector<ImageView> texture_views;
+        VertexBuffer<Vertex> vertices;
+        IndexBuffer indices;
+        StorageBuffer object_transforms;
+        StorageBuffer albedo_texture_indices;
+        StorageBuffer normal_map_indices;
+        StorageBuffer matallic_roughness_map;
+        StorageBuffer obj_transform_indices;
+        DescriptorSet graphics_desc_set;
+
+        Sampler sampler;
+
+        u64 vertex_cursor;
+        u64 index_cursor;
+
+        VulkanResources(VulkanEngine &vk):
+            vk(vk),
+            cmd_pool(vk),
+            submitter(vk, cmd_pool),
+            uploader(&vk, cmd_pool, 64UL * 1024 * 1024),
+            vertices(vk, 1500000),
+            indices(vk, 1000000),
+            object_transforms(vk, 10000, false, true),
+            albedo_texture_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
+            normal_map_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
+            matallic_roughness_map(vk, INSTANCE_BUFFER_SIZE, false, true),
+            obj_transform_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
+            graphics_desc_set([&](){
+                return DescriptorSetBuilder()
+                    .bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000, VK_SHADER_STAGE_FRAGMENT_BIT)
+                    .bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+                    .bind(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
+                    .bind(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
+                    .bind(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
+                    .build(vk);
+            }()),
+            sampler(vk, VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_FALSE, 0)
+        {
+            graphics_desc_set.update_sampler(vk, 1, sampler);
+            graphics_desc_set.update_storage_buffer(vk, 2, obj_transform_indices);
+            graphics_desc_set.update_storage_buffer(vk, 3, albedo_texture_indices);
+            graphics_desc_set.update_storage_buffer(vk, 4, object_transforms);
+        }
+    };
+    std::optional<VulkanResources> vk_resources = std::nullopt;
 public:
-    AssetLoader():queue(SDL_CreateAsyncIOQueue()){
-        if (queue == nullptr){
+    const VertexBuffer<Vertex> &get_vertex_buffer() { assert(vk_resources.has_value()); return vk_resources->vertices; }
+    const IndexBuffer &get_index_buffer() { assert(vk_resources.has_value()); return vk_resources->indices; }
+    const DescriptorSet &get_descriptor_set() { assert(vk_resources.has_value()); return vk_resources->graphics_desc_set; }
+
+    ResourceLoader():
+    queue(SDL_CreateAsyncIOQueue())
+    {
+        if (queue == nullptr) {
             std::println("Could not create async I/O queue: {}", SDL_GetError());
             abort();
         }
     }
-    ~AssetLoader(){
+    ~ResourceLoader(){
         for (const auto &file : files){
             if (!SDL_CloseAsyncIO(file.in, false, queue, nullptr)) {
                 std::println("close failed: {}", SDL_GetError());
@@ -919,7 +969,7 @@ public:
         SDL_DestroyAsyncIOQueue(queue);
     }
 
-    FileID load_assetpack(const std::filesystem::path &filepath){
+    FileID load_assetpack_table_of_contents(const std::filesystem::path &filepath){
         files.emplace_back(filepath);
         FileID file_id = files.size() - 1;
         const File& file = files.back();
@@ -1080,4 +1130,138 @@ public:
 
         return file_id;
     }
+
+    void init_vulkan_resources(VulkanEngine &vk){
+        vk_resources.emplace(vk);
+    }
+
+    void load_everything_to_gpu() {
+        VulkanResources &vkr = *vk_resources;
+        const File &file = files[0];
+        u64 file_size = [&](){
+            i64 raw_size = SDL_GetAsyncIOSize(file.in);
+            if (raw_size < 0) {
+                std::println("Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
+                abort();
+            }
+            return raw_size;
+        }();
+
+        std::vector<std::byte> buf(file_size);
+        {
+            SDL_AsyncIOOutcome outcome{};
+            SDL_ReadAsyncIO(file.in, buf.data(), 0, file_size, queue, nullptr);
+            if (!SDL_WaitAsyncIOResult(queue, &outcome, -1) || outcome.result != SDL_ASYNCIO_COMPLETE) {
+                std::println("Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
+                abort();
+            }
+        }
+
+        // Vertices and indices
+        for (auto &iv : indexed_verts) {
+            // if (iv.file_idx != file_id) continue;
+            for (auto &lod : iv.lods) {
+                if (lod.gpu_first_vertex_idx != IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED) continue;
+                lod.gpu_first_vertex_idx = vkr.vertex_cursor;
+                lod.gpu_first_index_idx = vkr.index_cursor;
+                vkr.uploader.queue_upload(buf.data() + lod.file_vertex_offset, vkr.vertices,
+                    lod.vertex_data_size(), vkr.vertex_cursor * sizeof(Vertex));
+                vkr.uploader.queue_upload(buf.data() + lod.file_index_offset, vkr.indices,
+                    lod.index_data_size(), vkr.index_cursor * sizeof(u32));
+                vkr.vertex_cursor += lod.vertex_count();
+                vkr.index_cursor += lod.index_count;
+            }
+        }
+        vkr.uploader.begin_and_finish_uploads();
+
+        // Images
+        u32 first_new_texture = vkr.textures.size();
+        for (auto &ia : image_assets) {
+            // if (ia.file_idx != file_id) continue;
+            if (ia.vulkan_image_idx != ImageAsset::VULKAN_IMAGE_NOT_LOADED) continue;
+            vkr.textures.emplace_back(vkr.vk, ia.width, ia.height, ia.format, ia.mips_in_file.size());
+            vkr.texture_views.emplace_back(vkr.textures.back().make_view(vkr.vk));
+            ia.vulkan_image_idx = vkr.textures.size() - 1;
+        }
+        {
+            std::vector<BarrierInfo> barriers;
+            for (u32 i = first_new_texture; i < vkr.textures.size(); ++i) {
+                barriers.push_back(BarrierInfo{
+                    .img = vkr.textures[i],
+                    .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask = 0,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .aspects = ImageAspects::COLOR,
+                });
+            }
+            vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
+        }
+        for (const auto &ia : image_assets) {
+            // if (ia.file_idx != file_id) continue;
+            for (u32 mip = 0; mip < ia.mips_in_file.size(); ++mip) {
+                const ByteRange &r = ia.mips_in_file[mip];
+                vkr.uploader.queue_upload(buf.data() + r.offset,
+                    vkr.textures[ia.vulkan_image_idx], r.size, mip, 0, 1, ImageAspects::COLOR);
+            }
+        }
+        vkr.uploader.begin_and_finish_uploads();
+        {
+            std::vector<BarrierInfo> barriers;
+            for (u32 i = first_new_texture; i < vkr.textures.size(); ++i) {
+                barriers.push_back(BarrierInfo{
+                    .img = vkr.textures[i],
+                    .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .src_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .dst_access_mask = VK_ACCESS_2_SHADER_READ_BIT,
+                    .aspects = ImageAspects::COLOR,
+                });
+            }
+            vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
+            // todo probably doesn't need to be immediately submitted... but we do need to check that it's done before we let the renderer use them
+            // todo also layouts are per-mip, so if we want to do per mip uploads with low mips going first etc we must change how our barrier code works for performance.
+        }
+        if (!vkr.texture_views.empty()) vkr.graphics_desc_set.update_sampled_images(vkr.vk, 0, vkr.texture_views);
+
+    }
+
+    std::vector<VkDrawIndexedIndirectCommand> prepare_to_draw_scene(u32 scene_idx) {
+        auto &vkr = *vk_resources;
+        std::vector<VkDrawIndexedIndirectCommand> commands;
+        const Scene &scene = scenes.at(scene_idx);
+
+        vkr.uploader.queue_upload(scene.transforms, vkr.object_transforms);
+
+        std::vector<u32> transform_indices, albedo_indices, normal_indices, mr_indices;
+
+        for (u32 i = 0; i < scene.mesh_idx.size(); ++i) {
+            const Mesh &mesh = meshes[scene.mesh_idx[i]];
+            for (u32 prim_idx : mesh.mesh_prim_idx) {
+                const MeshPrimitive &prim = primitives[prim_idx];
+                const IndexedVerticesAsset::Lod &lod = indexed_verts[prim.indexed_verts_idx].lods[0];
+                u32 draw_idx = commands.size();
+                vkr.uploader.queue_upload(i, vkr.obj_transform_indices, draw_idx * sizeof(u32));
+                vkr.uploader.queue_upload(image_assets[prim.albedo_idx].vulkan_image_idx, vkr.albedo_texture_indices, draw_idx * sizeof(u32));
+                vkr.uploader.queue_upload(image_assets[prim.normal_map_idx].vulkan_image_idx, vkr.normal_map_indices, draw_idx * sizeof(u32));
+                vkr.uploader.queue_upload(image_assets[prim.metallic_roughness_idx].vulkan_image_idx, vkr.matallic_roughness_map, draw_idx * sizeof(u32));
+                commands.push_back(VkDrawIndexedIndirectCommand{
+                    .indexCount = lod.index_count,
+                    .instanceCount = 1,
+                    .firstIndex = static_cast<u32>(lod.gpu_first_index_idx),
+                    .vertexOffset = static_cast<i32>(lod.gpu_first_vertex_idx),
+                    .firstInstance = draw_idx,
+                });
+            }
+        }
+
+        vkr.uploader.begin_and_finish_uploads();
+
+        return commands;
+    }
+
 };
