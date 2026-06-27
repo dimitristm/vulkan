@@ -1,5 +1,7 @@
 module;
 
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_vulkan.h"
 #include "ktx.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -914,8 +916,8 @@ export class ResourceLoader{
 
         Sampler sampler;
 
-        u64 vertex_cursor;
-        u64 index_cursor;
+        u64 vertex_cursor{};
+        u64 index_cursor{};
 
         VulkanResources(VulkanEngine &vk):
             vk(vk),
@@ -1230,26 +1232,31 @@ public:
 
     }
 
-    std::vector<VkDrawIndexedIndirectCommand> prepare_to_draw_scene(u32 scene_idx) {
+private:
+    std::optional<u32> previously_prepared_scene = std::nullopt;
+    std::vector<VkDrawIndexedIndirectCommand> draw_commands;
+public:
+    const std::vector<VkDrawIndexedIndirectCommand> &prepare_to_draw_scene(u32 scene_idx) {
+        if (previously_prepared_scene.has_value() && scene_idx == *previously_prepared_scene) return draw_commands;
+
+        previously_prepared_scene = scene_idx;
+        draw_commands.clear();
         auto &vkr = *vk_resources;
-        std::vector<VkDrawIndexedIndirectCommand> commands;
         const Scene &scene = scenes.at(scene_idx);
 
         vkr.uploader.queue_upload(scene.transforms, vkr.object_transforms);
-
-        std::vector<u32> transform_indices, albedo_indices, normal_indices, mr_indices;
 
         for (u32 i = 0; i < scene.mesh_idx.size(); ++i) {
             const Mesh &mesh = meshes[scene.mesh_idx[i]];
             for (u32 prim_idx : mesh.mesh_prim_idx) {
                 const MeshPrimitive &prim = primitives[prim_idx];
                 const IndexedVerticesAsset::Lod &lod = indexed_verts[prim.indexed_verts_idx].lods[0];
-                u32 draw_idx = commands.size();
+                u32 draw_idx = draw_commands.size();
                 vkr.uploader.queue_upload(i, vkr.obj_transform_indices, draw_idx * sizeof(u32));
                 vkr.uploader.queue_upload(image_assets[prim.albedo_idx].vulkan_image_idx, vkr.albedo_texture_indices, draw_idx * sizeof(u32));
                 vkr.uploader.queue_upload(image_assets[prim.normal_map_idx].vulkan_image_idx, vkr.normal_map_indices, draw_idx * sizeof(u32));
                 vkr.uploader.queue_upload(image_assets[prim.metallic_roughness_idx].vulkan_image_idx, vkr.matallic_roughness_map, draw_idx * sizeof(u32));
-                commands.push_back(VkDrawIndexedIndirectCommand{
+                draw_commands.push_back(VkDrawIndexedIndirectCommand{
                     .indexCount = lod.index_count,
                     .instanceCount = 1,
                     .firstIndex = static_cast<u32>(lod.gpu_first_index_idx),
@@ -1261,7 +1268,7 @@ public:
 
         vkr.uploader.begin_and_finish_uploads();
 
-        return commands;
+        return draw_commands;
     }
 
 };

@@ -445,7 +445,12 @@ void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALev
     ImGui_ImplVulkan_Init(&init_info);
 
     ImGui_ImplSDL3_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+
+    ImVec4* colors = ImGui::GetStyle().Colors;
+    colors[ImGuiCol_WindowBg]               = ImVec4(0.00f, 0.00f, 0.00f, 0.94f);
+    colors[ImGuiCol_TitleBg]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]          = ImVec4(0.03f, 0.05f, 0.08f, 1.00f);
+
     ImGui::NewFrame();
 
     this->imgui_is_initialized = true;
@@ -770,10 +775,7 @@ void Swapchain::initialize_swapchain(
     };
 
     vkb::SwapchainBuilder swapchain_builder{vk.physical_device, vk.device, vk.surface};
-    // The combination of VK_FORMAT_B8G8R8A8_UNORM and VK_COLOR_SPACE_SRGB_NONLINEAR_KHR assume that you
-    // will write in linear space and then manually encode the image to sRGB (aka do gamma correction)
-    // as the last thing before blitting to swapchain and presenting.
-    swapchain_builder.set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_UNORM, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+    swapchain_builder.set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_SRGB, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
                      .add_pNext(&present_modes_create_info)
                      .add_pNext(&present_scaling_create_info)
                      .set_desired_present_mode(present_mode)

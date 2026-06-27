@@ -10,13 +10,21 @@ import userInput;
 import util;
 import types;
 import assets;
+import vulkanUtil;
 
 int main(){
     TracyNoop;
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window{};
+
+    std::string a("assets/mytests/main.assetpack");
+    Assetpack::Builder b(a);
+    b.add_from_gltf("assets/mytests/BoxTextured.glb")
+    //     .add_from_gltf("assets/mytests/BoxTextured.glb")
+    //     .add_from_gltf("assets/mytests/1.glb")
+    .build();
+
     {
-        std::string a("assets/mytests/main.assetpack");
         ResourceLoader loader;
         loader.load_assetpack_table_of_contents(a);
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
@@ -30,27 +38,22 @@ int main(){
         );
 
         VulkanEngine vk{window};
+        vk.init_imgui(window, DrawImage::format);
         loader.init_vulkan_resources(vk);
         loader.load_everything_to_gpu();
         UserInputHandler input_handler{window};
         util::FrameTimer frame_timer;
 
-        // Assetpack::Builder b(a);
-        // b.add_from_gltf("assets/mytests/BoxTextured.glb")
-        //     .add_from_gltf("assets/mytests/BoxTextured.glb")
-        //     .add_from_gltf("assets/mytests/1.glb")
-        //     .build();
-        // std::println("built");
-        std::println("loaded");
-
+        int scene_idx{};
         Renderer renderer{vk, loader, window};
         while (!input_handler.should_quit){
             frame_timer.begin_frame();
             input_handler.handle_input();
             //ImGui::ShowDemoWindow();
+            ImGui::InputInt("Value", &scene_idx);
 
             frame_timer.imgui();
-            renderer.draw(input_handler.get_camera().get_view_transform(), loader, 2);
+            renderer.draw(input_handler.get_camera().get_view_transform(), loader, scene_idx);
             frame_timer.end_frame();
         }
     }

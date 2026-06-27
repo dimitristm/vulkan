@@ -856,7 +856,7 @@ export struct CommandBuffer{
         VkExtent2D draw_extent,
         const VertexBuffer<T> &vertex_buffer,
         const IndexBuffer &index_buffer,
-        std::span<VkDrawIndexedIndirectCommand> commands) const
+        const std::vector<VkDrawIndexedIndirectCommand> &commands) const
     {
         VkRenderingAttachmentInfo color_attachment_info{
             .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,

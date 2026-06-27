@@ -9,6 +9,7 @@ module;
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
+#include "imgui/imgui_impl_vulkan.h"
 #include <stb/stb_image.h>
 
 #if !USE_IMPORT_STD
@@ -138,7 +139,6 @@ public:
                       depth_image.img.get_format(),
                       MSAALevel::OFF)
     {
-        vk.init_imgui(window, swapchain.get_format());
         compute_desc_set.update_storage_image(vk, 0, draw_image.view);
         compute_push_const.data += fvec4(1, 0, 0, 1);
 
@@ -203,9 +203,10 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, loader.get_descriptor_set());
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        auto draw_commands = loader.prepare_to_draw_scene(scene_idx);
-        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, {.width=static_cast<uint32_t>(window_size.x), .height=static_cast<uint32_t>(window_size.y)},
-                                loader.get_vertex_buffer(), loader.get_index_buffer(), draw_commands);
+        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)},
+                                loader.get_vertex_buffer(), loader.get_index_buffer(), loader.prepare_to_draw_scene(scene_idx));
+
+        cmd_buffer.draw_imgui(draw_image.view, {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)});
 
         cmd_buffer.barrier(BarrierInfo{
                                 .img=draw_image.img,
@@ -241,22 +242,9 @@ public:
         cmd_buffer.barrier(BarrierInfo{
                                 .img=swapchain.get_images()[swapchain_img_idx],
                                 .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
                                 .src_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-                                .aspects=ImageAspects::COLOR}
-        );
-
-        cmd_buffer.draw_imgui(swapchain.get_image_views()[swapchain_img_idx], swapchain.get_extent());
-
-        cmd_buffer.barrier(BarrierInfo{
-                                .img=swapchain.get_images()[swapchain_img_idx],
-                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                 .dst_stage_mask=VK_PIPELINE_STAGE_2_NONE,
                                 .dst_access_mask=0,
                                 .aspects=ImageAspects::COLOR}
