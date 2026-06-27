@@ -117,6 +117,9 @@ struct XXH128Equal {
 template<typename T>
 using XXH128Map = std::unordered_map<XXH128_hash_t, T, XXH128Hasher, XXH128Equal>;
 
+static void XXH_CHECK(XXH_errorcode result){
+    if (result == XXH_ERROR) {std::println("XXH error"); abort();}
+}
 
 namespace Assetpack{
 
@@ -281,9 +284,10 @@ struct IndexedVertices{
     [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process before hashing");
         XXH3_state_t* state = XXH3_createState();
-        XXH3_128bits_reset(state);
-        XXH3_128bits_update(state, verts.data(), util::get_data_size(verts));
-        XXH3_128bits_update(state, indices.data(), util::get_data_size(indices));
+        if (state == nullptr) {std::println("XXH3_createState returned null");}
+        XXH_CHECK(XXH3_128bits_reset(state));
+        XXH_CHECK(XXH3_128bits_update(state, verts.data(), util::get_data_size(verts)));
+        XXH_CHECK(XXH3_128bits_update(state, indices.data(), util::get_data_size(indices)));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
         XXH3_freeState(state);
         return hash;
@@ -423,9 +427,10 @@ struct Image{
     [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process an image before hashing it");
         XXH3_state_t* state = XXH3_createState();
-        XXH3_128bits_reset(state);
-        XXH3_128bits_update(state, pixels, meta.width * meta.height * 4);
-        XXH3_128bits_update(state, &type, sizeof(type));
+        if (state == nullptr) {std::println("XXH3_createState returned null");}
+        XXH_CHECK(XXH3_128bits_reset(state));
+        XXH_CHECK(XXH3_128bits_update(state, pixels, meta.width * meta.height * 4));
+        XXH_CHECK(XXH3_128bits_update(state, &type, sizeof(type)));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
         XXH3_freeState(state);
         return hash;
