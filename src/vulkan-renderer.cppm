@@ -8,8 +8,6 @@ module;
 #include <glm/ext/matrix_float4x4.hpp>
 
 #include "imgui/imgui.h"
-#include "imgui/imgui_impl_sdl3.h"
-#include "imgui/imgui_impl_vulkan.h"
 #include <stb/stb_image.h>
 
 #if !USE_IMPORT_STD

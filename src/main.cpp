@@ -17,12 +17,12 @@ int main(){
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window{};
 
-    std::string a("assets/mytests/small.assetpack");
-    Assetpack::Builder b(a);
-    b.add_from_gltf("assets/mytests/BoxTextured.glb")
-        .add_from_gltf("assets/mytests/BoxTexturedNonPowerOfTwo.glb")
-    //     .add_from_gltf("assets/flight-helmet.glb")
-    .build();
+    std::string a("assets/mytests/main.assetpack");
+    // Assetpack::Builder b(a);
+    // b.add_from_gltf("assets/mytests/BoxTextured.glb")
+    //     .add_from_gltf("assets/mytests/BoxTexturedNonPowerOfTwo.glb")
+    // //     .add_from_gltf("assets/flight-helmet.glb")
+    // .build();
 
     {
         ResourceLoader loader;

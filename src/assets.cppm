@@ -1,7 +1,5 @@
 module;
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_impl_vulkan.h"
 #include "ktx.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -22,7 +20,6 @@ module;
 #include <cstring>
 #include <variant>
 #include <concepts>
-#include <unordered_set>
 #endif
 
 export module assets;
@@ -817,6 +814,13 @@ public:
 
 
 export class ResourceLoader{
+public:
+    ResourceLoader(const ResourceLoader&) = delete;
+    ResourceLoader(ResourceLoader&&) = delete;
+    ResourceLoader& operator=(const ResourceLoader&) = delete;
+    ResourceLoader& operator=(ResourceLoader&&) = delete;
+private:
+
     class File{
     public:
         const std::filesystem::path filepath;
