@@ -1,6 +1,5 @@
 module;
 
-#include "ktx.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
@@ -11,6 +10,8 @@ module;
 #include <glm/gtc/quaternion.hpp>
 #include <boost/pfr.hpp>
 #include <SDL3/SDL_asyncio.h>
+#include <bc7enc/bc7enc.h>
+#include <bc7enc/rgbcx.h>
 
 #if !USE_IMPORT_STD
 #include <unordered_map>
@@ -20,6 +21,9 @@ module;
 #include <cstring>
 #include <variant>
 #include <concepts>
+#include <mutex>
+#include <execution>
+#include <ranges>
 #endif
 
 export module assets;
@@ -91,13 +95,6 @@ template<typename T>
 concept Hashable = requires(const T& item) {
     { item.hash() } -> std::same_as<XXH128_hash_t>;
 };
-
-static void KTX_CHECK(ktx_error_code_e result){
-    if (result != KTX_SUCCESS){
-        std::println("KTX function failed");
-        abort();
-    }
-}
 
 struct XXH128Hasher {
     std::size_t operator()(const XXH128_hash_t& hash) const noexcept {
@@ -346,72 +343,83 @@ struct Image{
     };
     ImageMetadata meta;
     std::vector<std::byte> data;
-    const uint8_t *pixels;
+    const uint8_t *pixels_RGBA;
     bool is_processed = false;
     Type type;
 
     Image() = default;
-    Image(const uint8_t *pixels, u32 width, u32 height, Type type)
-    :meta({.width = width, .height = height, .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK}),
-    pixels(pixels), type(type)
+    Image(const uint8_t *pixels_RGBA, u32 width, u32 height, Type type)
+    :meta({.width = width, .height = height, .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK, .mips{} }),
+    pixels_RGBA(pixels_RGBA), type(type)
     { }
 
+    // Use BCn compression on the image.
     void process(){
         assert(!is_processed && "Attempted to process an Image that's already processed");
         if(is_processed) return;
-        std::vector<uint8_t> swizzled_storage;
-        const uint8_t *src = pixels;
-        if (type == Type::MetallicRoughness){
-            swizzled_storage.resize(meta.width * meta.height * 4);
-            for (u32 i = 0; i < meta.width * meta.height; ++i){
-                swizzled_storage[i*4 + 0] = pixels[i*4 + 1]; // R = G (roughness)
-                swizzled_storage[i*4 + 1] = pixels[i*4 + 2]; // G = B (metallic)
-                swizzled_storage[i*4 + 2] = 0;
-                swizzled_storage[i*4 + 3] = 255;
+
+        const uint8_t *src = pixels_RGBA;
+
+        const u32 block_amount_x = (meta.width  + 3) / 4;
+        const u32 block_amount_y = (meta.height + 3) / 4;
+        const u64 total_blocks = block_amount_x * block_amount_y;
+        // Both BC7 and BC5 encode to 16 bytes per 4x4 block
+        const u64 compressed_image_size = total_blocks * 16;
+        this->data.resize(compressed_image_size);
+
+        // Extract one 4x4 RGBA block from src, clamping at image edges
+        const auto extract_block = [&](u32 block_x, u32 block_y, uint8_t out[64]){
+            for (u32 block_pixel_y = 0; block_pixel_y < 4; ++block_pixel_y){
+                for (u32 block_pixel_x = 0; block_pixel_x < 4; ++block_pixel_x){
+                    u32 src_x = std::min(block_x * 4 + block_pixel_x, meta.width - 1);
+                    u32 src_y = std::min(block_y * 4 + block_pixel_y, meta.height - 1);
+                    const uint8_t *src_pixel = src + (src_y * meta.width + src_x) * 4;
+                    uint8_t *o = out + (block_pixel_y * 4 + block_pixel_x) * 4;
+                    o[0] = src_pixel[0]; o[1] = src_pixel[1]; o[2] = src_pixel[2]; o[3] = src_pixel[3];
+                }
             }
-            src = swizzled_storage.data();
-        }
-
-        util::Timer t2;
-        t2.start();
-        ktxTextureCreateInfo texture_create_info{
-            .vkFormat = (type == Type::Albedo) ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
-            .baseWidth = meta.width,
-            .baseHeight = meta.height,
-            .baseDepth = 1,
-            .numDimensions = 2,
-            .numLevels = 1,
-            .numLayers = 1,
-            .numFaces = 1,
-            .isArray = KTX_FALSE,
-            .generateMipmaps = KTX_FALSE, //todo: mipmaps
         };
-        ktxTexture2 *tex = nullptr;
-        KTX_CHECK(ktxTexture2_Create(&texture_create_info, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &tex));
-        std::memcpy(tex->pData, src, meta.width * meta.height * 4);
-        ktxBasisParams params{};
-        params.structSize = sizeof(params);
-        params.uastc      = KTX_TRUE;
-        params.uastcFlags = KTX_PACK_UASTC_LEVEL_DEFAULT; //todo: use a higher level
-        params.verbose    = KTX_FALSE;
-        params.threadCount = 16;
-        KTX_CHECK(ktxTexture2_CompressBasisEx(tex, &params));
-        ktx_transcode_fmt_e tfmt = (type == Type::Albedo) ? KTX_TTF_BC7_RGBA : KTX_TTF_BC5_RG;
-        KTX_CHECK(ktxTexture2_TranscodeBasis(tex, tfmt, 0));
-        t2.end();
-        //std::println("compress and transcode took: {}", t2.elapsed());
 
-        u64 data_offset = 0;
-        for (u32 mip_level = 0; mip_level < tex->numLevels; ++mip_level){
-            ktx_size_t mip_offset = 0;
-            ktxTexture_GetImageOffset(ktxTexture(tex), mip_level, 0, 0, &mip_offset);
-            ktx_size_t mip_size = ktxTexture_GetImageSize(ktxTexture(tex), mip_level);
-            this->meta.mips.push_back({.offset = data_offset, .size = mip_size});
-            this->data.resize(data.size() + mip_size);
-            std::memcpy(this->data.data() + data_offset, tex->pData + mip_offset, mip_size);
-            data_offset += mip_size;
-        }
-        ktxTexture_Destroy(ktxTexture(tex));
+        auto block_grid = std::views::cartesian_product(
+            std::views::iota(0u, block_amount_y),
+            std::views::iota(0u, block_amount_x)
+        );
+
+        if (type == Type::Albedo){
+            bc7enc_compress_block_params params;
+            bc7enc_compress_block_params_init(&params);
+            params.m_uber_level = 4;
+
+            std::for_each(std::execution::par_unseq, block_grid.begin(), block_grid.end(),
+                [&](const auto &block_coordinates) {
+                    auto [block_y, block_x] = block_coordinates;
+                    uint8_t block[64];
+                    extract_block(block_x, block_y, block);
+                    u32 linear_index = block_y * block_amount_x + block_x;
+                    std::byte *dst = reinterpret_cast<std::byte*>(this->data.data()) + linear_index * 16;
+                    bc7enc_compress_block(dst, block, &params);
+                }
+            );
+
+        } else if (type == Type::Normal || type == Type::MetallicRoughness){
+            i32 channel0{}, channel1{};
+            if (type == Type::Normal) {channel0 = 0; channel1 = 1;}
+            if (type == Type::MetallicRoughness) {channel0 = 1; channel1 = 2;}
+            std::for_each(std::execution::par_unseq, block_grid.begin(), block_grid.end(),
+                [&](const auto &block_coordinates) {
+                    auto [block_y, block_x] = block_coordinates;
+                    uint8_t block[64];
+                    extract_block(block_x, block_y, block);
+                    u32 linear_index = block_y * block_amount_x + block_x;
+                    std::byte *dst = reinterpret_cast<std::byte*>(this->data.data()) + linear_index * 16;
+                    // Metallic and Roughness are stored in the G and B channels for gltfs
+                    rgbcx::encode_bc5(dst, block, channel0, channel1, 4);
+                }
+            );
+        } else {std::println("Unknown Image type"); abort();}
+
+        this->meta.mips.push_back({.offset = 0, .size = compressed_image_size});
+
         is_processed = true;
     }
 
@@ -426,7 +434,7 @@ struct Image{
         XXH3_state_t* state = XXH3_createState();
         if (state == nullptr) {std::println("XXH3_createState returned null");}
         XXH_CHECK(XXH3_128bits_reset(state));
-        XXH_CHECK(XXH3_128bits_update(state, pixels, meta.width * meta.height * 4));
+        XXH_CHECK(XXH3_128bits_update(state, pixels_RGBA, meta.width * meta.height * 4));
         XXH_CHECK(XXH3_128bits_update(state, &type, sizeof(type)));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
         XXH3_freeState(state);
@@ -440,8 +448,6 @@ struct Header{
         valid = 0xBF269A65A2E91226,
         unfinished = 0x85AC8E6951FC737D,
         invalid = 0x2FD66A0C4AF56280,
-        valid_end_of_file = 0x2B7FE37FC301CB84,
-        invalid_end_of_file = 0x88F19A99ED09E0C7,
     } signature;
 };
 // Between the Header and ToC, there will be:
@@ -483,17 +489,22 @@ export class Builder{
 
     template<typename T>
     void write(const T& data){ out.write(reinterpret_cast<const char*>(&data), sizeof(data)); }
-    
+
     template<typename T>
     void write_vector(const std::vector<T>& v){
         write(v.size());
         out.write(reinterpret_cast<const char*>(v.data()), util::get_data_size(v));
     }
 
+    inline static std::once_flag init_bc7e_once{};
 public:
     Builder(const std::filesystem::path &filepath)
     :out(filepath, std::ios::binary | std::ios::trunc | std::ios::out)
     {
+        std::call_once(init_bc7e_once, [](){
+            bc7enc_compress_block_init();
+            rgbcx::init();
+        });
         Header header{.signature = Header::Signatures::unfinished};
         write(header);
     }

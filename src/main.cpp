@@ -21,7 +21,7 @@ int main(){
     // Assetpack::Builder b(a);
     // b.add_from_gltf("assets/mytests/BoxTextured.glb")
     //     .add_from_gltf("assets/mytests/BoxTexturedNonPowerOfTwo.glb")
-    // //     .add_from_gltf("assets/flight-helmet.glb")
+    // .add_from_gltf("assets/flight-helmet.glb")
     // .build();
 
     {

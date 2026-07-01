@@ -70,26 +70,25 @@ FetchContent_Declare(
     GIT_TAG        v0.9.0
     GIT_SHALLOW TRUE
 )
-
 set(FASTGLTF_USE_STD_MODULE ${USE_IMPORT_STD} CACHE BOOL "" FORCE)
 set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_CPP_MODULES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
 
 FetchContent_Declare(
-    KTX
-    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
-    GIT_TAG v4.4.2
+    TBB
+    GIT_REPOSITORY https://github.com/uxlfoundation/oneTBB.git
+    GIT_TAG        v2023.0.0
     GIT_SHALLOW TRUE
 )
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(LIBKTX_VERSION_READ_ONLY OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_DOC OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
-set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
-set(KTX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(KTX)
+set(TBB_STATIC ON CACHE BOOL "Build TBB static library" FORCE)
+set(TBB_TEST OFF CACHE BOOL "" FORCE)
+set(TBB_INSTALL OFF CACHE BOOL "" FORCE)
+set(TBB_NO_APPCONTAINER OFF CACHE BOOL "" FORCE)
+set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TBB4PY_BUILD OFF CACHE BOOL "Disable TBB Python bindings" FORCE)
+# set(TBB_STRICT OFF CACHE BOOL "Do not treat compiler warnings as errors" FORCE)
+FetchContent_MakeAvailable(TBB)
 
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
@@ -108,7 +107,7 @@ target_link_libraries(vulkan-prog
         GPUOpen::VulkanMemoryAllocator
         glm::glm
         fastgltf::module
-        ktx
+        TBB::tbb
 )
 
 target_sources(vulkan-prog
@@ -127,6 +126,8 @@ target_sources(vulkan-prog
         vendored/imgui/imgui_widgets.cpp
         vendored/xxhash/xxhash.c
         vendored/tracy/public/TracyClient.cpp
+        vendored/bc7enc/bc7enc.cpp
+        vendored/bc7enc/rgbcx.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
         src/user-input.cppm
