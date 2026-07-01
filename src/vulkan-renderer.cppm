@@ -10,13 +10,13 @@ module;
 #include "imgui/imgui.h"
 #include <stb/stb_image.h>
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <array>
 #include <print>
 #endif
 
 export module vulkanRenderer;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 

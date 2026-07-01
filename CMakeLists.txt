@@ -4,14 +4,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(USE_IMPORT_STD "Enable import std. CMake only has experimental support, \
+set(BUILD_SHARED_LIBS OFF)
+
+option(VK_PROJ_USE_IMPORT_STD "Enable import std. CMake only has experimental support, \
                        and you need to input a special UUID for your specific CMake version. \
                        Also, for whatever reason, this breaks if you initially have it off and \
                        then set it to on (the other way around works fine). \
                        Make a new build directory to enable it."
                        OFF
 )
-if(USE_IMPORT_STD)
+if(VK_PROJ_USE_IMPORT_STD)
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
     set(CMAKE_CXX_MODULE_STD ON)
 endif()
@@ -70,7 +72,7 @@ FetchContent_Declare(
     GIT_TAG        v0.9.0
     GIT_SHALLOW TRUE
 )
-set(FASTGLTF_USE_STD_MODULE ${USE_IMPORT_STD} CACHE BOOL "" FORCE)
+set(FASTGLTF_USE_STD_MODULE ${VK_PROJ_USE_IMPORT_STD} CACHE BOOL "" FORCE)
 set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_CPP_MODULES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
@@ -81,10 +83,8 @@ FetchContent_Declare(
     GIT_TAG        v2023.0.0
     GIT_SHALLOW TRUE
 )
-set(TBB_STATIC ON CACHE BOOL "Build TBB static library" FORCE)
 set(TBB_TEST OFF CACHE BOOL "" FORCE)
 set(TBB_INSTALL OFF CACHE BOOL "" FORCE)
-set(TBB_NO_APPCONTAINER OFF CACHE BOOL "" FORCE)
 set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(TBB4PY_BUILD OFF CACHE BOOL "Disable TBB Python bindings" FORCE)
 # set(TBB_STRICT OFF CACHE BOOL "Do not treat compiler warnings as errors" FORCE)
@@ -146,7 +146,7 @@ target_compile_options(vulkan-prog PRIVATE
 )
 
 target_compile_definitions(vulkan-prog PRIVATE
-    USE_IMPORT_STD=$<BOOL:${USE_IMPORT_STD}>
+    VK_PROJ_USE_IMPORT_STD=$<BOOL:${VK_PROJ_USE_IMPORT_STD}>
     $<$<BOOL:${TRACY_ENABLE}>:TRACY_ENABLE>
     $<$<BOOL:${TRACY_ON_DEMAND}>:TRACY_ON_DEMAND>
     $<$<BOOL:${TRACY_LTO}>:TRACY_LTO>

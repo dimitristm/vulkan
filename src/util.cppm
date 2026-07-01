@@ -5,7 +5,7 @@ module;
 #include <glm/mat4x4.hpp>
 #include <SDL3/SDL_video.h>
 #include <emmintrin.h>
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <thread>
 #include <chrono>
 #include <print>
@@ -13,7 +13,7 @@ module;
 #endif
 
 export module util;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 import types;

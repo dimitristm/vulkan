@@ -4,13 +4,13 @@ module;
 #include <bits/stdint-uintn.h>
 #include <glm/vec2.hpp>
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <bits/std_function.h>
 #include <vector>
 #include <span>
 #endif
 export module vulkanUtil;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 

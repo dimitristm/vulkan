@@ -4,7 +4,7 @@ module;
 #include <cassert>
 #include <vulkan/vulkan_core.h>
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <cstring>
 #include <vector>
 #include <span>
@@ -14,7 +14,7 @@ module;
 
 module vulkanUtil;
 
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 import vulkanEngine;

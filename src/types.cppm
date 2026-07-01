@@ -5,13 +5,13 @@ module;
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <cassert>
 #include <format>
 #endif
 
 export module types;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 

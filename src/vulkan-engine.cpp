@@ -30,7 +30,7 @@ module;
 #endif
 
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <vector>
 #include <span>
 #include <array>
@@ -41,7 +41,7 @@ module;
 #endif
 
 module vulkanEngine;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 import types;

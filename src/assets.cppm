@@ -1,5 +1,6 @@
 module;
 
+#include <tbb/parallel_for_each.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
@@ -13,7 +14,7 @@ module;
 #include <bc7enc/bc7enc.h>
 #include <bc7enc/rgbcx.h>
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <unordered_map>
 #include <print>
 #include <filesystem>
@@ -22,12 +23,11 @@ module;
 #include <variant>
 #include <concepts>
 #include <mutex>
-#include <execution>
 #include <ranges>
 #endif
 
 export module assets;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 
@@ -384,13 +384,12 @@ struct Image{
             std::views::iota(0u, block_amount_y),
             std::views::iota(0u, block_amount_x)
         );
-
         if (type == Type::Albedo){
             bc7enc_compress_block_params params;
             bc7enc_compress_block_params_init(&params);
             params.m_uber_level = 4;
 
-            std::for_each(std::execution::par_unseq, block_grid.begin(), block_grid.end(),
+            tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
                 [&](const auto &block_coordinates) {
                     auto [block_y, block_x] = block_coordinates;
                     uint8_t block[64];
@@ -405,7 +404,7 @@ struct Image{
             i32 channel0{}, channel1{};
             if (type == Type::Normal) {channel0 = 0; channel1 = 1;}
             if (type == Type::MetallicRoughness) {channel0 = 1; channel1 = 2;}
-            std::for_each(std::execution::par_unseq, block_grid.begin(), block_grid.end(),
+            tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
                 [&](const auto &block_coordinates) {
                     auto [block_y, block_x] = block_coordinates;
                     uint8_t block[64];

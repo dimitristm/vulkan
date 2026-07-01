@@ -29,7 +29,7 @@ module;
 #endif
 
 
-#if !USE_IMPORT_STD
+#if !VK_PROJ_USE_IMPORT_STD
 #include <cstdio>
 #include <vector>
 #include <span>
@@ -42,7 +42,7 @@ module;
 export module vulkanEngine;
 import types;
 import util;
-#if USE_IMPORT_STD
+#if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
 
