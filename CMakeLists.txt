@@ -104,7 +104,7 @@ target_sources(bc7enc
     PUBLIC FILE_SET CXX_MODULES FILES
         vendored/bc7enc/bc7enc.cppm
 )
-target_include_directories(bc7enc PUBLIC ${CMAKE_SOURCE_DIR}/vendored/bc7enc)
+target_include_directories(bc7enc PRIVATE ${CMAKE_SOURCE_DIR}/vendored/bc7enc)
 target_compile_options(bc7enc PRIVATE -w)
 
 add_library(imgui STATIC)
@@ -123,7 +123,7 @@ target_sources(imgui
         vendored/imgui/imgui_impl_sdl3.cppm
         vendored/imgui/imgui_impl_vulkan.cppm
 )
-target_include_directories(imgui PUBLIC ${CMAKE_SOURCE_DIR}/vendored/imgui)
+target_include_directories(imgui PRIVATE ${CMAKE_SOURCE_DIR}/vendored/imgui)
 
 # ---- Executable ----
 add_executable(vulkan-prog)
