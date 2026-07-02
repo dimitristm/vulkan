@@ -1,6 +1,5 @@
 module;
 
-#include "imgui/imgui_impl_sdl3.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -15,6 +14,7 @@ export module userInput;
 import std;
 #endif
 import types;
+import imgui_impl_sdl3;
 
 static bool is_fullscreen(SDL_Window *window) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);

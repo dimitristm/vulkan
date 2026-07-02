@@ -1,5 +1,4 @@
 module;
-#include "imgui/imgui.h"
 #include <glm/vec2.hpp>
 #include <glm/trigonometric.hpp>
 #include <glm/mat4x4.hpp>
@@ -17,6 +16,7 @@ export module util;
 import std;
 #endif
 import types;
+import imgui;
 
 
 namespace util{

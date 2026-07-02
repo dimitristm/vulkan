@@ -7,10 +7,6 @@ module;
 
 #include <glm/vec2.hpp>
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_impl_sdl3.h"
-#include "imgui/imgui_impl_vulkan.h"
-
 // Disable harmless VMA warnings
 #if defined(__clang__)
 #  pragma clang diagnostic push
@@ -45,6 +41,8 @@ module vulkanEngine;
 import std;
 #endif
 import types;
+import imgui_impl_sdl3;
+import imgui_impl_vulkan;
 
 void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){

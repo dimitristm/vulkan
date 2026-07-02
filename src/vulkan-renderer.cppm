@@ -7,7 +7,6 @@ module;
 #include <VkBootstrap.h>
 #include <glm/ext/matrix_float4x4.hpp>
 
-#include "imgui/imgui.h"
 #include <stb/stb_image.h>
 
 #if !VK_PROJ_USE_IMPORT_STD
@@ -26,6 +25,7 @@ import vulkanUtil;
 import assets;
 import util;
 import types;
+import imgui;
 
 using namespace util;
 

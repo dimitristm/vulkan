@@ -104,12 +104,26 @@ target_sources(bc7enc
     PUBLIC FILE_SET CXX_MODULES FILES
         vendored/bc7enc/bc7enc.cppm
 )
-target_include_directories(bc7enc
-    PUBLIC
-        ${CMAKE_SOURCE_DIR}/vendored/bc7enc
-)
+target_include_directories(bc7enc PUBLIC ${CMAKE_SOURCE_DIR}/vendored/bc7enc)
 target_compile_options(bc7enc PRIVATE -w)
 
+add_library(imgui STATIC)
+target_sources(imgui
+    PRIVATE
+        vendored/imgui/imgui.cpp
+        vendored/imgui/imgui_impl_sdl3.cpp
+        vendored/imgui/imgui_impl_vulkan.cpp
+        vendored/imgui/imgui_demo.cpp
+        vendored/imgui/imgui_draw.cpp
+        vendored/imgui/imgui_tables.cpp
+        vendored/imgui/imgui_widgets.cpp
+
+    PUBLIC FILE_SET CXX_MODULES FILES
+        vendored/imgui/imgui.cppm
+        vendored/imgui/imgui_impl_sdl3.cppm
+        vendored/imgui/imgui_impl_vulkan.cppm
+)
+target_include_directories(imgui PUBLIC ${CMAKE_SOURCE_DIR}/vendored/imgui)
 
 # ---- Executable ----
 add_executable(vulkan-prog)
@@ -130,6 +144,7 @@ target_link_libraries(vulkan-prog
         fastgltf::module
         TBB::tbb
         bc7enc
+        imgui
 )
 
 target_sources(vulkan-prog
@@ -139,13 +154,6 @@ target_sources(vulkan-prog
         src/vulkan-util.cpp
         vendored/vma_compilation_unit.cpp
         vendored/stb/stb_image_compilation_unit.cpp
-        vendored/imgui/imgui.cpp
-        vendored/imgui/imgui_impl_sdl3.cpp
-        vendored/imgui/imgui_impl_vulkan.cpp
-        vendored/imgui/imgui_demo.cpp
-        vendored/imgui/imgui_draw.cpp
-        vendored/imgui/imgui_tables.cpp
-        vendored/imgui/imgui_widgets.cpp
         vendored/xxhash/xxhash.c
         vendored/tracy/public/TracyClient.cpp
 

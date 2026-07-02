@@ -1,5 +1,3 @@
-#include "imgui/imgui.h"
-#include "imgui/imgui_impl_sdl3.h"
 #include <SDL3/SDL_init.h>
 #include <Tracy.hpp>
 #include <print>
@@ -11,6 +9,7 @@ import util;
 import types;
 import assets;
 import vulkanUtil;
+import imgui;
 
 int main(){
     TracyNoop;
