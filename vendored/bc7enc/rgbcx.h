@@ -1,3 +1,12 @@
+/*
+	THIS FILE HAS BEEN MODIFIED!
+	This header's global constants are now inlined, as they should be, so that they can have internal
+	linkage and one shared memory address across all inclusions.
+	
+	This is also mandatory so that they can be exposed in the module (bc7enc.cppm).
+*/
+
+
 // rgbcx.h v1.13
 // High-performance scalar encoders and RDO (Rate Distortion Optimization) post processors for BC1-5.
 // Public Domain or MIT license (you choose - see below), written by Richard Geldreich 2020 <richgel99@gmail.com>.
@@ -213,19 +222,19 @@ namespace rgbcx
 		cEncodeBC1EndpointSearchRoundsMask = 1023U << cEncodeBC1EndpointSearchRoundsShift,
 	};
 		
-	const uint32_t MIN_TOTAL_ORDERINGS = 1;
-	const uint32_t MAX_TOTAL_ORDERINGS3 = 32;
+	inline const uint32_t MIN_TOTAL_ORDERINGS = 1;
+	inline const uint32_t MAX_TOTAL_ORDERINGS3 = 32;
 
 #if RGBCX_USE_SMALLER_TABLES
-	const uint32_t MAX_TOTAL_ORDERINGS4 = 32;
+	inline const uint32_t MAX_TOTAL_ORDERINGS4 = 32;
 #else
-	const uint32_t MAX_TOTAL_ORDERINGS4 = 128;
+	inline const uint32_t MAX_TOTAL_ORDERINGS4 = 128;
 #endif
 	
 	// DEFAULT_TOTAL_ORDERINGS_TO_TRY is around 3x faster than libsquish at slightly higher average quality. 10-16 is a good range to start to compete against libsquish.
-	const uint32_t DEFAULT_TOTAL_ORDERINGS_TO_TRY = 10;
+	inline const uint32_t DEFAULT_TOTAL_ORDERINGS_TO_TRY = 10;
 
-	const uint32_t DEFAULT_TOTAL_ORDERINGS_TO_TRY3 = 1;
+	inline const uint32_t DEFAULT_TOTAL_ORDERINGS_TO_TRY3 = 1;
 	
 	// Encodes a 4x4 block of RGBX (X=ignored) pixels to BC1 format. 
 	// This is the simplified interface for BC1 encoding, which accepts a level parameter and converts that to the best overall flags.
@@ -233,7 +242,7 @@ namespace rgbcx
 	// This is the recommended function to use for BC1 encoding, becuase it configures the encoder for you in the best possible way (on average).
 	// Note that the 3 color modes won't be used at all until level 5 or higher.
 	// No transparency supported, however if you set use_transparent_texels_for_black to true the encocer will use transparent selectors on very dark/black texels to reduce MSE. 
-	const uint32_t MIN_LEVEL = 0, MAX_LEVEL = 18;
+	inline const uint32_t MIN_LEVEL = 0, MAX_LEVEL = 18;
 	void encode_bc1(uint32_t level, void* pDst, const uint8_t* pPixels, bool allow_3color, bool use_transparent_texels_for_black, const uint8_t* pForce_selectors = nullptr);
 
 	// Low-level interface for BC1 encoding.
@@ -243,10 +252,10 @@ namespace rgbcx
 	void encode_bc1(void* pDst, const uint8_t* pPixels, uint32_t flags = 0, uint32_t total_orderings_to_try = DEFAULT_TOTAL_ORDERINGS_TO_TRY, uint32_t total_orderings_to_try3 = DEFAULT_TOTAL_ORDERINGS_TO_TRY3, const uint8_t *pForce_selectors = nullptr);
 	
 	// Constants used for high quality BC4/BC5 encoding (and alpha of BC3)
-	const uint32_t BC4_DEFAULT_SEARCH_RAD = 3;
-	const uint32_t BC4_USE_MODE8_FLAG = 1;
-	const uint32_t BC4_USE_MODE6_FLAG = 2;
-	const uint32_t BC4_USE_ALL_MODES = 3;
+	inline const uint32_t BC4_DEFAULT_SEARCH_RAD = 3;
+	inline const uint32_t BC4_USE_MODE8_FLAG = 1;
+	inline const uint32_t BC4_USE_MODE6_FLAG = 2;
+	inline const uint32_t BC4_USE_ALL_MODES = 3;
 
 	// Encodes a 4x4 block of RGBA pixels to BC3 format.
 	// There are two encode_bc3() functions. 

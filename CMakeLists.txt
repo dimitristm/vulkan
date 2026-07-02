@@ -94,10 +94,31 @@ find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
+# Vendored libraries that don't have their own CMakeLists.txt
+add_library(bc7enc STATIC)
+target_sources(bc7enc
+    PRIVATE
+        vendored/bc7enc/bc7enc.cpp
+        vendored/bc7enc/rgbcx.cpp
+
+    PUBLIC FILE_SET CXX_MODULES FILES
+        vendored/bc7enc/bc7enc.cppm
+)
+target_include_directories(bc7enc
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/vendored/bc7enc
+)
+target_compile_options(bc7enc PRIVATE -w)
+
+
 # ---- Executable ----
 add_executable(vulkan-prog)
 
-target_include_directories(vulkan-prog PRIVATE ${CMAKE_SOURCE_DIR}/vendored ${CMAKE_SOURCE_DIR}/vendored/tracy/public/tracy)
+target_include_directories(vulkan-prog
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/vendored
+        ${CMAKE_SOURCE_DIR}/vendored/tracy/public/tracy
+)
 
 target_link_libraries(vulkan-prog
     PRIVATE
@@ -108,6 +129,7 @@ target_link_libraries(vulkan-prog
         glm::glm
         fastgltf::module
         TBB::tbb
+        bc7enc
 )
 
 target_sources(vulkan-prog
@@ -126,8 +148,6 @@ target_sources(vulkan-prog
         vendored/imgui/imgui_widgets.cpp
         vendored/xxhash/xxhash.c
         vendored/tracy/public/TracyClient.cpp
-        vendored/bc7enc/bc7enc.cpp
-        vendored/bc7enc/rgbcx.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
         src/user-input.cppm

@@ -1,3 +1,7 @@
+// HEADER GUARDS ARE NOT PART OF THE ORIGINAL FILE, ADDED MANUALLY
+#ifndef BC7ENC_INCLUDE_H
+#define BC7ENC_INCLUDE_H
+
 // File: bc7enc.h - Richard Geldreich, Jr. - MIT license or public domain (see end of bc7enc.c)
 // If you use this software in a product, attribution / credits is requested but not required.
 #include <stdlib.h>
@@ -121,3 +125,5 @@ void bc7enc_compress_block_init();
 bool bc7enc_compress_block(void *pBlock, const void *pPixelsRGBA, const bc7enc_compress_block_params *pComp_params);
 
 
+#endif // #ifndef BC7ENC_INCLUDE_H
+// HEADER GUARDS ARE NOT PART OF THE ORIGINAL FILE, ADDED MANUALLY

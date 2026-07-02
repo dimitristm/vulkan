@@ -11,8 +11,6 @@ module;
 #include <glm/gtc/quaternion.hpp>
 #include <boost/pfr.hpp>
 #include <SDL3/SDL_asyncio.h>
-#include <bc7enc/bc7enc.h>
-#include <bc7enc/rgbcx.h>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <unordered_map>
@@ -36,6 +34,7 @@ import vulkanEngine;
 import vulkanUtil;
 import types;
 import util;
+import bc7enc;
 
 using std::memcpy;
 using util::ByteRange;
