@@ -425,6 +425,7 @@ void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALev
             .RenderPass{},
             .Subpass{},
             .MSAASamples = static_cast<VkSampleCountFlagBits>(msaa_level),
+            .ExtraDynamicStates{},
             .PipelineRenderingCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
                 .pNext = nullptr,
