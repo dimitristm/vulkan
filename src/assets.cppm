@@ -6,7 +6,6 @@ module;
 #include <stb/stb_image.h>
 #include <vulkan/vulkan_core.h>
 #include <glm/glm.hpp>
-#include <xxhash/xxhash.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <boost/pfr.hpp>
@@ -35,6 +34,7 @@ import vulkanUtil;
 import types;
 import util;
 import bc7enc;
+import xxhash;
 
 using std::memcpy;
 using util::ByteRange;

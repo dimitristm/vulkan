@@ -125,6 +125,16 @@ target_sources(imgui
 )
 target_include_directories(imgui PRIVATE ${CMAKE_SOURCE_DIR}/vendored/imgui)
 
+add_library(xxhash STATIC)
+target_sources(xxhash
+    PRIVATE
+        vendored/xxhash/xxhash.c
+
+    PUBLIC FILE_SET CXX_MODULES FILES
+        vendored/xxhash/xxhash.cppm
+)
+target_include_directories(xxhash PRIVATE ${CMAKE_SOURCE_DIR}/vendored/xxhash)
+
 # ---- Executable ----
 add_executable(vulkan-prog)
 
@@ -145,6 +155,7 @@ target_link_libraries(vulkan-prog
         TBB::tbb
         bc7enc
         imgui
+        xxhash
 )
 
 target_sources(vulkan-prog
@@ -154,7 +165,6 @@ target_sources(vulkan-prog
         src/vulkan-util.cpp
         vendored/vma_compilation_unit.cpp
         vendored/stb/stb_image_compilation_unit.cpp
-        vendored/xxhash/xxhash.c
         vendored/tracy/public/TracyClient.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
