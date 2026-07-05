@@ -138,6 +138,10 @@ export class Timer {
     std::optional<Time> end_time;
 
 public:
+    Timer(bool start_immediately){
+        if (start_immediately) start();
+    }
+
     void start(){
         start_time = Time::now();
         end_time.reset();
@@ -195,7 +199,8 @@ export class LagDetect {
     Timer timer;
 
 public:
-    explicit LagDetect(Duration threshold):threshold(threshold){}
+    explicit LagDetect(Duration threshold, bool start_immediately)
+    :threshold(threshold), timer(start_immediately){}
 
     void start(){
         timer.start();
@@ -214,7 +219,7 @@ public:
 
 export class FrameTimer{
     Time frame_start{};
-    Timer frame_timer{};
+    Timer frame_timer{false};
     Duration frame_duration{};
 
     f64 ema_fps = 0.0; // EMA = exponential moving average
