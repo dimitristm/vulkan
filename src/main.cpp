@@ -1,14 +1,22 @@
 #include <SDL3/SDL_init.h>
 #include <Tracy.hpp>
+
+#if !VK_PROJ_USE_IMPORT_STD
 #include <print>
+#endif
+
+#if VK_PROJ_USE_IMPORT_STD
+import std;
+#endif
 
 import vulkanEngine;
 import vulkanRenderer;
 import userInput;
-import util;
-import types;
 import assets;
 import vulkanUtil;
+import util;
+import types;
+
 import imgui;
 
 int main(){

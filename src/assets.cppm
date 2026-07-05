@@ -26,11 +26,12 @@ export module assets;
 import std;
 #endif
 
-import fastgltf;
 import vulkanEngine;
 import vulkanUtil;
 import types;
 import util;
+
+import fastgltf;
 import bc7enc;
 import xxhash;
 import glm;

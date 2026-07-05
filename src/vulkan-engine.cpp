@@ -39,6 +39,7 @@ module vulkanEngine;
 import std;
 #endif
 import types;
+
 import imgui_impl_sdl3;
 import imgui_impl_vulkan;
 import glm;
