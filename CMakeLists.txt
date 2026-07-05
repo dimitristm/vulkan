@@ -96,9 +96,32 @@ FetchContent_Declare(
     GIT_TAG        1.0.3
     GIT_SHALLOW TRUE
 )
+set(GLM_BUILD_LIBRARY OFF)
 set(GLM_ENABLE_CXX_20 ON)
 set(GLM_ENABLE_SIMD_AVX2 ON)
 FetchContent_MakeAvailable(glm)
+
+FetchContent_Declare(
+    SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG        release-3.4.12
+    GIT_SHALLOW TRUE
+)
+set(SDL_SHARED OFF)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF)
+set(SDL_TESTS OFF)
+set(SDL_DISABLE_INSTALL ON)
+set(SDL_DISABLE_INSTALL_DOCS ON)
+set(SDL_INSTALL_TESTS OFF)
+set(SDL_X11 OFF)
+set(SDL_RENDER OFF)
+set(SDL_GPU OFF)
+# Remember to install the libdecor development library for window decorations on GNOME desktops
+# installing pipewire-devel also helps by using pipewire directly instead of going through the alsa
+# compatibility layer.
+# Todo: figure out what else SDL3 depends on that isn't installed by default on most distros and list it here
+FetchContent_MakeAvailable(SDL3)
 
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
@@ -161,7 +184,7 @@ target_include_directories(vulkan-prog
 target_link_libraries(vulkan-prog
     PRIVATE
         Vulkan::Vulkan
-        SDL3::SDL3
+        SDL3::SDL3-static
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
         fastgltf::module
