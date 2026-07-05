@@ -1,9 +1,6 @@
 module;
 
 #include <vulkan/vulkan_core.h>
-#include <glm/vec2.hpp>
-#include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <cassert>
@@ -14,6 +11,7 @@ export module types;
 #if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif
+import glm;
 
 // Integers, floating point
 export using i8  = std::int8_t;

@@ -1,10 +1,8 @@
 module;
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_events.h>
+#include <cassert>
 #if !VK_PROJ_USE_IMPORT_STD
 #include <print>
 #endif
@@ -15,6 +13,7 @@ import std;
 #endif
 import types;
 import imgui_impl_sdl3;
+import glm;
 
 static bool is_fullscreen(SDL_Window *window) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);
@@ -27,7 +26,6 @@ static void toggle_fullscreen(SDL_Window *window) {
         std::println("Failed to toggle fullscreen: {}", SDL_GetError());
     }
 }
-
 class Camera{
 public:
     fvec3 pos{0.0f, 0.0f, 3.0f};
@@ -54,7 +52,7 @@ public:
     }
 
     [[nodiscard]] fmat4 get_view_transform() const {
-        return glm::lookAt(pos, pos + get_direction(), up);
+        return glm::gtc::lookAt(pos, pos + get_direction(), up);
     }
 
     [[nodiscard]] f32 get_yaw() const { return yaw; }

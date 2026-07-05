@@ -1,7 +1,4 @@
 module;
-#include <glm/vec2.hpp>
-#include <glm/trigonometric.hpp>
-#include <glm/mat4x4.hpp>
 #include <SDL3/SDL_video.h>
 #include <emmintrin.h>
 #if !VK_PROJ_USE_IMPORT_STD
@@ -17,6 +14,7 @@ import std;
 #endif
 import types;
 import imgui;
+import glm;
 
 
 namespace util{

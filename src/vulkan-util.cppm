@@ -2,7 +2,6 @@ module;
 
 #include <vulkan/vulkan_core.h>
 #include <bits/stdint-uintn.h>
-#include <glm/vec2.hpp>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <bits/std_function.h>

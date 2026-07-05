@@ -90,9 +90,23 @@ set(TBB4PY_BUILD OFF CACHE BOOL "Disable TBB Python bindings" FORCE)
 # set(TBB_STRICT OFF CACHE BOOL "Do not treat compiler warnings as errors" FORCE)
 FetchContent_MakeAvailable(TBB)
 
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG        1.0.3
+    GIT_SHALLOW TRUE
+)
+set(GLM_ENABLE_CXX_20 ON)
+set(GLM_ENABLE_SIMD_AVX2 ON)
+FetchContent_MakeAvailable(glm)
+
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
+
+# Module libraries that wrap libraries from above
+add_library(glm_module STATIC)
+target_sources(glm_module PUBLIC FILE_SET CXX_MODULES FILES ${glm_SOURCE_DIR}/glm/glm.cppm)
+
 
 # Vendored libraries that don't have their own CMakeLists.txt
 add_library(bc7enc STATIC)
@@ -150,12 +164,12 @@ target_link_libraries(vulkan-prog
         SDL3::SDL3
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
-        glm::glm
         fastgltf::module
         TBB::tbb
         bc7enc
         imgui
         xxhash
+        glm_module
 )
 
 target_sources(vulkan-prog

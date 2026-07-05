@@ -1,14 +1,8 @@
 module;
 
 #include <SDL3/SDL_video.h>
-
 #include <boost/pfr.hpp>
-
-
-#include <glm/vec2.hpp>
-#include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
-
+#include <cassert>
 
 // Disable harmless VMA warnings
 #if defined(__clang__)
@@ -42,6 +36,7 @@ module;
 export module vulkanEngine;
 import types;
 import util;
+import glm;
 #if VK_PROJ_USE_IMPORT_STD
 import std;
 #endif

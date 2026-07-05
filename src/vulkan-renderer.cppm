@@ -5,13 +5,13 @@ module;
 #include <SDL3/SDL_events.h>
 
 #include <VkBootstrap.h>
-#include <glm/ext/matrix_float4x4.hpp>
 
 #include <stb/stb_image.h>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <array>
 #include <print>
+#include <cmath>
 #endif
 
 export module vulkanRenderer;
@@ -26,6 +26,7 @@ import assets;
 import util;
 import types;
 import imgui;
+import glm;
 
 using namespace util;
 

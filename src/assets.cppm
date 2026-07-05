@@ -1,13 +1,11 @@
 module;
 
+#include <cassert>
 #include <tbb/parallel_for_each.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
 #include <vulkan/vulkan_core.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <boost/pfr.hpp>
 #include <SDL3/SDL_asyncio.h>
 
@@ -35,6 +33,7 @@ import types;
 import util;
 import bc7enc;
 import xxhash;
+import glm;
 
 using std::memcpy;
 using util::ByteRange;
@@ -751,11 +750,11 @@ public:
                 const auto &node = asset.nodes[node_idx];
                 fmat4 node_transform(1.f);
                 if (const auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-                    fmat4 T = glm::translate(fmat4(1.f), fvec3(trs->translation[0], trs->translation[1], trs->translation[2]));
+                    fmat4 T = glm::gtc::translate(fmat4(1.f), fvec3(trs->translation[0], trs->translation[1], trs->translation[2]));
                     glm::quat q(trs->rotation[3], trs->rotation[0],
                                 trs->rotation[1], trs->rotation[2]);
-                    fmat4 R = glm::mat4_cast(q);
-                    fmat4 S = glm::scale(fmat4(1.f), fvec3(trs->scale[0], trs->scale[1], trs->scale[2]));
+                    fmat4 R = glm::gtc::mat4_cast(q);
+                    fmat4 S = glm::gtc::scale(fmat4(1.f), fvec3(trs->scale[0], trs->scale[1], trs->scale[2]));
                     node_transform = T * R * S;
                 }
                 fmat4 world_transform = parent_transform * node_transform;

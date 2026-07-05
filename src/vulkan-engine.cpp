@@ -5,8 +5,6 @@ module;
 #include <VkBootstrap.h>
 #include <vulkan/vk_enum_string_helper.h>
 
-#include <glm/vec2.hpp>
-
 // Disable harmless VMA warnings
 #if defined(__clang__)
 #  pragma clang diagnostic push
@@ -43,6 +41,7 @@ import std;
 import types;
 import imgui_impl_sdl3;
 import imgui_impl_vulkan;
+import glm;
 
 void VK_CHECK(VkResult result){
     if(result != VK_SUCCESS){
