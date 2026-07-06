@@ -1,7 +1,6 @@
 module;
 
 #include <cassert>
-#include <tbb/parallel_for_each.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
@@ -17,8 +16,6 @@ module;
 #include <cstring>
 #include <variant>
 #include <concepts>
-#include <mutex>
-#include <ranges>
 #endif
 
 export module assets;
@@ -28,13 +25,16 @@ import std;
 
 import vulkanEngine;
 import vulkanUtil;
+import imgProcessing;
 import types;
 import util;
 
 import fastgltf;
-import bc7enc;
 import xxhash;
 import glm;
+
+export using ::BCnQuality;
+export using ::MipQuality;
 
 using std::memcpy;
 using util::ByteRange;
@@ -344,12 +344,19 @@ struct Image{
     std::vector<std::byte> data;
     const uint8_t *pixels_RGBA;
     bool is_processed = false;
+    BCnQuality bcn_quality;
     Type type;
 
     Image() = default;
-    Image(const uint8_t *pixels_RGBA, u32 width, u32 height, Type type)
+    Image(const uint8_t *pixels_RGBA,
+          u32 width, u32 height,
+          BCnQuality bcn_quality,
+          Type type)
     :meta({.width = width, .height = height, .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK, .mips{} }),
-    pixels_RGBA(pixels_RGBA), type(type)
+    pixels_RGBA(pixels_RGBA),
+    bcn_quality(bcn_quality),
+    type(type)
+
     { }
 
     // Use BCn compression on the image.
@@ -357,66 +364,16 @@ struct Image{
         assert(!is_processed && "Attempted to process an Image that's already processed");
         if(is_processed) return;
 
-        const uint8_t *src = pixels_RGBA;
-
-        const u32 block_amount_x = (meta.width  + 3) / 4;
-        const u32 block_amount_y = (meta.height + 3) / 4;
-        const u64 total_blocks = block_amount_x * block_amount_y;
-        // Both BC7 and BC5 encode to 16 bytes per 4x4 block
-        const u64 compressed_image_size = total_blocks * 16;
-        this->data.resize(compressed_image_size);
-
-        // Extract one 4x4 RGBA block from src, clamping at image edges
-        const auto extract_block = [&](u32 block_x, u32 block_y, uint8_t out[64]){
-            for (u32 block_pixel_y = 0; block_pixel_y < 4; ++block_pixel_y){
-                for (u32 block_pixel_x = 0; block_pixel_x < 4; ++block_pixel_x){
-                    u32 src_x = std::min(block_x * 4 + block_pixel_x, meta.width - 1);
-                    u32 src_y = std::min(block_y * 4 + block_pixel_y, meta.height - 1);
-                    const uint8_t *src_pixel = src + (src_y * meta.width + src_x) * 4;
-                    uint8_t *o = out + (block_pixel_y * 4 + block_pixel_x) * 4;
-                    o[0] = src_pixel[0]; o[1] = src_pixel[1]; o[2] = src_pixel[2]; o[3] = src_pixel[3];
-                }
-            }
-        };
-
-        auto block_grid = std::views::cartesian_product(
-            std::views::iota(0u, block_amount_y),
-            std::views::iota(0u, block_amount_x)
-        );
         if (type == Type::Albedo){
-            bc7enc_compress_block_params params;
-            bc7enc_compress_block_params_init(&params);
-            params.m_uber_level = 4;
-
-            tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
-                [&](const auto &block_coordinates) {
-                    auto [block_y, block_x] = block_coordinates;
-                    uint8_t block[64];
-                    extract_block(block_x, block_y, block);
-                    u32 linear_index = block_y * block_amount_x + block_x;
-                    std::byte *dst = reinterpret_cast<std::byte*>(this->data.data()) + linear_index * 16;
-                    bc7enc_compress_block(dst, block, &params);
-                }
-            );
-
+            this->data = to_bc7(pixels_RGBA, meta.width, meta.height, bcn_quality, BC7QualityType::PERCEPTUAL);
         } else if (type == Type::Normal || type == Type::MetallicRoughness){
             i32 channel0{}, channel1{};
             if (type == Type::Normal) {channel0 = 0; channel1 = 1;}
             if (type == Type::MetallicRoughness) {channel0 = 1; channel1 = 2;}
-            tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
-                [&](const auto &block_coordinates) {
-                    auto [block_y, block_x] = block_coordinates;
-                    uint8_t block[64];
-                    extract_block(block_x, block_y, block);
-                    u32 linear_index = block_y * block_amount_x + block_x;
-                    std::byte *dst = reinterpret_cast<std::byte*>(this->data.data()) + linear_index * 16;
-                    // Metallic and Roughness are stored in the G and B channels for gltfs
-                    rgbcx::encode_bc5(dst, block, channel0, channel1, 4);
-                }
-            );
+            this->data = to_bc5(pixels_RGBA, meta.width, meta.height, channel0, channel1, bcn_quality);
         } else {std::println("Unknown Image type"); abort();}
 
-        this->meta.mips.push_back({.offset = 0, .size = compressed_image_size});
+        this->meta.mips.push_back({.offset = 0, .size = this->data.size()});
 
         is_processed = true;
     }
@@ -484,6 +441,8 @@ export class Builder{
     std::vector<Sampler> samplers;
     TableOfContents toc;
     std::fstream out;
+    BCnQuality default_bcn_quality;
+    MipQuality default_mip_quality;
 
     template<typename T>
     void write(const T& data){ out.write(reinterpret_cast<const char*>(&data), sizeof(data)); }
@@ -494,15 +453,14 @@ export class Builder{
         out.write(reinterpret_cast<const char*>(v.data()), util::get_data_size(v));
     }
 
-    inline static std::once_flag init_bc7e_once{};
 public:
-    Builder(const std::filesystem::path &filepath)
-    :out(filepath, std::ios::binary | std::ios::trunc | std::ios::out)
+    Builder(const std::filesystem::path &filepath,
+            BCnQuality default_bcn_quality,
+            MipQuality default_mip_quality)
+    :out(filepath, std::ios::binary | std::ios::trunc | std::ios::out),
+    default_bcn_quality(default_bcn_quality),
+    default_mip_quality(default_mip_quality)
     {
-        std::call_once(init_bc7e_once, [](){
-            bc7enc_compress_block_init();
-            rgbcx::init();
-        });
         Header header{.signature = Header::Signatures::unfinished};
         write(header);
     }
@@ -581,11 +539,11 @@ public:
             Image img;
             switch (type){
             case Image::Type::Albedo:
-                img = Image(magenta, 1, 1, type); break;
+                img = Image(magenta, 1, 1, BCnQuality::MIN, type); break;
             case Image::Type::Normal:
-                img = Image(flat, 1, 1, type); break;
+                img = Image(flat, 1, 1, BCnQuality::MIN, type); break;
             case Image::Type::MetallicRoughness:
-                img = Image(white, 1, 1, type); break;
+                img = Image(white, 1, 1, BCnQuality::MIN, type); break;
             }
             return deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
         };
@@ -646,7 +604,7 @@ public:
                 &width, &height, &channels, 4);
             if (!pixels) { std::println("stbi failed to decode image"); abort(); }
 
-            Image img(pixels, static_cast<u32>(width), static_cast<u32>(height), type);
+            Image img(pixels, static_cast<u32>(width), static_cast<u32>(height), default_bcn_quality, type);
 
             u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
             stbi_image_free(pixels);

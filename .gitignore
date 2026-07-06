@@ -1,5 +1,6 @@
 /build/
-/build-use-import-std/
+/build-import-std/
+/build-deb-import-std/
 /build-release/
 /build-deb-no-opt/
 /assets/

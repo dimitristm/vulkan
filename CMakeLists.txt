@@ -130,6 +130,9 @@ find_package(SDL3 CONFIG REQUIRED)
 add_library(glm_module STATIC)
 target_sources(glm_module PUBLIC FILE_SET CXX_MODULES FILES ${glm_SOURCE_DIR}/glm/glm.cppm)
 
+# add_library(sdl3_module STATIC)
+# target_sources(sdl3_module PUBLIC FILE_SET CXX_MODULES FILES vendored/fetched-lib-wrapper-modules/sdl3.cppm)
+# target_link_libraries(sdl3_module PRIVATE SDL3::SDL3-static)
 
 # Vendored libraries that don't have their own CMakeLists.txt
 add_library(bc7enc STATIC)
@@ -212,6 +215,7 @@ target_sources(vulkan-prog
         src/vulkan-util.cppm
         src/util.cppm
         src/assets.cppm
+        src/img-processing.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE
