@@ -343,6 +343,7 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
 
     VkPhysicalDeviceFeatures features{};
     features.multiDrawIndirect = VK_TRUE;
+    features.samplerAnisotropy = VK_TRUE;
 
     vkb::PhysicalDeviceSelector selector{vkb_inst};
     vkb::PhysicalDevice vkb_physical_device = selector

@@ -944,7 +944,7 @@ private:
                     .bind(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
                     .build(vk);
             }()),
-            sampler(vk, VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_FALSE, 0)
+            sampler(vk, VK_FILTER_NEAREST, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_TRUE, 16.0f)
         {
             graphics_desc_set.update_sampler(vk, 1, sampler);
             graphics_desc_set.update_storage_buffer(vk, 2, obj_transform_indices);
