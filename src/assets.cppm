@@ -1,7 +1,6 @@
 module;
 
 #include <cassert>
-#include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <stb/stb_image.h>
 #include <vulkan/vulkan_core.h>
@@ -327,9 +326,9 @@ struct MeshPrimitive{
 static_assert(no_added_padding<MeshPrimitive>());
 
 struct ImageMetadata{
-    u32 width;
-    u32 height;
-    VkFormat format;
+    u32 width{};
+    u32 height{};
+    VkFormat format{};
     std::vector<ByteRange> mips;
     static_assert(no_added_padding<ByteRange>());
 };
@@ -340,40 +339,69 @@ struct Image{
         Normal = 1,
         MetallicRoughness = 2,
     };
-    ImageMetadata meta;
+    ImageMetadata meta{};
     std::vector<std::byte> data;
-    const uint8_t *pixels_RGBA;
+    const u8 *pixels_RGBA{};
     bool is_processed = false;
-    BCnQuality bcn_quality;
-    Type type;
+    BCnQuality bcn_quality{};
+    MipQuality mip_quality{};
+    Type type{};
 
     Image() = default;
     Image(const uint8_t *pixels_RGBA,
           u32 width, u32 height,
           BCnQuality bcn_quality,
+          MipQuality mip_quality,
           Type type)
     :meta({.width = width, .height = height, .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK, .mips{} }),
     pixels_RGBA(pixels_RGBA),
     bcn_quality(bcn_quality),
+    mip_quality(mip_quality),
     type(type)
 
     { }
 
-    // Use BCn compression on the image.
-    void process(){
+// Generates mipmaps and compresses each level into a single contiguous vector.
+    void process() {
         assert(!is_processed && "Attempted to process an Image that's already processed");
-        if(is_processed) return;
+        if (is_processed) return;
 
-        if (type == Type::Albedo){
-            this->data = to_bc7(pixels_RGBA, meta.width, meta.height, bcn_quality, BC7QualityType::PERCEPTUAL);
-        } else if (type == Type::Normal || type == Type::MetallicRoughness){
-            i32 channel0{}, channel1{};
-            if (type == Type::Normal) {channel0 = 0; channel1 = 1;}
-            if (type == Type::MetallicRoughness) {channel0 = 1; channel1 = 2;}
-            this->data = to_bc5(pixels_RGBA, meta.width, meta.height, channel0, channel1, bcn_quality);
-        } else {std::println("Unknown Image type"); abort();}
+        std::vector<std::vector<std::byte>> raw_mips;
 
-        this->meta.mips.push_back({.offset = 0, .size = this->data.size()});
+        if (type == Type::Albedo) {
+            raw_mips = make_mips_color(pixels_RGBA, static_cast<i32>(meta.width), static_cast<i32>(meta.height), true, mip_quality);
+        } else if (type == Type::Normal) {
+            raw_mips = make_mips_normals(pixels_RGBA, static_cast<i32>(meta.width), static_cast<i32>(meta.height), mip_quality);
+        } else if (type == Type::MetallicRoughness) {
+            raw_mips = make_mips_metal_rough(pixels_RGBA, static_cast<i32>(meta.width), static_cast<i32>(meta.height), mip_quality);
+        } else {
+            std::println("Unknown Image type");
+            std::abort();
+        }
+
+        this->meta.mips.reserve(raw_mips.size());
+
+        for (std::size_t i = 0; i < raw_mips.size(); ++i) {
+            u32 mip_width  = std::max(1u, meta.width >> i);
+            u32 mip_height = std::max(1u, meta.height >> i);
+            const u8* mip_pixels = reinterpret_cast<const u8*>(raw_mips[i].data());
+
+            std::vector<std::byte> compressed_mip;
+
+            if (type == Type::Albedo) {
+                compressed_mip = to_bc7(mip_pixels, mip_width, mip_height, bcn_quality, BC7QualityType::PERCEPTUAL);
+            } else {
+                i32 channel0 = (type == Type::Normal) ? 0 : 1;
+                i32 channel1 = (type == Type::Normal) ? 1 : 2;
+                compressed_mip = to_bc5(mip_pixels, mip_width, mip_height, channel0, channel1, bcn_quality);
+            }
+
+            std::size_t offset = this->data.size();
+            std::size_t size   = compressed_mip.size();
+
+            this->data.insert(this->data.end(), compressed_mip.begin(), compressed_mip.end());
+            this->meta.mips.push_back({.offset = offset, .size = size});
+        }
 
         is_processed = true;
     }
@@ -539,11 +567,11 @@ public:
             Image img;
             switch (type){
             case Image::Type::Albedo:
-                img = Image(magenta, 1, 1, BCnQuality::MIN, type); break;
+                img = Image(magenta, 1, 1, BCnQuality::MIN, MipQuality::NO_MIPS, type); break;
             case Image::Type::Normal:
-                img = Image(flat, 1, 1, BCnQuality::MIN, type); break;
+                img = Image(flat, 1, 1, BCnQuality::MIN, MipQuality::NO_MIPS, type); break;
             case Image::Type::MetallicRoughness:
-                img = Image(white, 1, 1, BCnQuality::MIN, type); break;
+                img = Image(white, 1, 1, BCnQuality::MIN, MipQuality::NO_MIPS, type); break;
             }
             return deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
         };
@@ -604,7 +632,7 @@ public:
                 &width, &height, &channels, 4);
             if (!pixels) { std::println("stbi failed to decode image"); abort(); }
 
-            Image img(pixels, static_cast<u32>(width), static_cast<u32>(height), default_bcn_quality, type);
+            Image img(pixels, static_cast<u32>(width), static_cast<u32>(height), default_bcn_quality, default_mip_quality, type);
 
             u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
             stbi_image_free(pixels);

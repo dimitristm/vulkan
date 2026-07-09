@@ -205,6 +205,7 @@ target_sources(vulkan-prog
         src/vulkan-util.cpp
         vendored/vma_compilation_unit.cpp
         vendored/stb/stb_image_compilation_unit.cpp
+        vendored/stb/stb_image_resize2_compilation_unit.cpp
         vendored/tracy/public/TracyClient.cpp
 
     PRIVATE FILE_SET CXX_MODULES FILES
