@@ -157,11 +157,12 @@ export struct Texture : public Image{
     }
 };
 
-export struct DrawImage{
-    static constexpr VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
+static inline constexpr VkFormat drawing_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+export struct ResolveImage{
+    static constexpr VkFormat format = drawing_format;
     Image img;
     ImageView view;
-    DrawImage(VulkanEngine &vk, const ivec2 &size)
+    ResolveImage(VulkanEngine &vk, const ivec2 &size)
     :img(vk,
            {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
            format,
@@ -174,38 +175,67 @@ export struct DrawImage{
     view(vk, img, ImageAspects::COLOR, 0, 1)
     {}
     void resize(VulkanEngine &vk, const ivec2 &new_window_size){
+        change(vk, new_window_size);
+    }
+    void change(VulkanEngine &vk, const ivec2 &new_window_size){
         img.erase_self(vk);
         view.erase_self(vk);
-        *this = DrawImage(vk, new_window_size);
+        *this = ResolveImage(vk, new_window_size);
+    }
+};
+
+export struct DrawImage{
+    static constexpr VkFormat format = drawing_format;
+    Image img;
+    ImageView view;
+    ResolveImage resolve_img;
+    DrawImage(VulkanEngine &vk, const ivec2 &size, MSAALevel msaa_level)
+    :img(vk,
+           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+           format,
+           //VK_IMAGE_USAGE_STORAGE_BIT
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, // transient because it gets resolved immediately during dynamic rendering, and after that we don't care about its contents
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+           msaa_level,
+           1, 1),
+    view(vk, img, ImageAspects::COLOR, 0, 1),
+    resolve_img(vk, size)
+    {}
+    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
+        change(vk, new_window_size, img.msaa_level);
+    }
+    void change_msaa(VulkanEngine &vk, MSAALevel msaa_level){
+        change(vk, {img.extent.width, img.extent.height}, msaa_level);
+    }
+    void change(VulkanEngine &vk, const ivec2 &new_window_size, MSAALevel msaa_level){
+        img.erase_self(vk);
+        view.erase_self(vk);
+        *this = DrawImage(vk, new_window_size, msaa_level);
     }
 };
 
 export struct DepthImage{
     Image img;
     ImageView view;
-    DepthImage(VulkanEngine &vk, const ivec2 &size)
+    DepthImage(VulkanEngine &vk, const ivec2 &size, MSAALevel msaa_level)
     :img(vk,
            {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
            VK_FORMAT_D32_SFLOAT,
            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-           MSAALevel::OFF,
+           msaa_level,
            1, 1),
     view(vk, img, ImageAspects::DEPTH, 0, 1)
     {}
     void resize(VulkanEngine &vk, const ivec2 &new_window_size){
+        change(vk, new_window_size, img.msaa_level);
+    }
+    void change_msaa(VulkanEngine &vk, MSAALevel msaa_level){
+        change(vk, {img.extent.width, img.extent.height}, msaa_level);
+    }
+    void change(VulkanEngine &vk, const ivec2 &new_window_size, MSAALevel msaa_level){
         img.erase_self(vk);
         view.erase_self(vk);
-        *this = DepthImage(vk, new_window_size);
-    }
-    void set_layout(const CommandBuffer &cmd_buffer){
-        cmd_buffer.barrier(BarrierInfo{
-            .img = img, .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED, .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
-            .src_access_mask = 0,
-            .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .aspects = ImageAspects::DEPTH
-        });
+        *this = DepthImage(vk, new_window_size, msaa_level);
     }
 };

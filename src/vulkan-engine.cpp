@@ -515,7 +515,9 @@ Image::Image(
     :
     extent(extent),
     format(format),
-    layer_count(layer_count)
+    mip_level_count(mip_level_count),
+    layer_count(layer_count),
+    msaa_level(msaa_level)
 {
     assert(mip_level_count > 0 && "Minimum mip level is 1, not 0.");
     assert(extent.width > 0 && extent.height > 0);
@@ -549,8 +551,10 @@ Image::Image(
     vk.created_images.insert({.image=vk_image, .allocation=allocation});
 }
 
+// todo: give this all the relevant arguments to init any VkImage correctly and then change where we use it in swapchain.
+// curretnly things are hardwired and it's only right because we just use it in swapchain creation
 Image::Image(VkImage img, VkExtent2D extent, VkFormat format, u32 layer_count)
-:vk_image(img), allocation(nullptr), extent(extent), format(format), mip_level_count(1), layer_count(layer_count)
+:vk_image(img), allocation(nullptr), extent(extent), format(format), mip_level_count(1), layer_count(layer_count), msaa_level(MSAALevel::OFF)
 {}
 
 void Image::erase_self(VulkanEngine &vk){

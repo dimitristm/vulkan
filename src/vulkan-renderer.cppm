@@ -47,6 +47,7 @@ struct FrameInFlightData{
 export class Renderer{
     static constexpr int FRAMES_IN_FLIGHT = 2;
     const VkPresentModeKHR present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+    const MSAALevel msaa_level = MSAALevel::X4;
 
     VulkanEngine &vk;
     SDL_Window *window;
@@ -66,13 +67,34 @@ export class Renderer{
     PushConstantsBuilder pc_builder;
     DescriptorSetBuilder ds_builder;
 
-    DescriptorSet compute_desc_set;
-    PushConstant<fvec4> compute_push_const;
-    PipelineLayout compute_pipeline_layout;
-    ComputePipeline compute_pipeline;
-
     PushConstant<fmat4> view_proj_transform_const;
     GraphicsPipeline<Vertex> graphics_pipeline;
+
+    void set_initial_attachment_layouts(){
+        immediate_submiter.submit(vk, [&](){
+            immediate_submiter.cmd_buffer().barrier(
+                BarrierInfo{
+                    .img = depth_image.img,
+                    .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
+                    .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask = 0,
+                    .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .aspects = ImageAspects::DEPTH
+                }, BarrierInfo{
+                    .img=draw_image.img,
+                    .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
+                    .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    .src_stage_mask=VK_PIPELINE_STAGE_2_NONE,
+                    .src_access_mask=0,
+                    .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    .aspects=ImageAspects::COLOR
+                }
+            );
+        });
+    }
 
     bool should_rebuild_swapchain = false;
     void update_drawing_surfaces(bool swapchain_out_of_date){
@@ -86,8 +108,7 @@ export class Renderer{
         const auto update_images = [&](){
             draw_image.resize(vk, new_window_size);
             depth_image.resize(vk, new_window_size);
-            immediate_submiter.submit(vk, [&](){depth_image.set_layout(immediate_submiter.cmd_buffer());});
-            compute_desc_set.update_storage_image(vk, 0, draw_image.view);
+            set_initial_attachment_layouts();
         };
 
         if (window_changed_size || swapchain_out_of_date || should_rebuild_swapchain){
@@ -108,8 +129,8 @@ public:
     immediate_submiter(vk, command_pool),
     uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
     swapchain(vk, window, present_mode),
-    draw_image(vk, get_window_size_in_pixels(window)),
-    depth_image(vk, get_window_size_in_pixels(window)),
+    draw_image(vk, get_window_size_in_pixels(window), msaa_level),
+    depth_image(vk, get_window_size_in_pixels(window), msaa_level),
     swapchain_render_done_semas(
         [&] -> std::vector<GpuSemaphore> {
             std::vector<GpuSemaphore> swapchain_render_done_semas;
@@ -125,10 +146,6 @@ public:
     specialization_info((2 * sizeof(int32_t))),
     pc_builder(),
     ds_builder(),
-    compute_desc_set(ds_builder.bind(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).build(vk)),
-    compute_push_const(pc_builder.add<fvec4>(VK_SHADER_STAGE_COMPUTE_BIT)),
-    compute_pipeline_layout(vk, compute_desc_set, pc_builder.get_ranges()),
-    compute_pipeline(vk, ComputeShader(vk, "shaders/compiled/gradient.comp.spv"), compute_pipeline_layout, &specialization_info.reset().add_entry(0, 16).add_entry(1, 32)),
     view_proj_transform_const(pc_builder.reset().add<fmat4>( VK_SHADER_STAGE_VERTEX_BIT)),
     graphics_pipeline(vk,
                       VertexShader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
@@ -137,22 +154,14 @@ public:
                       loader.get_vertex_buffer(),
                       draw_image.img.get_format(),
                       depth_image.img.get_format(),
-                      MSAALevel::OFF)
+                      msaa_level)
     {
-        compute_desc_set.update_storage_image(vk, 0, draw_image.view);
-        compute_push_const.data += fvec4(1, 0, 0, 1);
-
-        immediate_submiter.submit(vk, [&]{
-            depth_image.set_layout(immediate_submiter.cmd_buffer());
-        });
+        set_initial_attachment_layouts();
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
     void draw_gui(){
-	ImGui::Begin("Background customizer");
-        ImGui::InputFloat4("data a",(float*)& compute_push_const.data.a);
-        ImGui::End();
     }
 
     void draw_scene(const fmat4 &view_transform, ResourceLoader &loader, u64 scene_idx){
@@ -172,30 +181,13 @@ public:
         }();
 
         cmd_buffer.barrier(BarrierInfo{
-                                .img=draw_image.img,
-                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
-                                .new_layout=VK_IMAGE_LAYOUT_GENERAL,
-                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                                .src_access_mask=0,
-                                .dst_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                .dst_access_mask=0, // todo: do i really not need to make visible this transition to the compute stage?
-                                .aspects=ImageAspects::COLOR}
-        );
-
-        cmd_buffer.update_push_constants(compute_pipeline, compute_push_const);
-
-        cmd_buffer.bind_pipeline(compute_pipeline);
-        cmd_buffer.bind_descriptor_set(compute_pipeline, compute_desc_set);
-        cmd_buffer.dispatch(std::ceil(window_size.x / 16.0), std::ceil(window_size.y / 16.0), 1);
-
-        cmd_buffer.barrier(BarrierInfo{
-                               .img=draw_image.img,
-                               .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_GENERAL,
+                               .img=draw_image.resolve_img.img,
+                               .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
                                .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                               .src_stage_mask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                               .src_access_mask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                               .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
+                               .src_access_mask=0,
                                .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                               .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                .aspects=ImageAspects::COLOR}
         );
 
@@ -203,13 +195,14 @@ public:
         cmd_buffer.bind_descriptor_set(graphics_pipeline, loader.get_descriptor_set());
         view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
         cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
-        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)},
+        cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.resolve_img.view,
+                                {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)},
                                 loader.get_vertex_buffer(), loader.get_index_buffer(), loader.prepare_to_draw_scene(scene_idx));
 
-        cmd_buffer.draw_imgui(draw_image.view, {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)});
+        cmd_buffer.draw_imgui(draw_image.resolve_img.view, {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)});
 
         cmd_buffer.barrier(BarrierInfo{
-                                .img=draw_image.img,
+                                .img=draw_image.resolve_img.img,
                                 .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                 .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -230,7 +223,7 @@ public:
                            }
         );
 
-        cmd_buffer.blit(draw_image.img,
+        cmd_buffer.blit(draw_image.resolve_img.img,
                         swapchain.get_images()[swapchain_img_idx],
                         {0,0},
                         window_size,

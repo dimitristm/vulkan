@@ -219,6 +219,7 @@ export struct Image{
     VkFormat format;
     u32 mip_level_count;
     u32 layer_count;
+    MSAALevel msaa_level;
 
     [[nodiscard]] VkFormat get_format() const { return format; }
 
@@ -849,6 +850,7 @@ export struct CommandBuffer{
     void draw_indexed(
         ImageView color_attachment,
         ImageView depth_attachment,
+        ImageView resolve_image_view,
         VkExtent2D draw_extent,
         const VertexBuffer<T> &vertex_buffer,
         const IndexBuffer &index_buffer,
@@ -859,10 +861,10 @@ export struct CommandBuffer{
             .pNext       = nullptr,
             .imageView   = color_attachment.view,
             .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .resolveMode{},
-            .resolveImageView{},
-            .resolveImageLayout{},
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT,
+            .resolveImageView   = resolve_image_view.view,
+            .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
             .clearValue{},
         };
