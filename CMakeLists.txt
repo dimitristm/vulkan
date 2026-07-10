@@ -1,3 +1,9 @@
+# This project depends on everything that SDL3 depends on (as we build it ourselves)
+# as well as the static version of libstdc++.
+# You can find the SDL3 dependencies here: https://wiki.libsdl.org/SDL3/README-linux
+# On Ubuntu and Arch, static libstdc++ comes with the compiler.
+# On Fedora, install it with sudo dnf install libstdc++-static
+
 cmake_minimum_required(VERSION 3.31.6)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -117,10 +123,6 @@ set(SDL_INSTALL_TESTS OFF)
 set(SDL_X11 OFF)
 set(SDL_RENDER OFF)
 set(SDL_GPU OFF)
-# Remember to install the libdecor development library for window decorations on GNOME desktops
-# installing pipewire-devel also helps by using pipewire directly instead of going through the alsa
-# compatibility layer.
-# Todo: figure out what else SDL3 depends on that isn't installed by default on most distros and list it here
 FetchContent_MakeAvailable(SDL3)
 
 find_package(Vulkan REQUIRED)
@@ -196,6 +198,11 @@ target_link_libraries(vulkan-prog
         imgui
         xxhash
         glm_module
+)
+
+target_link_options(vulkan-prog PRIVATE
+    -static-libstdc++
+    -static-libgcc
 )
 
 target_sources(vulkan-prog
