@@ -11,7 +11,6 @@ module;
 #if !VK_PROJ_USE_IMPORT_STD
 #include <array>
 #include <print>
-#include <cmath>
 #endif
 
 export module vulkanRenderer;

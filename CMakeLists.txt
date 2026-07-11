@@ -177,6 +177,17 @@ target_sources(xxhash
 )
 target_include_directories(xxhash PRIVATE ${CMAKE_SOURCE_DIR}/vendored/xxhash)
 
+add_library(lz4 STATIC)
+target_sources(lz4
+    PRIVATE
+        vendored/lz4/lz4.c
+        vendored/lz4/lz4hc.c
+
+    PUBLIC FILE_SET CXX_MODULES FILES
+        vendored/lz4/lz4.cppm
+)
+target_include_directories(lz4 PRIVATE ${CMAKE_SOURCE_DIR}/vendored/lz4)
+
 # ---- Executable ----
 add_executable(vulkan-prog)
 
@@ -198,6 +209,7 @@ target_link_libraries(vulkan-prog
         imgui
         xxhash
         glm_module
+        lz4
 )
 
 target_link_options(vulkan-prog PRIVATE

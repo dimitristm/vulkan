@@ -31,6 +31,7 @@ import util;
 import fastgltf;
 import xxhash;
 import glm;
+import lz4;
 
 export using ::BCnQuality;
 export using ::MipQuality;
