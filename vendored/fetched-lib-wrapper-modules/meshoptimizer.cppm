@@ -126,7 +126,7 @@ export {
     using ::meshopt_dequantizeHalf;
     using ::meshopt_computePositionExponent;
     using ::meshopt_setAllocator;
-    
+
     // Inline C++ Quantization Functions
     using ::meshopt_quantizeUnorm;
     using ::meshopt_quantizeSnorm;

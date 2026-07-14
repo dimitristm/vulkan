@@ -232,11 +232,6 @@ target_link_libraries(vulkan-prog
         meshoptimizer-module
 )
 
-target_link_options(vulkan-prog PRIVATE
-    -static-libstdc++
-    -static-libgcc
-)
-
 target_sources(vulkan-prog
     PRIVATE
         src/main.cpp
@@ -262,6 +257,15 @@ target_compile_options(vulkan-prog PRIVATE
     -Wall
     -Wextra
     -Wpedantic
+    $<$<CONFIG:Release>:-ffunction-sections>
+    $<$<CONFIG:Release>:-fdata-sections>
+)
+
+target_link_options(vulkan-prog PRIVATE
+    -static-libstdc++
+    -static-libgcc
+    $<$<CONFIG:Release>:LINKER:--gc-sections>
+    $<$<CONFIG:Release>:LINKER:--icf=all>
 )
 
 target_compile_definitions(vulkan-prog PRIVATE
