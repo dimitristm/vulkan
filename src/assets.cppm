@@ -6,6 +6,10 @@ module;
 #include <vulkan/vulkan_core.h>
 #include <boost/pfr.hpp>
 #include <SDL3/SDL_asyncio.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/blocked_range.h>
+#include <oneapi/tbb/task_group.h>
+#include <oneapi/tbb/task_arena.h>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <unordered_map>
@@ -15,6 +19,10 @@ module;
 #include <cstring>
 #include <variant>
 #include <concepts>
+#include <thread>
+#include <ranges>
+#include <condition_variable>
+#include <deque>
 #endif
 
 export module assets;
@@ -114,6 +122,354 @@ static void XXH_CHECK(XXH_errorcode result){
     if (result == XXH_ERROR) {std::println("XXH error"); abort();}
 }
 
+// Describes an lz4-compressed byte stream stored as a sequence of independently
+// (de)compressible blocks. All blocks are BLOCK_SIZE bytes of *uncompressed* data,
+// except the last block, which absorbs any remainder (see compute_last_block_size()
+// below for the exact rule) and can therefore be anywhere in
+// [1, MAX_LAST_BLOCK_SIZE) bytes uncompressed.
+struct CompressedStreamInfo{
+    // Target/standard uncompressed size of every block but (possibly) the last.
+    static constexpr u32 BLOCK_SIZE = 256u * 1024u;
+    // Minimum size of the last block, unless the last block is also the only block (no minimum in that case).
+    static constexpr u32 MIN_LAST_BLOCK_SIZE = 256u * 1024u;
+    // Exclusive upper bound on the uncompressed size of the last block once a
+    // remainder has been merged into it.
+    static constexpr u32 MAX_LAST_BLOCK_SIZE = BLOCK_SIZE + MIN_LAST_BLOCK_SIZE;
+
+    static_assert(MIN_LAST_BLOCK_SIZE <= BLOCK_SIZE, "MIN_LAST_BLOCK_SIZE must not exceed BLOCK_SIZE, or a standalone last block could never satisfy it");
+
+    u64 uncompressed_stream_size{}; // total uncompressed size of the whole stream
+    u32 uncompressed_last_block_size{}; // uncompressed size of the final block. i think this can be removed?
+    std::vector<ByteRange> blocks; // one entry (file offset + compressed size) per block, in stream order
+    static_assert(no_added_padding<ByteRange>());
+
+    CompressedStreamInfo() = default;
+    CompressedStreamInfo(u64 uncompressed_stream_size)
+    :uncompressed_stream_size(uncompressed_stream_size),
+    uncompressed_last_block_size(compute_uncompressed_last_block_size(uncompressed_stream_size)),
+    blocks(block_count())
+    { }
+
+    [[nodiscard]] static u32 block_count(u64 uncompressed_stream_size) {
+        if (uncompressed_stream_size == 0) return 0;
+        u32 last_block_uncompressed_size = compute_uncompressed_last_block_size(uncompressed_stream_size);
+        return static_cast<u32>((uncompressed_stream_size - last_block_uncompressed_size) / BLOCK_SIZE) + 1;
+    }
+    [[nodiscard]] u32 block_count() const {
+        if (uncompressed_stream_size == 0) return 0;
+        return static_cast<u32>((uncompressed_stream_size - uncompressed_last_block_size) / BLOCK_SIZE) + 1;
+    }
+    // Offset of block block_idx within the *uncompressed* logical stream. Offset of first block is 0.
+    [[nodiscard]] static u64 uncompressed_offset_of_block(u32 block_idx) {
+        return static_cast<u64>(block_idx) * BLOCK_SIZE;
+    }
+    [[nodiscard]] u32 uncompressed_size_of_block(u32 block_idx) const {
+        return (block_idx + 1 == block_count()) ? uncompressed_last_block_size : BLOCK_SIZE;
+    }
+
+    // Retruns the size the final block should have, applying the "merge a too-small remainder into the
+    // previous block" rule.
+    static constexpr u32 compute_uncompressed_last_block_size(u64 uncompressed_stream_size) {
+        if (uncompressed_stream_size == 0) return 0;
+        u64 full_blocks = uncompressed_stream_size / BLOCK_SIZE;
+        u64 remainder = uncompressed_stream_size % BLOCK_SIZE;
+        if (remainder == 0) return BLOCK_SIZE;
+        // The whole stream fits in a single (possibly small) block.
+        if (full_blocks == 0) return static_cast<u32>(remainder);
+        // Remainder is too small to stand as its own block: merge it into the previous one.
+        if (remainder < MIN_LAST_BLOCK_SIZE) {
+            return static_cast<u32>(BLOCK_SIZE + remainder);
+        }
+        // Remainder is big enough to stand alone as the final block.
+        return static_cast<u32>(remainder);
+    }
+};
+
+static CompressedStreamInfo compress_and_write_stream(const std::vector<std::byte> &uncompressed_data, std::ostream &out){
+    CompressedStreamInfo info(uncompressed_data.size());
+    std::vector<std::vector<std::byte>> compressed_blocks(info.blocks.size());
+    tbb::parallel_for(tbb::blocked_range<u32>(0, compressed_blocks.size()), [&](const tbb::blocked_range<u32> &range){
+        for (u32 block_idx = range.begin(); block_idx < range.end(); ++block_idx) {
+            u64 src_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
+            u32 src_size   = info.uncompressed_size_of_block(block_idx);
+            const char* src = reinterpret_cast<const char*>(uncompressed_data.data() + src_offset);
+
+            i32 bound = LZ4_compressBound(static_cast<i32>(src_size));
+            compressed_blocks[block_idx].resize(static_cast<std::size_t>(bound));
+
+            i32 compressed_size = LZ4_compress_HC(
+                src, reinterpret_cast<char*>(compressed_blocks[block_idx].data()),
+                static_cast<int>(src_size), static_cast<int>(bound), LZ4HC_CLEVEL_DEFAULT);
+            if (compressed_size <= 0) { std::println("lz4 block compression failed"); abort(); }
+            compressed_blocks[block_idx].resize(static_cast<std::size_t>(compressed_size));
+        }
+    });
+    for (const auto &[i, comp_block] : std::views::enumerate(compressed_blocks)){
+        u64 file_offset = out.tellp();
+        out.write(reinterpret_cast<const char*>(comp_block.data()), util::get_data_size(comp_block));
+        info.blocks[i] = { .offset = file_offset, .size = comp_block.size() };
+    }
+    return info;
+}
+
+class CompressedStreamPromise;
+
+// Aggregates completion of many stream reads into a single queue so they
+// can be processed as they finish.
+class CompressedStreamPromiseGroup {
+private:
+    std::mutex mutex;
+    std::condition_variable stream_finished;
+    std::deque<std::shared_ptr<CompressedStreamPromise>> completed;
+    u32 registered = 0;
+    u32 finished = 0;
+
+    friend class CompressedStreamReader;
+    friend class CompressedStreamPromise;
+
+    void register_stream() {
+        std::lock_guard lock(mutex);
+        ++registered;
+    }
+
+    // Called exactly once per stream.
+    void notify_stream_done(std::shared_ptr<CompressedStreamPromise> promise) {
+        {
+            std::lock_guard lock(mutex);
+            completed.push_back(std::move(promise));
+            ++finished;
+        }
+        stream_finished.notify_all();
+    }
+
+public:
+    // Pops and returns the next finished stream, blocking if none is
+    // ready yet. Returns nullptr once every stream registered against
+    // this group has already been handed back this way and none remain
+    // pending. Intended to be drained in a loop:
+    //   while (auto p = group.wait_any()) { process(p); }
+    // If more read() calls register against this group while you're
+    // draining it, wait_any() keeps blocking for them instead of
+    // returning nullptr early.
+    std::shared_ptr<CompressedStreamPromise> pop_completed_promise() {
+        std::unique_lock lock(mutex);
+        stream_finished.wait(lock, [this] { return !completed.empty() || finished >= registered; });
+        if (completed.empty()) return nullptr;
+        auto promise = std::move(completed.front());
+        completed.pop_front();
+        return promise;
+    }
+
+    void process_all_promises(const std::function<void(std::shared_ptr<CompressedStreamPromise>)> &&process){
+        while (auto p = pop_completed_promise()){ process(p); }
+    }
+};
+
+class CompressedStreamPromise : public std::enable_shared_from_this<CompressedStreamPromise> {
+private:
+    std::vector<std::byte> owned_buffer; // only populated when no buffer was supplied
+    std::span<std::byte> uncompressed_buffer;
+    std::vector<std::vector<std::byte>> compressed_buffers;
+    std::atomic<u32> blocks_done{0};
+    std::atomic<bool> done{false};
+    std::atomic<bool> finalized{false};
+    CompressedStreamPromiseGroup* group = nullptr;
+
+    friend class CompressedStreamReader;
+
+    CompressedStreamPromise(CompressedStreamInfo stream_info,
+                            CompressedStreamPromiseGroup* owning_group,
+                            void* user_data,
+                            std::optional<std::span<std::byte>> out_buffer = std::nullopt)
+    :owned_buffer(out_buffer ? std::vector<std::byte>{} : std::vector<std::byte>(stream_info.uncompressed_stream_size)),
+    uncompressed_buffer(out_buffer ? *out_buffer : std::span<std::byte>(owned_buffer)),
+    compressed_buffers(stream_info.blocks.size()),
+    group(owning_group),
+    info(std::move(stream_info)),
+    user_data(user_data)
+    {
+        for (const auto &[i, block_info] : std::views::enumerate(info.blocks)){
+            compressed_buffers[i].resize(block_info.size);
+        }
+    }
+
+    void decompress_block(u32 block_idx) {
+        u64 dest_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
+        u32 dest_size = info.uncompressed_size_of_block(block_idx);
+
+        char* dest = reinterpret_cast<char*>(uncompressed_buffer.data() + dest_offset);
+        const char* src = reinterpret_cast<const char*>(compressed_buffers[block_idx].data());
+        i32 compressed_size = static_cast<i32>(info.blocks[block_idx].size);
+
+        i32 result = LZ4_decompress_safe(src, dest, compressed_size, static_cast<i32>(dest_size));
+
+        // Free vector memory early
+        compressed_buffers[block_idx] = {};
+
+        if (result <= 0) {
+            std::println("LZ4 decompression failed at block {}", block_idx);
+            std::abort();
+        }
+
+        if (blocks_done.fetch_add(1, std::memory_order_acq_rel) + 1 == info.blocks.size()) {
+            finish();
+        }
+    }
+
+    // Marks the whole stream done and wakes both this promise's own
+    // waiters and the owning group's waiters. Guarded so it only ever
+    // runs once even if an error and a last-block success race. // todo i removed errors so maybe useless check
+    void finish() {
+        bool expected = false;
+        if (!finalized.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+        done.store(true, std::memory_order_release);
+        done.notify_all();
+        if (group != nullptr) group->notify_stream_done(shared_from_this());
+    }
+
+public:
+    const CompressedStreamInfo info;
+    void* const user_data;
+
+    // Block the caller until this stream is finished
+    void wait() {
+        while (!done.load(std::memory_order_acquire)) {
+            done.wait(false, std::memory_order_acquire);
+        }
+    }
+ 
+    [[nodiscard]] bool is_done() const {
+        return done.load(std::memory_order_acquire);
+    }
+ 
+    [[nodiscard]] std::span<std::byte> buffer() const {
+        return uncompressed_buffer;
+    }
+};
+
+class CompressedStreamReader {
+private:
+    struct BlockJob {
+        std::shared_ptr<CompressedStreamPromise> promise;
+        u32 block_idx;
+    };
+
+    SDL_AsyncIOQueue* queue;
+    tbb::task_arena arena;
+
+    // Guards pending_reads and lets io_loop sleep instead of polling when
+    // there's nothing in flight.
+    std::mutex wake_mutex;
+    std::condition_variable_any wake_cv;
+    u64 pending_reads = 0; // number of SDL_ReadAsyncIO calls submitted but not yet retrieved
+
+    std::jthread worker;
+
+    void io_loop(std::stop_token stoken) {
+        while (true) {
+            // While idle, sleep until either a read is submitted or a stop is requested,
+            // instead of waking up on a timer for the whole lifetime of the program.
+            // condition_variable_any's stop_token overload registers a callback that
+            // notifies us the moment request_stop() is called, so no manual notify
+            // is needed in the destructor.
+            {
+                std::unique_lock lock(wake_mutex);
+                bool have_work = wake_cv.wait(lock, stoken, [this] { return pending_reads > 0; });
+                if (!have_work) return; // stop was requested while idle
+            }
+
+            SDL_AsyncIOOutcome outcome{};
+            // Still bounded, so a stop request that arrives mid-read is noticed promptly
+            // rather than blocking shutdown on an in-flight (or stuck) read.
+            if (SDL_WaitAsyncIOResult(queue, &outcome, 5)) {
+                auto* job = static_cast<BlockJob*>(outcome.userdata);
+
+                if (outcome.result == SDL_ASYNCIO_COMPLETE) {
+                    {
+                        std::lock_guard lock(wake_mutex);
+                        --pending_reads;
+                    }
+                    // Fire-and-forget to the oneTBB thread pool
+                    arena.enqueue([job] {
+                        job->promise->decompress_block(job->block_idx);
+                        delete job; // Drop shared_ptr reference count
+                    });
+                } else {
+                    std::println("Read failed, SDL error: {}", SDL_GetError());
+                    std::abort();
+                }
+            }
+        }
+    }
+
+public:
+    CompressedStreamReader()
+    :queue(SDL_CreateAsyncIOQueue())
+    {
+        if (queue == nullptr) { std::println("SDL failed to initialize async io queue: {}", SDL_GetError()); abort(); }
+        // Start the I/O polling thread
+        worker = std::jthread([this](std::stop_token st) { io_loop(st); });
+    }
+ 
+    ~CompressedStreamReader() {
+        worker.request_stop();
+        worker.join();
+        SDL_DestroyAsyncIOQueue(queue);
+    }
+ 
+    CompressedStreamReader(const CompressedStreamReader&) = delete;
+    CompressedStreamReader& operator=(const CompressedStreamReader&) = delete;
+    CompressedStreamReader(CompressedStreamReader&&) = delete;
+    CompressedStreamReader& operator=(CompressedStreamReader&&) = delete;
+
+    // group: every read() sharing the same ReadGroup can be drained
+    //        together through the group's member functions
+    // user_data: opaque pointer stashed on the returned promise (in
+    //        CompressedStreamPromise::user_data) so the caller can identify
+    //        the stream and know what to use it for
+    // out_uncompressed_buffer: optional. If omitted, the returned
+    //        CompressedStreamPromise allocates and owns its own output buffer,
+    //        reachable afterwards via promise->buffer()
+    std::shared_ptr<CompressedStreamPromise> read(
+        SDL_AsyncIO* in,
+        const CompressedStreamInfo& stream_info,
+        CompressedStreamPromiseGroup& group,
+        void* user_data,
+        std::optional<std::span<std::byte>> out_uncompressed_buffer = std::nullopt)
+    {
+        group.register_stream();
+        std::shared_ptr<CompressedStreamPromise> promise(new CompressedStreamPromise(stream_info, &group, user_data, out_uncompressed_buffer));
+ 
+        for (u32 i = 0; i < stream_info.blocks.size(); ++i) {
+            // Allocate job on the heap so it lives through the C-style void* userdata pointer.
+            // This also retains a copy of the shared_ptr to keep the promise alive.
+            auto* job = new BlockJob{.promise=promise, .block_idx=i};
+            const auto& block = stream_info.blocks[i];
+ 
+            SDL_ReadAsyncIO(
+                in,
+                promise->compressed_buffers[i].data(),
+                block.offset,
+                block.size,
+                queue,
+                job
+            );
+        }
+ 
+        if (!stream_info.blocks.empty()) {
+            {
+                std::lock_guard lock(wake_mutex);
+                pending_reads += stream_info.blocks.size();
+            }
+            wake_cv.notify_all();
+        }
+
+        return promise;
+    }
+};
+
 namespace Assetpack{
 
 struct Sampler {
@@ -199,7 +555,9 @@ struct IndexedVerticesMetadata{
         u64 vertex_offset;
         u64 first_index_offset;
         u32 index_count;
+        u32 _padding{}; // explicit so write_vector() serializes zeros here instead of uninitialized memory
     };
+    static_assert(no_added_padding<Lod>());
 
     std::vector<Lod> lods;
 };
@@ -330,7 +688,11 @@ struct ImageMetadata{
     u32 width{};
     u32 height{};
     VkFormat format{};
+    // Byte ranges of each BCn-compressed mip *within the uncompressed logical stream*
+    // (before lz4 block-compression), ordered from the LOWEST resolution mip (index 0)
+    // to the HIGHEST resolution mip (index size()-1).
     std::vector<ByteRange> mips;
+    CompressedStreamInfo stream;
     static_assert(no_added_padding<ByteRange>());
 };
 
@@ -354,7 +716,11 @@ struct Image{
           BCnQuality bcn_quality,
           MipQuality mip_quality,
           Type type)
-    :meta({.width = width, .height = height, .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK, .mips{} }),
+    :meta({
+        .width = width, .height = height,
+        .format = (type == Type::Albedo) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC5_UNORM_BLOCK,
+        .mips{}, .stream{}
+    }),
     pixels_RGBA(pixels_RGBA),
     bcn_quality(bcn_quality),
     mip_quality(mip_quality),
@@ -380,12 +746,21 @@ struct Image{
             std::abort();
         }
 
-        this->meta.mips.reserve(raw_mips.size());
+        // make_mips_* hands back raw_mips[0] as the highest-resolution mip, but the
+        // on-disk / in-stream layout must physically go from the LOWEST resolution
+        // mip to the HIGHEST (so a future partial load can read just the first N
+        // blocks and get complete low-res mips without touching the rest of the
+        // stream). Reverse in place so raw_mips[0] is the lowest-resolution mip.
+        std::ranges::reverse(raw_mips);
 
-        for (std::size_t i = 0; i < raw_mips.size(); ++i) {
-            u32 mip_width  = std::max(1u, meta.width >> i);
-            u32 mip_height = std::max(1u, meta.height >> i);
-            const u8* mip_pixels = reinterpret_cast<const u8*>(raw_mips[i].data());
+        this->meta.mips.resize(raw_mips.size());
+
+        for (const auto &[i, raw_mip] : std::views::enumerate(raw_mips)) {
+            // raw_mips is now lowest-res-first, so mip level = (count-1-i).
+            u32 mip_level  = static_cast<u32>(raw_mips.size() - 1 - i);
+            u32 mip_width  = std::max(1u, meta.width >> mip_level);//todo: mip_dimensions funcs
+            u32 mip_height = std::max(1u, meta.height >> mip_level);
+            const u8* mip_pixels = reinterpret_cast<const u8*>(raw_mip.data());
 
             std::vector<std::byte> compressed_mip;
 
@@ -401,15 +776,18 @@ struct Image{
             std::size_t size   = compressed_mip.size();
 
             this->data.insert(this->data.end(), compressed_mip.begin(), compressed_mip.end());
-            this->meta.mips.push_back({.offset = offset, .size = size});
+            this->meta.mips[i] = {.offset = offset, .size = size};
         }
 
         is_processed = true;
     }
 
+    // Splits this->data into CompressedStreamInfo::BLOCK_SIZE-sized chunks (merging a
+    // too-small trailing remainder into the previous chunk), lz4-compresses every
+    // chunk in parallel, then writes the compressed chunks out sequentially so their
+    // file offsets can be recorded.
     void write(std::ostream &out, std::vector<ImageMetadata> &metadata){
-        for(auto &entry : meta.mips) entry.offset += out.tellp();
-        out.write(reinterpret_cast<char*>(data.data()), util::get_data_size(data));
+        meta.stream = compress_and_write_stream(data, out);
         metadata.push_back(meta);
     }
 
@@ -431,7 +809,6 @@ struct Header{
     enum class Signatures : u64{
         valid = 0xBF269A65A2E91226,
         unfinished = 0x85AC8E6951FC737D,
-        invalid = 0x2FD66A0C4AF56280,
     } signature;
 };
 // Between the Header and ToC, there will be:
@@ -451,7 +828,6 @@ struct Footer{
     u64 assetpack_version;
     enum class EndSignature : u64{
         valid_end_of_file = 0x2B7FE37FC301CB84,
-        invalid_end_of_file = 0x88F19A99ED09E0C7,
     } end_signature;
 };
 
@@ -792,6 +1168,9 @@ public:
             write(img_meta.height);
             write(img_meta.format);
             write_vector(img_meta.mips);
+            write(img_meta.stream.uncompressed_stream_size);
+            write(img_meta.stream.uncompressed_last_block_size);
+            write_vector(img_meta.stream.blocks);
         }
 
         write(toc.indexed_verts_metadata.size());
@@ -860,7 +1239,10 @@ private:
         u32 width;
         u32 height;
         VkFormat format;
-        std::vector<ByteRange> mips_in_file;
+        // Byte ranges within the *uncompressed* logical mip stream, lowest mip first
+        std::vector<ByteRange> mips;
+        // Where/how the mip stream is lz4-compressed in the file.
+        CompressedStreamInfo stream;
 
         static constexpr u32 VULKAN_IMAGE_NOT_LOADED = std::numeric_limits<u32>::max();
         u32 vulkan_image_idx;
@@ -886,6 +1268,8 @@ private:
     };
 
     SDL_AsyncIOQueue *queue;
+    CompressedStreamReader stream_reader;
+    CompressedStreamPromiseGroup promises;
     std::vector<File> files;
     std::vector<Scene> scenes;
     std::vector<Mesh> meshes;
@@ -915,7 +1299,7 @@ private:
         StorageBuffer object_transforms;
         StorageBuffer albedo_texture_indices;
         StorageBuffer normal_map_indices;
-        StorageBuffer matallic_roughness_map;
+        StorageBuffer metallic_roughness_map;
         StorageBuffer obj_transform_indices;
         DescriptorSet graphics_desc_set;
 
@@ -934,7 +1318,7 @@ private:
             object_transforms(vk, 10000, false, true),
             albedo_texture_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
             normal_map_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
-            matallic_roughness_map(vk, INSTANCE_BUFFER_SIZE, false, true),
+            metallic_roughness_map(vk, INSTANCE_BUFFER_SIZE, false, true),
             obj_transform_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
             graphics_desc_set([&](){
                 return DescriptorSetBuilder()
@@ -1111,7 +1495,10 @@ public:
             read(ia.width);
             read(ia.height);
             read(ia.format);
-            read_vec(ia.mips_in_file);
+            read_vec(ia.mips);
+            read(ia.stream.uncompressed_stream_size);
+            read(ia.stream.uncompressed_last_block_size);
+            read_vec(ia.stream.blocks);
             image_assets.push_back(std::move(ia));
         }
 
@@ -1183,16 +1570,16 @@ public:
 
         // Images
         u32 first_new_texture = vkr.textures.size();
-        for (auto &ia : image_assets) {
-            // if (ia.file_idx != file_id) continue;
+        for (ImageAsset &ia : image_assets) {
             if (ia.vulkan_image_idx != ImageAsset::VULKAN_IMAGE_NOT_LOADED) continue;
-            vkr.textures.emplace_back(vkr.vk, ia.width, ia.height, ia.format, ia.mips_in_file.size());
+            vkr.textures.emplace_back(vkr.vk, ia.width, ia.height, ia.format, ia.mips.size());
             vkr.texture_views.emplace_back(vkr.textures.back().make_view(vkr.vk));
             ia.vulkan_image_idx = vkr.textures.size() - 1;
+            stream_reader.read(file.in, ia.stream, promises, &ia);
         }
         {
             std::vector<BarrierInfo> barriers;
-            for (u32 i = first_new_texture; i < vkr.textures.size(); ++i) {
+            for (u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
                 barriers.push_back(BarrierInfo{
                     .img = vkr.textures[i],
                     .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1206,18 +1593,23 @@ public:
             }
             vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
         }
-        for (const auto &ia : image_assets) {
-            // if (ia.file_idx != file_id) continue;
-            for (u32 mip = 0; mip < ia.mips_in_file.size(); ++mip) {
-                const ByteRange &r = ia.mips_in_file[mip];
-                vkr.uploader.queue_upload(buf.data() + r.offset,
-                    vkr.textures[ia.vulkan_image_idx], r.size, mip, 0, 1, ImageAspects::COLOR);
+
+        promises.process_all_promises(
+            [&](std::shared_ptr<CompressedStreamPromise> p){
+                const ImageAsset &ia = *static_cast<const ImageAsset*>(p->user_data);
+                u32 mip_count = static_cast<u32>(ia.mips.size());
+                for (auto &&[stream_idx, r] : std::views::enumerate(ia.mips)) {
+                    u32 vk_mip_level = mip_count - 1 - static_cast<u32>(stream_idx);
+                    vkr.uploader.queue_upload(p->buffer().data() + r.offset,
+                        vkr.textures[ia.vulkan_image_idx], r.size, vk_mip_level, 0, 1, ImageAspects::COLOR);
+                }
             }
-        }
+        );
+
         vkr.uploader.begin_and_finish_uploads();
         {
             std::vector<BarrierInfo> barriers;
-            for (u32 i = first_new_texture; i < vkr.textures.size(); ++i) {
+            for (u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
                 barriers.push_back(BarrierInfo{
                     .img = vkr.textures[i],
                     .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1260,7 +1652,7 @@ public:
                 vkr.uploader.queue_upload(i, vkr.obj_transform_indices, draw_idx * sizeof(u32));
                 vkr.uploader.queue_upload(image_assets[prim.albedo_idx].vulkan_image_idx, vkr.albedo_texture_indices, draw_idx * sizeof(u32));
                 vkr.uploader.queue_upload(image_assets[prim.normal_map_idx].vulkan_image_idx, vkr.normal_map_indices, draw_idx * sizeof(u32));
-                vkr.uploader.queue_upload(image_assets[prim.metallic_roughness_idx].vulkan_image_idx, vkr.matallic_roughness_map, draw_idx * sizeof(u32));
+                vkr.uploader.queue_upload(image_assets[prim.metallic_roughness_idx].vulkan_image_idx, vkr.metallic_roughness_map, draw_idx * sizeof(u32));
                 draw_commands.push_back(VkDrawIndexedIndirectCommand{
                     .indexCount = lod.index_count,
                     .instanceCount = 1,
