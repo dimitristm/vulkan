@@ -125,6 +125,18 @@ set(SDL_RENDER OFF)
 set(SDL_GPU OFF)
 FetchContent_MakeAvailable(SDL3)
 
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG        v1.2        # or whichever release you want
+    GIT_SHALLOW TRUE
+)
+set(MESHOPT_BUILD_DEMO OFF CACHE BOOL "" FORCE)
+set(MESHOPT_BUILD_GLTFPACK OFF CACHE BOOL "" FORCE)
+set(MESHOPT_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(MESHOPT_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(meshoptimizer)
+
 find_package(Vulkan REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 
@@ -188,6 +200,13 @@ target_sources(lz4
 )
 target_include_directories(lz4 PRIVATE ${CMAKE_SOURCE_DIR}/vendored/lz4)
 
+add_library(meshoptimizer-module STATIC)
+target_sources(meshoptimizer-module
+    PUBLIC FILE_SET CXX_MODULES FILES
+        vendored/fetched-lib-wrapper-modules/meshoptimizer.cppm
+)
+target_link_libraries(meshoptimizer-module PRIVATE meshoptimizer)
+
 # ---- Executable ----
 add_executable(vulkan-prog)
 
@@ -210,6 +229,7 @@ target_link_libraries(vulkan-prog
         xxhash
         glm_module
         lz4
+        meshoptimizer-module
 )
 
 target_link_options(vulkan-prog PRIVATE

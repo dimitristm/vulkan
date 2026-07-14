@@ -40,6 +40,7 @@ import fastgltf;
 import xxhash;
 import glm;
 import lz4;
+import meshoptimizer;
 
 export using ::BCnQuality;
 export using ::MipQuality;
