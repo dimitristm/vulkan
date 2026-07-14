@@ -1669,4 +1669,5 @@ public:
         return draw_commands;
     }
 
+    [[nodiscard]] u64 scene_count() const { return scenes.size(); }
 };

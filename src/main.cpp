@@ -19,6 +19,28 @@ import types;
 
 import imgui;
 
+class ScenePicker{
+    i32 scene_idx{};
+    const ResourceLoader &loader;
+public:
+    ScenePicker(const ResourceLoader &loader):loader(loader){}
+
+    i32 pick(i32 new_scene_idx){
+        i32 scene_count = static_cast<i32>(loader.scene_count());
+        scene_idx = std::clamp(new_scene_idx, 0, scene_count-1);
+        return scene_idx;
+    }
+
+    void imgui_content(){
+        i32 scene_count = static_cast<i32>(loader.scene_count());
+        ImGui::Text("Scene count: %d (max idx: %d)", scene_count, scene_count-1);
+        ImGui::InputInt("Scene idx", &scene_idx);
+        scene_idx = std::clamp(scene_idx, 0, scene_count-1);
+    }
+
+    [[nodiscard]] i32 get_scene_idx() const { return scene_idx; }
+};
+
 int main(){
     TracyNoop;
     SDL_Init(SDL_INIT_VIDEO);
@@ -34,6 +56,7 @@ int main(){
     {
         ResourceLoader loader;
         loader.load_assetpack_table_of_contents(a);
+        ScenePicker scene_picker{loader};
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
         i32 window_width = 1700;
         i32 window_height = 900;
@@ -51,16 +74,20 @@ int main(){
         UserInputHandler input_handler{window};
         util::FrameTimer frame_timer;
 
-        int scene_idx{};
         Renderer renderer{vk, loader, window};
         while (!input_handler.should_quit){
             frame_timer.begin_frame();
             input_handler.handle_input();
             //ImGui::ShowDemoWindow();
-            ImGui::InputInt("Value", &scene_idx);
 
-            frame_timer.imgui();
-            renderer.draw(input_handler.get_camera().get_view_transform(), loader, scene_idx);
+            ImGui::Begin("General");
+            ImGui::SeparatorText("FPS");
+            frame_timer.imgui_content();
+            ImGui::SeparatorText("Scene Changer");
+            scene_picker.imgui_content();
+            ImGui::End();
+
+            renderer.draw(input_handler.get_camera().get_view_transform(), loader, scene_picker.get_scene_idx());
             frame_timer.end_frame();
         }
     }

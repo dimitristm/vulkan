@@ -252,17 +252,19 @@ public:
         ema_fps = ema_fps * 0.9 + instant_fps * 0.1;
     }
 
-    void imgui(){
-        ImGui::Begin("Performance");
+    void imgui_content(){
         ImGui::Text("%s Frame time", std::format("{}", frame_duration).c_str());
         ImGui::Text("%.1f Instant FPS", 1.0 / frame_duration.to_sec());
         ImGui::Text("%.1f Exponential moving average FPS", ema_fps);
         ImGui::Checkbox("Limit FPS", &frame_limit_enabled);
+
+        ImGui::BeginTable("fps", 2, ImGuiTableFlags_SizingStretchProp);
+        ImGui::TableNextColumn();
         ImGui::SliderInt("Max FPS", &max_fps, 5, 1000);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(80);
-        ImGui::InputInt("##input", &max_fps);
-        ImGui::End();
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputInt("##MaxFPS", &max_fps);
+        ImGui::EndTable();
     }
 };
 

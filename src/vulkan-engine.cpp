@@ -403,6 +403,9 @@ VulkanEngine::~VulkanEngine(){
     vkDestroyInstance(vk_instance, nullptr);
 }
 
+static constexpr unsigned char font_data[] = {
+    #embed "../assets/fonts/noto-sans/NotoSans-Regular.ttf" // apparently msvc doesn't have embed. dealing with this later
+};
 void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level){
     ImGui::CreateContext();
     ImGui_ImplSDL3_InitForVulkan(window);
@@ -446,10 +449,113 @@ void VulkanEngine::init_imgui(SDL_Window *window, VkFormat image_format, MSAALev
 
     ImGui_ImplSDL3_NewFrame();
 
-    ImVec4* colors = ImGui::GetStyle().Colors;
-    colors[ImGuiCol_WindowBg]               = ImVec4(0.00f, 0.00f, 0.00f, 0.94f);
-    colors[ImGuiCol_TitleBg]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]          = ImVec4(0.03f, 0.05f, 0.08f, 1.00f);
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* c = ImGui::GetStyle().Colors;
+
+    c[ImGuiCol_Text]                     = {0.93f, 0.93f, 0.93f, 1.00f};
+    c[ImGuiCol_TextDisabled]             = {0.35f, 0.35f, 0.35f, 1.00f};
+    c[ImGuiCol_WindowBg]                 = {0.014f, 0.014f, 0.016f, 0.98f};
+    c[ImGuiCol_ChildBg]                  = {0.000f, 0.000f, 0.000f, 0.00f};
+    c[ImGuiCol_PopupBg]                  = {0.020f, 0.020f, 0.023f, 0.98f};
+    c[ImGuiCol_Border]                   = {0.080f, 0.080f, 0.090f, 1.00f};
+    c[ImGuiCol_BorderShadow]             = {0,0,0,0};
+    c[ImGuiCol_FrameBg]                  = {0.040f, 0.042f, 0.048f, 1.00f};
+    c[ImGuiCol_FrameBgHovered]           = {0.060f, 0.070f, 0.090f, 1.00f};
+    c[ImGuiCol_FrameBgActive]            = {0.080f, 0.100f, 0.140f, 1.00f};
+    c[ImGuiCol_TitleBg]         = {0.018f, 0.018f, 0.020f, 1.00f};
+    c[ImGuiCol_TitleBgActive]   = {0.060f, 0.090f, 0.160f, 1.00f};
+    c[ImGuiCol_TitleBgCollapsed]= {0.018f, 0.018f, 0.020f, 0.80f};
+    c[ImGuiCol_MenuBarBg]                = {0.022f, 0.022f, 0.025f, 1.00f};
+    c[ImGuiCol_ScrollbarBg]              = {0.012f, 0.012f, 0.014f, 1.00f};
+    c[ImGuiCol_ScrollbarGrab]            = {0.090f, 0.090f, 0.100f, 1.00f};
+    c[ImGuiCol_ScrollbarGrabHovered]     = {0.140f, 0.140f, 0.155f, 1.00f};
+    c[ImGuiCol_ScrollbarGrabActive]      = {0.190f, 0.190f, 0.210f, 1.00f};
+    c[ImGuiCol_CheckMark]                = {0.36f, 0.56f, 0.92f, 1.00f};
+    c[ImGuiCol_CheckboxSelectedBg]       = {0.10f, 0.18f, 0.36f, 0.50f};
+    c[ImGuiCol_SliderGrab]               = {0.26f, 0.48f, 0.88f, 1.00f};
+    c[ImGuiCol_SliderGrabActive]         = {0.38f, 0.66f, 1.00f, 1.00f};
+    c[ImGuiCol_Button]                   = {0.055f, 0.060f, 0.070f, 1.00f};
+    c[ImGuiCol_ButtonHovered]            = {0.085f, 0.120f, 0.190f, 1.00f};
+    c[ImGuiCol_ButtonActive]             = {0.130f, 0.220f, 0.420f, 1.00f};
+    c[ImGuiCol_Header]                   = {0.060f, 0.090f, 0.150f, 1.00f};
+    c[ImGuiCol_HeaderHovered]            = {0.110f, 0.180f, 0.320f, 1.00f};
+    c[ImGuiCol_HeaderActive]             = {0.160f, 0.280f, 0.520f, 1.00f};
+    c[ImGuiCol_Separator]                = c[ImGuiCol_Border];
+    c[ImGuiCol_SeparatorHovered]         = {0.18f, 0.32f, 0.58f, 1.00f};
+    c[ImGuiCol_SeparatorActive]          = {0.30f, 0.48f, 0.84f, 1.00f};
+    c[ImGuiCol_ResizeGrip]               = {0.12f, 0.22f, 0.42f, 0.60f};
+    c[ImGuiCol_ResizeGripHovered]        = {0.24f, 0.42f, 0.78f, 0.90f};
+    c[ImGuiCol_ResizeGripActive]         = {0.36f, 0.60f, 1.00f, 1.00f};
+    c[ImGuiCol_InputTextCursor]          = {1,1,1,1};
+    c[ImGuiCol_Tab]                      = {0.040f, 0.042f, 0.048f, 1.00f};
+    c[ImGuiCol_TabHovered]               = {0.100f, 0.180f, 0.330f, 1.00f};
+    c[ImGuiCol_TabSelected]              = {0.070f, 0.120f, 0.230f, 1.00f};
+    c[ImGuiCol_TabSelectedOverline]      = {0.42f, 0.70f, 1.00f, 1.00f};
+    c[ImGuiCol_TabDimmed]                = {0.022f, 0.022f, 0.025f, 1.00f};
+    c[ImGuiCol_TabDimmedSelected]        = {0.040f, 0.060f, 0.110f, 1.00f};
+    c[ImGuiCol_TabDimmedSelectedOverline]= {0,0,0,0};
+    c[ImGuiCol_PlotLines]                = {0.60f,0.60f,0.60f,1};
+    c[ImGuiCol_PlotLinesHovered]         = {1.00f,0.45f,0.35f,1};
+    c[ImGuiCol_PlotHistogram]            = {0.90f,0.75f,0.10f,1};
+    c[ImGuiCol_PlotHistogramHovered]     = {1.00f,0.85f,0.25f,1};
+    c[ImGuiCol_TableHeaderBg]            = {0.035f,0.035f,0.040f,1};
+    c[ImGuiCol_TableBorderStrong]        = {0.10f,0.10f,0.11f,1};
+    c[ImGuiCol_TableBorderLight]         = {0.06f,0.06f,0.07f,1};
+    c[ImGuiCol_TableRowBg]               = {0,0,0,0};
+    c[ImGuiCol_TableRowBgAlt]            = {0.010f,0.010f,0.012f,1};
+    c[ImGuiCol_TextLink]                 = {0.42f,0.70f,1.00f,1};
+    c[ImGuiCol_TextSelectedBg]           = {0.10f,0.22f,0.45f,0.55f};
+    c[ImGuiCol_TreeLines]                = {0.11f,0.11f,0.12f,1};
+    c[ImGuiCol_DragDropTarget]           = {1.00f,0.85f,0.00f,1};
+    c[ImGuiCol_DragDropTargetBg]         = {0,0,0,0};
+    c[ImGuiCol_UnsavedMarker]            = {1.00f,0.70f,0.10f,1};
+    c[ImGuiCol_NavCursor]                = {0.42f,0.70f,1.00f,1};
+    c[ImGuiCol_NavWindowingHighlight]    = {1,1,1,0.7f};
+    c[ImGuiCol_NavWindowingDimBg]        = {0,0,0,0.35f};
+    c[ImGuiCol_ModalWindowDimBg]         = {0,0,0,0.45f};
+
+    style.Alpha = 1.0f;
+
+    style.WindowPadding     = ImVec2(10, 10);
+    style.FramePadding      = ImVec2(8, 5);
+    style.CellPadding       = ImVec2(6, 4);
+    style.ItemSpacing       = ImVec2(8, 6);
+    style.ItemInnerSpacing  = ImVec2(6, 4);
+    style.TouchExtraPadding = ImVec2(0, 0);
+    style.IndentSpacing     = 22.0f;
+    style.ScrollbarSize     = 14.0f;
+    style.GrabMinSize       = 10.0f;
+
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize  = 1.0f;
+    style.PopupBorderSize  = 1.0f;
+    style.FrameBorderSize  = 0.0f;
+    style.TabBorderSize    = 0.0f;
+
+    style.WindowRounding   = 9.0f;
+    style.ChildRounding    = 7.0f;
+    style.FrameRounding    = 6.0f;
+    style.PopupRounding    = 7.0f;
+    style.ScrollbarRounding= 8.0f;
+    style.GrabRounding     = 6.0f;
+    style.TabRounding      = 6.0f;
+
+    style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+    style.ButtonTextAlign  = ImVec2(0.5f, 0.5f);
+    style.SelectableTextAlign = ImVec2(0.0f, 0.5f);
+
+    //todo remove the default font from the build
+    ImGuiIO& io = ImGui::GetIO();
+    ImFontConfig cfg{};
+    cfg.FontDataOwnedByAtlas = false;
+    io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(font_data),
+        sizeof(font_data),
+        18.0f,
+        &cfg
+    );
+    io.Fonts->Build();
+
 
     ImGui::NewFrame();
 

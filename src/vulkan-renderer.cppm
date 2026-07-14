@@ -160,7 +160,7 @@ public:
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
-    void draw_gui(){
+    void imgui_content(){
     }
 
     void draw_scene(const fmat4 &view_transform, ResourceLoader &loader, u64 scene_idx){
@@ -265,7 +265,6 @@ public:
             return;
         }
         update_drawing_surfaces(false);
-        draw_gui();
         draw_scene(view_transform, loader, scene_idx);
     }
 };
