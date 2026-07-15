@@ -384,7 +384,7 @@ private:
             SDL_AsyncIOOutcome outcome{};
             // Still bounded, so a stop request that arrives mid-read is noticed promptly
             // rather than blocking shutdown on an in-flight (or stuck) read.
-            if (SDL_WaitAsyncIOResult(queue, &outcome, 5)) {
+            if (SDL_WaitAsyncIOResult(queue, &outcome, 20)) {
                 auto* job = static_cast<BlockJob*>(outcome.userdata);
 
                 if (outcome.result == SDL_ASYNCIO_COMPLETE) {
@@ -471,6 +471,7 @@ public:
     }
 };
 
+// Layout on disk is [Header][Data blob: images/vertices/indices][Samplers][ToC][Footer]
 namespace Assetpack{
 
 struct Sampler {
@@ -545,13 +546,13 @@ struct Mesh{
     }
 };
 
-// all indexes are global
-// all offsets that will be stored int the file are indexes into the file itself
 struct IndexedVerticesMetadata{
     // The set of all *unique* ranges found in primitives must not contain
     // ranges that overlap (multiple primitives can have the same exact ranges, though).
     // This is for tracking what vertices/indices are loaded for dynamic
     // loading/unloading to gpu memory later on.
+    // vertex_offset and first_index_offset are byte offsets *within the
+    // uncompressed logical vertex+index stream*
     struct Lod{
         u64 vertex_offset;
         u64 first_index_offset;
@@ -561,11 +562,14 @@ struct IndexedVerticesMetadata{
     static_assert(no_added_padding<Lod>());
 
     std::vector<Lod> lods;
+    CompressedStreamInfo stream;
 };
 struct IndexedVertices{
     IndexedVerticesMetadata meta{};
     std::vector<Vertex> verts;
     std::vector<u32> indices;
+    // Populated by process(). write() lz4-compresses this
+    std::vector<std::byte> data;
     IndexedVertices() = default;
     IndexedVertices(const fastgltf::Asset &asset, const fastgltf::Primitive &prim){
         verts = [&]()->std::vector<Vertex>{
@@ -645,27 +649,60 @@ struct IndexedVertices{
         return hash;
     }
     // "Processing" refers to generating LoDs and optimizing.
-    // this function also sets metadata, but it's unfinished. Specifically,
-    // the offsets are into the data instead of into the file. The write
-    // function will fix that.
-    // todo: add lods and mesh optimization.
+    // todo: lod generation. The plan is to keep lod 0 exactly as produced below
+    // (full-detail, shares nothing with other lods), then for each additional lod
+    // run meshopt_simplify() on lod 0's (already welded) vertex/index buffers to
+    // get a reduced index list, meshopt_optimizeVertexCache() it, and append its
+    // bytes to ::data with its own Lod entry. It should have its own vertices and indices
+    // for improved locality. The multi-lod entries already flow correctly
+    // through write()/load_assetpack_table_of_contents()/load_everything_to_gpu(),
+    // only the generation step itself is missing.
     void process(){
         assert(!is_processed && "Attempted to process an IndexedVertices that's already processed");
         if (is_processed) return;
-        meta.lods.push_back({.vertex_offset = 0, .first_index_offset = 0, .index_count = static_cast<u32>(indices.size())});
+
+        std::size_t vertex_count = verts.size();
+        std::size_t index_count = indices.size();
+
+        assert(vertex_count != 0);
+        assert(index_count != 0);
+
+        std::vector<u32> remap(vertex_count);
+        std::size_t unique_vertex_count = meshopt_generateVertexRemap(
+            remap.data(), indices.data(), index_count, verts.data(), vertex_count, sizeof(Vertex));
+
+        std::vector<Vertex> remapped_verts(unique_vertex_count);
+        std::vector<u32> remapped_indices(index_count);
+        meshopt_remapVertexBuffer(remapped_verts.data(), verts.data(), vertex_count, sizeof(Vertex), remap.data());
+        meshopt_remapIndexBuffer(remapped_indices.data(), indices.data(), index_count, remap.data());
+        verts = std::move(remapped_verts);
+        indices = std::move(remapped_indices);
+        vertex_count = verts.size();
+
+        meshopt_optimizeVertexCache(indices.data(), indices.data(), index_count, vertex_count);
+        meshopt_optimizeOverdraw(indices.data(), indices.data(), index_count,
+            &verts[0].pos.x, vertex_count, sizeof(Vertex), 1.05f);
+        std::size_t used_vertex_count = meshopt_optimizeVertexFetch(
+            verts.data(), indices.data(), index_count, verts.data(), vertex_count, sizeof(Vertex));
+        verts.resize(used_vertex_count);
+
+        std::size_t vertex_bytes = util::get_data_size(verts);
+        std::size_t index_bytes = util::get_data_size(indices);
+        data.resize(vertex_bytes + index_bytes);
+        std::memcpy(data.data(), verts.data(), vertex_bytes);
+        std::memcpy(data.data() + vertex_bytes, indices.data(), index_bytes);
+
+        meta.lods.push_back({
+            .vertex_offset = 0,
+            .first_index_offset = vertex_bytes,
+            .index_count = static_cast<u32>(indices.size()),
+        });
+
         is_processed = true;
     }
 
-    // Writes the data to the file and a metadata entry to the vector of metadata.
     void write(std::ostream &out, std::vector<IndexedVerticesMetadata> &metadata){
-        u64 vertex_file_offset = out.tellp();
-        out.write(reinterpret_cast<char*>(verts.data()), util::get_data_size(verts));
-        u64 index_file_offset = out.tellp();
-        out.write(reinterpret_cast<char*>(indices.data()), util::get_data_size(indices));
-        for (auto &entry : meta.lods){
-            entry.vertex_offset += vertex_file_offset;
-            entry.first_index_offset += index_file_offset;
-        }
+        meta.stream = compress_and_write_stream(data, out);
         metadata.push_back(meta);
     }
 };
@@ -1175,7 +1212,12 @@ public:
         }
 
         write(toc.indexed_verts_metadata.size());
-        for (const auto &idx_ver_meta : toc.indexed_verts_metadata) write_vector(idx_ver_meta.lods);
+        for (const auto &idx_ver_meta : toc.indexed_verts_metadata){
+            write_vector(idx_ver_meta.lods);
+            write(idx_ver_meta.stream.uncompressed_stream_size);
+            write(idx_ver_meta.stream.uncompressed_last_block_size);
+            write_vector(idx_ver_meta.stream.blocks);
+        }
 
         write(footer);
 
@@ -1257,20 +1299,24 @@ private:
             // Index into the index buffer, not a byte offset
             u64 gpu_first_index_idx;
 
-            u64 file_vertex_offset;
-            u64 file_index_offset;
+            // Byte offsets within the *uncompressed* logical stream
+            u64 stream_vertex_offset;
+            u64 stream_index_offset;
             u32 index_count;
-            [[nodiscard]] u64 vertex_data_size() const { return file_index_offset - file_vertex_offset; }
+            [[nodiscard]] u64 vertex_data_size() const { return stream_index_offset - stream_vertex_offset; }
             [[nodiscard]] u64 vertex_count() const { return vertex_data_size() / sizeof(Vertex); }
             [[nodiscard]] u64 index_data_size() const { return index_count * sizeof(u32); }
         };
         FileID file_idx;
+        // Where/how the (vertex + index) stream shared by every lod below is lz4-compressed in the file.
+        CompressedStreamInfo stream;
         std::vector<Lod> lods;
     };
 
     SDL_AsyncIOQueue *queue;
     CompressedStreamReader stream_reader;
-    CompressedStreamPromiseGroup promises;
+    CompressedStreamPromiseGroup img_promises;
+    CompressedStreamPromiseGroup mesh_promises;
     std::vector<File> files;
     std::vector<Scene> scenes;
     std::vector<Mesh> meshes;
@@ -1370,7 +1416,7 @@ public:
             i64 raw_size = SDL_GetAsyncIOSize(file.in);
             if (raw_size < 0) {
                 std::println("Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
-                abort();
+                std::abort();
             }
             return raw_size;
         }();
@@ -1380,39 +1426,20 @@ public:
             abort();
         }
 
-        std::vector<std::byte> buf(file_size);
-        {
+        //todo: if we can make the compressed stream reader also take uncompressed reads we can
+        //drop the SDL_CreateAsyncIOQueue we use here
+        const auto blocking_read = [&](void* dst, u64 offset, u64 size) {
             SDL_AsyncIOOutcome outcome{};
-            SDL_ReadAsyncIO(file.in, buf.data(), 0, file_size, queue, nullptr);
+            SDL_ReadAsyncIO(file.in, dst, offset, size, queue, nullptr);
             if (!SDL_WaitAsyncIOResult(queue, &outcome, -1) || outcome.result != SDL_ASYNCIO_COMPLETE) {
                 std::println("Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
                 abort();
             }
-        }
-
-        const std::byte* p = buf.data();
-        const std::byte* end = buf.data() + file_size;
-
-        const auto read = [&]<typename T>(T& v) {
-            assert(p + sizeof(T) <= end && "read past end of file");
-            std::memcpy(&v, p, sizeof(T));
-            p += sizeof(T);
-        };
-        const auto read_vec = [&]<typename T>(std::vector<T>& v) {
-            size_t n{}; read(n);
-            assert(p + n * sizeof(T) <= end && "read_vec past end of file");
-            v.resize(n);
-            std::memcpy(v.data(), p, n * sizeof(T));
-            p += n * sizeof(T);
-        };
-        const auto seek = [&](u64 offset) {
-            assert(offset <= file_size && "seek past end of file");
-            p = buf.data() + offset;
         };
 
         // Header
         Assetpack::Header header{};
-        read(header);
+        blocking_read(&header, 0, sizeof(header));
         if (header.signature == Assetpack::Header::Signatures::unfinished) {
             std::println("'{}': build() did not complete", file.filepath.string());
             abort();
@@ -1425,16 +1452,46 @@ public:
 
         // Footer
         Assetpack::Footer footer{};
-        seek(file_size - sizeof(Assetpack::Footer));
-        read(footer);
+        blocking_read(&footer, file_size - sizeof(Assetpack::Footer), sizeof(Assetpack::Footer));
         if (footer.end_signature != Assetpack::Footer::EndSignature::valid_end_of_file) {
             std::println("'{}': bad footer end signature", file.filepath.string());
             abort();
         }
+        u64 metadata_region_end = file_size - sizeof(Assetpack::Footer);
+        if (footer.offset_to_samplers > footer.offset_to_toc || footer.offset_to_toc > metadata_region_end) {
+            std::println("'{}': corrupt footer offsets", file.filepath.string());
+            abort();
+        }
 
-        // Samplers
+        // Samplers + ToC: one contiguous read covering everything from the start
+        // of the samplers to the end of the ToC (i.e. right up to the footer).
+        u64 tail_offset = footer.offset_to_samplers;
+        u64 tail_size = metadata_region_end - tail_offset;
+        std::vector<std::byte> buf(tail_size);
+        blocking_read(buf.data(), tail_offset, tail_size);
+
+        const std::byte* p = buf.data();
+        const std::byte* end = buf.data() + tail_size;
+
+        const auto read = [&]<typename T>(T& v) {
+            assert(p + sizeof(T) <= end && "read past end of samplers/toc section");
+            std::memcpy(&v, p, sizeof(T));
+            p += sizeof(T);
+        };
+        const auto read_vec = [&]<typename T>(std::vector<T>& v) {
+            size_t n{}; read(n);
+            assert(p + n * sizeof(T) <= end && "read_vec past end of samplers/toc section");
+            v.resize(n);
+            std::memcpy(v.data(), p, n * sizeof(T));
+            p += n * sizeof(T);
+        };
+        const auto seek = [&](u64 tail_relative_offset) {
+            assert(tail_relative_offset <= tail_size && "seek past end of samplers/toc section");
+            p = buf.data() + tail_relative_offset;
+        };
+
+        // Samplers (buf starts exactly at offset_to_samplers, i.e. tail-relative offset 0)
         std::vector<Assetpack::Sampler> file_samplers;
-        seek(footer.offset_to_samplers);
         read_vec(file_samplers);
         for (const auto& s : file_samplers) {
             if (!sampler_idx.contains(s)) {
@@ -1443,7 +1500,7 @@ public:
             }
         }
 
-        seek(footer.offset_to_toc);
+        seek(footer.offset_to_toc - tail_offset);
 
         u32 mesh_base = meshes.size();
         u32 prim_base = primitives.size();
@@ -1515,11 +1572,14 @@ public:
                 iva.lods.push_back({
                     .gpu_first_vertex_idx = IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED,
                     .gpu_first_index_idx = IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED,
-                    .file_vertex_offset = file_lod.vertex_offset,
-                    .file_index_offset = file_lod.first_index_offset,
+                    .stream_vertex_offset = file_lod.vertex_offset,
+                    .stream_index_offset = file_lod.first_index_offset,
                     .index_count = file_lod.index_count,
                 });
             }
+            read(iva.stream.uncompressed_stream_size);
+            read(iva.stream.uncompressed_last_block_size);
+            read_vec(iva.stream.blocks);
             indexed_verts.push_back(std::move(iva));
         }
 
@@ -1532,41 +1592,32 @@ public:
 
     void load_everything_to_gpu() {
         VulkanResources &vkr = *vk_resources;
-        const File &file = files[0];
-        u64 file_size = [&](){
-            i64 raw_size = SDL_GetAsyncIOSize(file.in);
-            if (raw_size < 0) {
-                std::println("Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
-                abort();
-            }
-            return raw_size;
-        }();
 
-        std::vector<std::byte> buf(file_size);
-        {
-            SDL_AsyncIOOutcome outcome{};
-            SDL_ReadAsyncIO(file.in, buf.data(), 0, file_size, queue, nullptr);
-            if (!SDL_WaitAsyncIOResult(queue, &outcome, -1) || outcome.result != SDL_ASYNCIO_COMPLETE) {
-                std::println("Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
-                abort();
-            }
-        }
-
-        // Vertices and indices
         for (auto &iv : indexed_verts) {
-            // if (iv.file_idx != file_id) continue;
+            bool needs_load = false;
             for (auto &lod : iv.lods) {
                 if (lod.gpu_first_vertex_idx != IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED) continue;
+                needs_load = true;
                 lod.gpu_first_vertex_idx = vkr.vertex_cursor;
                 lod.gpu_first_index_idx = vkr.index_cursor;
-                vkr.uploader.queue_upload(buf.data() + lod.file_vertex_offset, vkr.vertices,
-                    lod.vertex_data_size(), vkr.vertex_cursor * sizeof(Vertex));
-                vkr.uploader.queue_upload(buf.data() + lod.file_index_offset, vkr.indices,
-                    lod.index_data_size(), vkr.index_cursor * sizeof(u32));
                 vkr.vertex_cursor += lod.vertex_count();
                 vkr.index_cursor += lod.index_count;
             }
+            if (needs_load) {
+                stream_reader.read(files[iv.file_idx].in, iv.stream, mesh_promises, &iv);
+            }
         }
+        mesh_promises.process_all_promises(
+            [&](std::shared_ptr<CompressedStreamPromise> p){
+                const IndexedVerticesAsset &iva = *static_cast<const IndexedVerticesAsset*>(p->user_data);
+                for (const auto &lod : iva.lods) {
+                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_vertex_offset, vkr.vertices,
+                        lod.vertex_data_size(), lod.gpu_first_vertex_idx * sizeof(Vertex));
+                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_index_offset, vkr.indices,
+                        lod.index_data_size(), lod.gpu_first_index_idx * sizeof(u32));
+                }
+            }
+        );
         vkr.uploader.begin_and_finish_uploads();
 
         // Images
@@ -1576,7 +1627,7 @@ public:
             vkr.textures.emplace_back(vkr.vk, ia.width, ia.height, ia.format, ia.mips.size());
             vkr.texture_views.emplace_back(vkr.textures.back().make_view(vkr.vk));
             ia.vulkan_image_idx = vkr.textures.size() - 1;
-            stream_reader.read(file.in, ia.stream, promises, &ia);
+            stream_reader.read(files[ia.file_idx].in, ia.stream, img_promises, &ia);
         }
         {
             std::vector<BarrierInfo> barriers;
@@ -1595,7 +1646,7 @@ public:
             vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
         }
 
-        promises.process_all_promises(
+        img_promises.process_all_promises(
             [&](std::shared_ptr<CompressedStreamPromise> p){
                 const ImageAsset &ia = *static_cast<const ImageAsset*>(p->user_data);
                 u32 mip_count = static_cast<u32>(ia.mips.size());
