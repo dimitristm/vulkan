@@ -23,6 +23,7 @@ module;
 #include <ranges>
 #include <condition_variable>
 #include <deque>
+#include <numeric>
 #endif
 
 export module assets;
@@ -572,17 +573,20 @@ struct IndexedVertices{
     std::vector<std::byte> data;
     IndexedVertices() = default;
     IndexedVertices(const fastgltf::Asset &asset, const fastgltf::Primitive &prim){
+
+        const auto *pos_it = prim.findAttribute("POSITION");
+        if (pos_it == prim.attributes.end()) {
+            std::println("error: mesh primitive without position attribute parsed");
+            std::abort();
+        }
+        const auto& pos_accessor = asset.accessors[pos_it->accessorIndex];
+        const size_t vertex_count = pos_accessor.count;
         verts = [&]()->std::vector<Vertex>{
-            const auto *pos_it  = prim.findAttribute("POSITION");
             const auto *norm_it = prim.findAttribute("NORMAL");
             const auto *uv_it   = prim.findAttribute("TEXCOORD_0");
             const auto *col_it  = prim.findAttribute("COLOR_0");
 
-            if (pos_it == prim.attributes.end()){
-                std::println("error: mesh primitive without position attribute parsed");
-                abort();
-            }
-            std::vector<Vertex> prim_vertices(asset.accessors[pos_it->accessorIndex].count);
+            std::vector<Vertex> prim_vertices(vertex_count);
 
             if (pos_it != prim.attributes.end()) {
                 fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
@@ -601,6 +605,7 @@ struct IndexedVertices{
                 );
             }else{
                 std::println("warning: mesh primitive without normal attribute parsed");
+                for (auto& vert : prim_vertices) vert.normal = { 0.f, 0.f, 0.f };
             }
             if (uv_it != prim.attributes.end()) {
                 fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
@@ -612,6 +617,7 @@ struct IndexedVertices{
                 );
             }else{
                 std::println("warning: mesh primitive without uv coordinates parsed");
+                for (auto& vert : prim_vertices) { vert.u = 0.f; vert.v = 0.f; }
             }
             if (col_it != prim.attributes.end()) {
                 fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
@@ -627,10 +633,17 @@ struct IndexedVertices{
 
         indices = [&]() -> std::vector<u32>{
             std::vector<u32> indices;
-            fastgltf::iterateAccessorWithIndex<u32>(
-                asset, asset.accessors[prim.indicesAccessor.value()],
-                [&](u32 v, std::size_t) { indices.push_back(v); }
-            );
+            if (prim.indicesAccessor.has_value()){
+                const auto &indices_accesor = asset.accessors[prim.indicesAccessor.value()];
+                indices.resize(indices_accesor.count);
+                fastgltf::iterateAccessorWithIndex<u32>(
+                    asset, indices_accesor,
+                    [&](u32 v, std::size_t) { indices.push_back(v); }
+                );
+            } else {
+                indices.resize(vertex_count);
+                std::ranges::iota(indices, 0);
+            }
             return indices;
         }();
     }
