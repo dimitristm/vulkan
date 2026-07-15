@@ -1345,6 +1345,10 @@ private:
     // Indexes into the vulkan Samplers
     std::unordered_map<Assetpack::Sampler, u32, SamplerHash> sampler_idx;
 
+    // index into the first unreserved byte into the VulkanResources::vertices
+    u64 vertex_cursor{};
+    // index into the first unreserved byte into the VulkanResources::indices
+    u64 index_cursor{};
     struct VulkanResources{
         static constexpr u64 INSTANCE_BUFFER_SIZE = 10000;
         VulkanEngine &vk;
@@ -1364,9 +1368,6 @@ private:
         DescriptorSet graphics_desc_set;
 
         Sampler sampler;
-
-        u64 vertex_cursor{};
-        u64 index_cursor{};
 
         VulkanResources(VulkanEngine &vk):
             vk(vk),
@@ -1611,29 +1612,16 @@ public:
             for (auto &lod : iv.lods) {
                 if (lod.gpu_first_vertex_idx != IndexedVerticesAsset::Lod::INDEXED_VERTICES_NOT_LOADED) continue;
                 needs_load = true;
-                lod.gpu_first_vertex_idx = vkr.vertex_cursor;
-                lod.gpu_first_index_idx = vkr.index_cursor;
-                vkr.vertex_cursor += lod.vertex_count();
-                vkr.index_cursor += lod.index_count;
+                lod.gpu_first_vertex_idx = vertex_cursor;
+                lod.gpu_first_index_idx = index_cursor;
+                vertex_cursor += lod.vertex_count();
+                index_cursor += lod.index_count;
             }
             if (needs_load) {
                 stream_reader.read(files[iv.file_idx].in, iv.stream, mesh_promises, &iv);
             }
         }
-        mesh_promises.process_all_promises(
-            [&](std::shared_ptr<CompressedStreamPromise> p){
-                const IndexedVerticesAsset &iva = *static_cast<const IndexedVerticesAsset*>(p->user_data);
-                for (const auto &lod : iva.lods) {
-                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_vertex_offset, vkr.vertices,
-                        lod.vertex_data_size(), lod.gpu_first_vertex_idx * sizeof(Vertex));
-                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_index_offset, vkr.indices,
-                        lod.index_data_size(), lod.gpu_first_index_idx * sizeof(u32));
-                }
-            }
-        );
-        vkr.uploader.begin_and_finish_uploads();
 
-        // Images
         u32 first_new_texture = vkr.textures.size();
         for (ImageAsset &ia : image_assets) {
             if (ia.vulkan_image_idx != ImageAsset::VULKAN_IMAGE_NOT_LOADED) continue;
@@ -1642,6 +1630,7 @@ public:
             ia.vulkan_image_idx = vkr.textures.size() - 1;
             stream_reader.read(files[ia.file_idx].in, ia.stream, img_promises, &ia);
         }
+
         {
             std::vector<BarrierInfo> barriers;
             for (u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
@@ -1658,6 +1647,20 @@ public:
             }
             vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
         }
+
+        //maybe have only one promise group and pass 0 or 1 for mesh or texture
+        mesh_promises.process_all_promises(
+            [&](std::shared_ptr<CompressedStreamPromise> p){
+                const IndexedVerticesAsset &iva = *static_cast<const IndexedVerticesAsset*>(p->user_data);
+                for (const auto &lod : iva.lods) {
+                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_vertex_offset, vkr.vertices,
+                        lod.vertex_data_size(), lod.gpu_first_vertex_idx * sizeof(Vertex));
+                    vkr.uploader.queue_upload(p->buffer().data() + lod.stream_index_offset, vkr.indices,
+                        lod.index_data_size(), lod.gpu_first_index_idx * sizeof(u32));
+                }
+            }
+        );
+        vkr.uploader.begin_uploads();
 
         img_promises.process_all_promises(
             [&](std::shared_ptr<CompressedStreamPromise> p){
