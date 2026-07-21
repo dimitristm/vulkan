@@ -251,6 +251,7 @@ target_sources(vulkan-prog
         src/util.cppm
         src/assets.cppm
         src/img-processing.cppm
+        src/camera.cppm
 )
 
 target_compile_options(vulkan-prog PRIVATE

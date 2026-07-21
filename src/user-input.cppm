@@ -15,6 +15,7 @@ import types;
 
 import imgui_impl_sdl3;
 import glm;
+import camera;
 
 static bool is_fullscreen(SDL_Window *window) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(window);
@@ -27,53 +28,14 @@ static void toggle_fullscreen(SDL_Window *window) {
         std::println("Failed to toggle fullscreen: {}", SDL_GetError());
     }
 }
-class Camera{
-public:
-    fvec3 pos{0.0f, 0.0f, 3.0f};
-    f32 mouse_sensitivity = 0.1f;
-private:
-    fvec3 up{0.0f, 1.0f, 0.0f};
-    fvec3 direction{0.0f, 0.0f, -1.0f};
-    f32 yaw = -90.f;
-    f32 pitch = 0.0f;
-    f32 speed = 0.02;
-
-public:
-    void update_direction(f32 mouse_movement_x, f32 mouse_movement_y){
-        yaw += mouse_movement_x * mouse_sensitivity;
-        pitch -= mouse_movement_y * mouse_sensitivity;
-
-        if(pitch > 89.0f) pitch = 89.0f;
-        if(pitch < -89.0f) pitch = -89.0f;
-
-        direction.x = glm::cos(glm::radians(yaw)) * glm::cos(glm::radians(pitch));
-        direction.y = glm::sin(glm::radians(pitch));
-        direction.z = glm::sin(glm::radians(yaw)) * glm::cos(glm::radians(pitch));
-        direction = glm::normalize(direction);
-    }
-
-    [[nodiscard]] fmat4 get_view_transform() const {
-        return glm::gtc::lookAt(pos, pos + get_direction(), up);
-    }
-
-    [[nodiscard]] f32 get_yaw() const { return yaw; }
-    [[nodiscard]] f32 get_pitch() const { return pitch; }
-    [[nodiscard]] const fvec3 &get_direction() const { return direction; }
-    [[nodiscard]] const fvec3 &get_upwards_vector() const { return up; }
-
-    void move_forward(){ pos += speed * direction; }
-    void move_left()   { pos -= glm::normalize(glm::cross(direction, up)) * speed; }
-    void move_back()   { pos -= speed * direction; }
-    void move_right()  { pos += glm::normalize(glm::cross(direction, up)) * speed; }
-};
-
 
 export class UserInputHandler{
 public:
     bool should_quit{};
 
-    UserInputHandler(SDL_Window *window)
-    :window(window)
+    UserInputHandler(SDL_Window *window, Camera &camera)
+    :window(window),
+    camera(camera)
     {
         assert(!SDL_GetWindowRelativeMouseMode(window) && "Do not set relative mouse mode outside of UserInputHandler. Getting that right is its responsibility. Instead use set_control_mode and possibly other UserInputHandler functions.");
         control_mode = ControlMode::USER_CONTROLLING_THE_GUI;
@@ -95,7 +57,7 @@ public:
 
 private:
     SDL_Window *window;
-    Camera camera;
+    Camera &camera;
     enum class ControlMode : char{
         USER_CONTROLLING_THE_CAMERA,
         USER_CONTROLLING_THE_GUI,

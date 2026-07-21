@@ -96,7 +96,7 @@ export struct Vertex {
     f32   u;
     fvec3 normal;
     f32   v;
-    fvec4 color;
+    fvec4 tangent;
 };
 static_assert(no_added_padding<Vertex>());
 
@@ -584,7 +584,7 @@ struct IndexedVertices{
         verts = [&]()->std::vector<Vertex>{
             const auto *norm_it = prim.findAttribute("NORMAL");
             const auto *uv_it   = prim.findAttribute("TEXCOORD_0");
-            const auto *col_it  = prim.findAttribute("COLOR_0");
+            const auto *tan_it  = prim.findAttribute("TANGENT");
 
             std::vector<Vertex> prim_vertices(vertex_count);
 
@@ -619,14 +619,15 @@ struct IndexedVertices{
                 std::println("warning: mesh primitive without uv coordinates parsed");
                 for (auto& vert : prim_vertices) { vert.u = 0.f; vert.v = 0.f; }
             }
-            if (col_it != prim.attributes.end()) {
+            if (tan_it != prim.attributes.end()) {
                 fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
-                    asset, asset.accessors[col_it->accessorIndex],
-                    [&](fastgltf::math::fvec4 gltf_color, std::size_t i) {
-                        prim_vertices[i].color = { gltf_color.x(), gltf_color.y(), gltf_color.z(), gltf_color.w() };
+                    asset, asset.accessors[tan_it->accessorIndex],
+                    [&](fastgltf::math::fvec4 gltf_tangent, std::size_t i) {
+                        prim_vertices[i].tangent = { gltf_tangent.x(), gltf_tangent.y(), gltf_tangent.z(), gltf_tangent.w() };
                     });
             }else{
-                for (auto& vert : prim_vertices) vert.color = { 1.f, 1.f, 1.f, 1.f };
+                std::println("warning: mesh primitive without tangent coordinates parsed");
+                for (auto& vert : prim_vertices) vert.tangent = { 1.f, 1.f, 1.f, 1.f };
             }
             return prim_vertices;
         }();
@@ -1277,13 +1278,18 @@ private:
         std::vector<u32> mesh_prim_idx;
     };
 
+    struct Material{
+        // Indexes into image_assets
+        u32 albedo_idx{};
+        u32 normal_map_idx{};
+        u32 metallic_roughness_idx{};
+    };
+
     struct MeshPrimitive{
         u32 indexed_verts_idx;
         u32 sampler_idx;
-        // Offsets into image assets
-        u32 albedo_idx;
-        u32 normal_map_idx;
-        u32 metallic_roughness_idx;
+        // Indexes into image assets
+        Material material;
 
         fvec4 base_color_factor;
         f32 metallic_factor;
@@ -1326,6 +1332,21 @@ private:
         std::vector<Lod> lods;
     };
 
+    // All the information that must be in the VulkanResources::draw_info buffer. Indexed in the shaders
+    // by gl_InstanceIndex.
+    struct InstanceInfo{
+        // Indexes into VulkanResources::textures.
+        struct Material{
+            u32 albedo_idx{};
+            u32 normal_map_idx{};
+            u32 metallic_roughness_idx{};
+            u32 _padding{};
+        };
+
+        fmat4 transform{};
+        Material material{};
+    };
+
     SDL_AsyncIOQueue *queue;
     CompressedStreamReader stream_reader;
     CompressedStreamPromiseGroup img_promises;
@@ -1350,7 +1371,7 @@ private:
     // index into the first unreserved byte into the VulkanResources::indices
     u64 index_cursor{};
     struct VulkanResources{
-        static constexpr u64 INSTANCE_BUFFER_SIZE = 10000;
+        static constexpr u64 STORAGE_BUFFER_SIZE = 50000;
         VulkanEngine &vk;
         CommandPool cmd_pool;
         ImmediateSubmitter submitter;
@@ -1360,11 +1381,7 @@ private:
         std::vector<ImageView> texture_views;
         VertexBuffer<Vertex> vertices;
         IndexBuffer indices;
-        StorageBuffer object_transforms;
-        StorageBuffer albedo_texture_indices;
-        StorageBuffer normal_map_indices;
-        StorageBuffer metallic_roughness_map;
-        StorageBuffer obj_transform_indices;
+        StorageBuffer instance_info;
         DescriptorSet graphics_desc_set;
 
         Sampler sampler;
@@ -1376,26 +1393,18 @@ private:
             uploader(&vk, cmd_pool, 64UL * 1024 * 1024),
             vertices(vk, 1500000),
             indices(vk, 1000000),
-            object_transforms(vk, 10000, false, true),
-            albedo_texture_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
-            normal_map_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
-            metallic_roughness_map(vk, INSTANCE_BUFFER_SIZE, false, true),
-            obj_transform_indices(vk, INSTANCE_BUFFER_SIZE, false, true),
+            instance_info(vk, 10000, false, true),
             graphics_desc_set([&](){
                 return DescriptorSetBuilder()
                     .bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000, VK_SHADER_STAGE_FRAGMENT_BIT)
                     .bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
                     .bind(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
-                    .bind(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
-                    .bind(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
                     .build(vk);
             }()),
             sampler(vk, VK_FILTER_NEAREST, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_TRUE, 16.0f)
         {
             graphics_desc_set.update_sampler(vk, 1, sampler);
-            graphics_desc_set.update_storage_buffer(vk, 2, obj_transform_indices);
-            graphics_desc_set.update_storage_buffer(vk, 3, albedo_texture_indices);
-            graphics_desc_set.update_storage_buffer(vk, 4, object_transforms);
+            graphics_desc_set.update_storage_buffer(vk, 2, instance_info);
         }
     };
     std::optional<VulkanResources> vk_resources = std::nullopt;
@@ -1548,9 +1557,11 @@ public:
                 primitives.push_back({
                     .indexed_verts_idx = fp.indexed_verts_meta_idx + iv_base,
                     .sampler_idx = sampler_idx.at(file_samplers[fp.sampler_idx]),
-                    .albedo_idx = fp.albedo_meta_idx + img_base,
-                    .normal_map_idx = fp.normal_map_meta_idx + img_base,
-                    .metallic_roughness_idx = fp.metallic_roughness_meta_idx + img_base,
+                    .material{
+                        .albedo_idx = fp.albedo_meta_idx + img_base,
+                        .normal_map_idx = fp.normal_map_meta_idx + img_base,
+                        .metallic_roughness_idx = fp.metallic_roughness_meta_idx + img_base,
+                    },
                     .base_color_factor = fp.base_color_factor,
                     .metallic_factor = fp.metallic_factor,
                     .roughness_factor = fp.roughness_factor,
@@ -1709,18 +1720,21 @@ public:
         auto &vkr = *vk_resources;
         const Scene &scene = scenes.at(scene_idx);
 
-        vkr.uploader.queue_upload(scene.transforms, vkr.object_transforms);
-
-        for (u32 i = 0; i < scene.mesh_idx.size(); ++i) {
-            const Mesh &mesh = meshes[scene.mesh_idx[i]];
+        for (const auto &[i, mesh_idx] : std::views::enumerate(scene.mesh_idx)) {
+            const Mesh &mesh = meshes[mesh_idx];
             for (u32 prim_idx : mesh.mesh_prim_idx) {
                 const MeshPrimitive &prim = primitives[prim_idx];
                 const IndexedVerticesAsset::Lod &lod = indexed_verts[prim.indexed_verts_idx].lods[0];
                 u32 draw_idx = draw_commands.size();
-                vkr.uploader.queue_upload(i, vkr.obj_transform_indices, draw_idx * sizeof(u32));
-                vkr.uploader.queue_upload(image_assets[prim.albedo_idx].vulkan_image_idx, vkr.albedo_texture_indices, draw_idx * sizeof(u32));
-                vkr.uploader.queue_upload(image_assets[prim.normal_map_idx].vulkan_image_idx, vkr.normal_map_indices, draw_idx * sizeof(u32));
-                vkr.uploader.queue_upload(image_assets[prim.metallic_roughness_idx].vulkan_image_idx, vkr.metallic_roughness_map, draw_idx * sizeof(u32));
+                InstanceInfo inst_info{
+                    .transform = scene.transforms[i], //why is scenes a SoA again? i think it shouldn't be anymore
+                    .material{
+                        .albedo_idx = image_assets[prim.material.albedo_idx].vulkan_image_idx,
+                        .normal_map_idx = image_assets[prim.material.normal_map_idx].vulkan_image_idx,
+                        .metallic_roughness_idx = image_assets[prim.material.metallic_roughness_idx].vulkan_image_idx,
+                    }
+                };
+                vkr.uploader.queue_upload(inst_info, vkr.instance_info, draw_idx * sizeof(InstanceInfo));
                 draw_commands.push_back(VkDrawIndexedIndirectCommand{
                     .indexCount = lod.index_count,
                     .instanceCount = 1,

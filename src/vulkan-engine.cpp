@@ -340,6 +340,7 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
     features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+    features12.scalarBlockLayout = VK_TRUE;
 
     VkPhysicalDeviceFeatures features{};
     features.multiDrawIndirect = VK_TRUE;

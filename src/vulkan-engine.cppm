@@ -87,6 +87,8 @@ struct PushConstant {
     {}
 };
 
+// Assumes that your push constants have scalar alignment rules on the shader side (use GL_EXT_scalar_block_layout on glsl)
+// Otherwise you'll get errors about VkPushConstantRange being set incorrectly.
 export class PushConstantsBuilder{
     u32 current_last_byte_used = 0;
     std::vector<VkPushConstantRange> ranges;

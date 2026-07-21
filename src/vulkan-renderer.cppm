@@ -24,6 +24,7 @@ import vulkanUtil;
 import assets;
 import util;
 import types;
+import camera;
 
 import imgui;
 import glm;
@@ -66,7 +67,13 @@ export class Renderer{
     PushConstantsBuilder pc_builder;
     DescriptorSetBuilder ds_builder;
 
-    PushConstant<fmat4> view_proj_transform_const;
+    struct PushConstantType{
+        fmat4 view_proj_matrix;
+        fvec3 camera_pos;
+        fvec3 frag_to_light_dir;
+        fvec3 light_color;
+    };
+    PushConstant<PushConstantType> pc;
     GraphicsPipeline<Vertex> graphics_pipeline;
 
     void set_initial_attachment_layouts(){
@@ -145,10 +152,10 @@ public:
     specialization_info((2 * sizeof(int32_t))),
     pc_builder(),
     ds_builder(),
-    view_proj_transform_const(pc_builder.reset().add<fmat4>( VK_SHADER_STAGE_VERTEX_BIT)),
+    pc(pc_builder.reset().add<PushConstantType>( VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)),
     graphics_pipeline(vk,
-                      VertexShader(vk, "shaders/compiled/colored_triangle_mesh.vert.spv"),
-                      FragmentShader(vk, "shaders/compiled/textured.frag.spv"),
+                      VertexShader(vk, "shaders/compiled/pbr.vert.spv"),
+                      FragmentShader(vk, "shaders/compiled/pbr.frag.spv"),
                       PipelineLayout(vk, loader.get_descriptor_set(), pc_builder.get_ranges()),
                       loader.get_vertex_buffer(),
                       draw_image.img.get_format(),
@@ -156,14 +163,25 @@ public:
                       msaa_level)
     {
         set_initial_attachment_layouts();
+        pc.data.frag_to_light_dir = {0.f, 0.f, 1.f};
+        pc.data.light_color = {0.5, 0.5, 0.5};
     }
 
     FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
     void imgui_content(){
+        // Direction vector controls (auto-normalizes internal values if modified)
+        if (ImGui::SliderFloat3("Light Direction", &pc.data.frag_to_light_dir.x, -1.0f, 1.0f)) {
+            // Prevent normalizer crash if vector happens to hit exactly zero during edit
+            if (glm::length(pc.data.frag_to_light_dir) > 0.0001f) {
+                pc.data.frag_to_light_dir = glm::normalize(pc.data.frag_to_light_dir);
+            }
+        }
+        // Color picker controls radiance (RGB)
+        ImGui::ColorEdit3("Light Color", &pc.data.light_color.x);
     }
 
-    void draw_scene(const fmat4 &view_transform, ResourceLoader &loader, u64 scene_idx){
+    void draw_scene(const Camera &camera, ResourceLoader &loader, u64 scene_idx){
         FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
 
         frame_in_flight.rendering_done_fence.wait_and_reset(vk);
@@ -192,8 +210,9 @@ public:
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
         cmd_buffer.bind_descriptor_set(graphics_pipeline, loader.get_descriptor_set());
-        view_proj_transform_const.data = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * view_transform;
-        cmd_buffer.update_push_constants(graphics_pipeline, view_proj_transform_const);
+        pc.data.view_proj_matrix = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * camera.get_view_transform();
+        pc.data.camera_pos = camera.get_position();
+        cmd_buffer.update_push_constants(graphics_pipeline, pc);
         cmd_buffer.draw_indexed(draw_image.view, depth_image.view, draw_image.resolve_img.view,
                                 {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)},
                                 loader.get_vertex_buffer(), loader.get_index_buffer(), loader.prepare_to_draw_scene(scene_idx));
@@ -259,12 +278,12 @@ public:
         ++frame_count;
     }
 
-    void draw(const fmat4 &view_transform, ResourceLoader &loader, u64 scene_idx){
+    void draw(const Camera &camera, ResourceLoader &loader, u64 scene_idx){
         if (!Swapchain::presentable_swapchain_exists(vk, window)){
             std::println("Can't build swapchain");
             return;
         }
         update_drawing_surfaces(false);
-        draw_scene(view_transform, loader, scene_idx);
+        draw_scene(camera, loader, scene_idx);
     }
 };

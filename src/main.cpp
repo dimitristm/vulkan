@@ -16,6 +16,7 @@ import assets;
 import vulkanUtil;
 import util;
 import types;
+import camera;
 
 import imgui;
 
@@ -73,7 +74,8 @@ int main(){
         vk.init_imgui(window, DrawImage::format);
         loader.init_vulkan_resources(vk);
         loader.load_everything_to_gpu();
-        UserInputHandler input_handler{window};
+        Camera camera;
+        UserInputHandler input_handler{window, camera};
         util::FrameTimer frame_timer;
 
         Renderer renderer{vk, loader, window};
@@ -82,14 +84,17 @@ int main(){
             input_handler.handle_input();
             //ImGui::ShowDemoWindow();
 
-            ImGui::Begin("General");
-            ImGui::SeparatorText("FPS");
-            frame_timer.imgui_content();
-            ImGui::SeparatorText("Scene Changer");
-            scene_picker.imgui_content();
+            if (ImGui::Begin("General")){
+                ImGui::SeparatorText("FPS");
+                frame_timer.imgui_content();
+                ImGui::SeparatorText("Scene Changer");
+                scene_picker.imgui_content();
+                ImGui::SeparatorText("Light");
+                renderer.imgui_content();
+            }
             ImGui::End();
 
-            renderer.draw(input_handler.get_camera().get_view_transform(), loader, scene_picker.get_scene_idx());
+            renderer.draw(camera, loader, scene_picker.get_scene_idx());
             frame_timer.end_frame();
         }
     }
