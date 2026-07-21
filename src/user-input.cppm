@@ -43,11 +43,11 @@ public:
 
     const Camera &get_camera() { return camera; }
 
-    void handle_input(){
+    void handle_input(f32 dt){
         assert(!should_quit && "You were supposed to quit, but didn't.");
         assert(control_mode_and_relative_mode_are_synced() && "Error: Either you set the relative mode outside of UserInput (don't do that, UserInput decides whether relative mode should be enabled) or there is an issue with UserInput");
 
-        handle_key_hold();
+        handle_key_hold(dt);
         SDL_Event event;
         while (SDL_PollEvent(&event) && !should_quit){
             ImGui_ImplSDL3_ProcessEvent(&event);
@@ -127,12 +127,12 @@ private:
     }
 
 
-    void handle_key_hold(){
+    void handle_key_hold(f32 dt){
         const bool *keys = SDL_GetKeyboardState(nullptr);
 
-        if (keys[SDL_SCANCODE_W]) { camera.move_forward(); } // might want to try lowering the latency by checking the timestamp in handle_key_press
-        if (keys[SDL_SCANCODE_A]) { camera.move_left(); }
-        if (keys[SDL_SCANCODE_S]) { camera.move_back(); }
-        if (keys[SDL_SCANCODE_D]) { camera.move_right(); }
+        if (keys[SDL_SCANCODE_W]) { camera.move_forward(dt); } // might want to try lowering the latency by checking the timestamp in handle_key_press
+        if (keys[SDL_SCANCODE_A]) { camera.move_left(dt); }
+        if (keys[SDL_SCANCODE_S]) { camera.move_back(dt); }
+        if (keys[SDL_SCANCODE_D]) { camera.move_right(dt); }
     }
 };

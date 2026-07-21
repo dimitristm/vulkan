@@ -63,12 +63,7 @@ int main(){
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
         i32 window_width = 1700;
         i32 window_height = 900;
-        window = SDL_CreateWindow(
-            "Vulkan app",
-            window_width,
-            window_height,
-            window_flags
-        );
+    window = SDL_CreateWindow("Vulkan app", window_width, window_height, window_flags);
 
         VulkanEngine vk{window};
         vk.init_imgui(window, DrawImage::format);
@@ -81,7 +76,8 @@ int main(){
         Renderer renderer{vk, loader, window};
         while (!input_handler.should_quit){
             frame_timer.begin_frame();
-            input_handler.handle_input();
+            f32 dt = static_cast<f32>(frame_timer.get_frame_duration().to_sec());
+            input_handler.handle_input(dt);
             //ImGui::ShowDemoWindow();
 
             if (ImGui::Begin("General")){
@@ -91,6 +87,8 @@ int main(){
                 scene_picker.imgui_content();
                 ImGui::SeparatorText("Light");
                 renderer.imgui_content();
+                ImGui::SeparatorText("Camera");
+                camera.imgui_content();
             }
             ImGui::End();
 

@@ -11,6 +11,7 @@ import std;
 #endif
 import types;
 import glm;
+import imgui;
 
 export class Camera{
 public:
@@ -21,9 +22,15 @@ private:
     fvec3 direction{0.0f, 0.0f, -1.0f};
     f32 yaw = -90.f;
     f32 pitch = 0.0f;
-    f32 speed = 0.02;
+    f32 speed = 2.0f;
 
 public:
+    void imgui_content(){
+        ImGui::Text("Position: (%.2f, %.2f, %.2f)", pos.x, pos.y, pos.z);
+        ImGui::Text("Direction: (%.2f, %.2f, %.2f)", direction.x, direction.y, direction.z);
+        ImGui::InputFloat("Speed", &speed);
+    }
+
     void update_direction(f32 mouse_movement_x, f32 mouse_movement_y){
         yaw += mouse_movement_x * mouse_sensitivity;
         pitch -= mouse_movement_y * mouse_sensitivity;
@@ -47,9 +54,9 @@ public:
     [[nodiscard]] const fvec3 &get_upwards_vector() const { return up; }
     [[nodiscard]] const fvec3 &get_position() const { return pos; }
 
-    void move_forward(){ pos += speed * direction; }
-    void move_left()   { pos -= glm::normalize(glm::cross(direction, up)) * speed; }
-    void move_back()   { pos -= speed * direction; }
-    void move_right()  { pos += glm::normalize(glm::cross(direction, up)) * speed; }
+    void move_forward(f32 dt){ pos += speed * direction * dt; }
+    void move_left(f32 dt)   { pos -= glm::normalize(glm::cross(direction, up)) * speed * dt; }
+    void move_back(f32 dt)   { pos -= speed * direction * dt; }
+    void move_right(f32 dt)  { pos += glm::normalize(glm::cross(direction, up)) * speed * dt; }
 };
 

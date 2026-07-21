@@ -228,6 +228,8 @@ export class FrameTimer{
     i32 max_fps = 120.0f;
 
 public:
+    [[nodiscard]] Duration get_frame_duration() const { return frame_duration; }
+
     void begin_frame(){
         frame_start = Time::now();
         frame_timer.start();
