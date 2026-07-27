@@ -4,9 +4,9 @@ Creates an abstraction over the Vulkan API, which is then used by the Renderer.
 The custom asset format optimizes for rendering quality, loading speed and file size.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/06d103fc-45e0-4b6d-93fb-511723590f11"><img src="https://github.com/user-attachments/assets/06d103fc-45e0-4b6d-93fb-511723590f11" width="250" alt="Showcase 1"/></a>
-  <a href="https://github.com/user-attachments/assets/9f184c84-93ea-4c83-9c64-a8520078ee12"><img src="https://github.com/user-attachments/assets/9f184c84-93ea-4c83-9c64-a8520078ee12" width="250" alt="Showcase 2"/></a>
-  <a href="https://github.com/user-attachments/assets/e1db32a9-0a12-44e3-bd91-5b9535895eb4"><img src="https://github.com/user-attachments/assets/e1db32a9-0a12-44e3-bd91-5b9535895eb4" width="250" alt="Showcase 3"/></a>
+  <a href="https://github.com/user-attachments/assets/06d103fc-45e0-4b6d-93fb-511723590f11" target="_blank" rel="noopener noreferrer"><img src="https://github.com/user-attachments/assets/06d103fc-45e0-4b6d-93fb-511723590f11" width="250" alt="Showcase 1"/></a>
+  <a href="https://github.com/user-attachments/assets/9f184c84-93ea-4c83-9c64-a8520078ee12" target="_blank" rel="noopener noreferrer"><img src="https://github.com/user-attachments/assets/9f184c84-93ea-4c83-9c64-a8520078ee12" width="250" alt="Showcase 2"/></a>
+  <a href="https://github.com/user-attachments/assets/e1db32a9-0a12-44e3-bd91-5b9535895eb4" target="_blank" rel="noopener noreferrer"><img src="https://github.com/user-attachments/assets/e1db32a9-0a12-44e3-bd91-5b9535895eb4" width="250" alt="Showcase 3"/></a>
 </p>
 
 ## Features:
