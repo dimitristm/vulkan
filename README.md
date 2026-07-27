@@ -5,22 +5,22 @@ The custom asset format optimizes for rendering quality, loading speed and file 
 
 ## Features:
 Renderer features:
-*Physically based renderer with Burley Diffuse, Trowbridge-Reitz(GGX) NDF, Smith geometric shadowing
-*Forward rendering
-*MSAA antialiasing
-*Mip mapping, trilinear sampling
-*Bindless rendering
-*Directional lighting
+* Physically based renderer with Burley Diffuse, Trowbridge-Reitz(GGX) NDF, Smith geometric shadowing
+* Forward rendering
+* MSAA antialiasing
+* Mip mapping, trilinear sampling
+* Bindless rendering
+* Directional lighting
 
 Vulkan abstraction features:
-*Automatic cleaning of vulkan resources
-*Swapchains and presentation
-*Push constants
-*Specialization constants
-*Compute and Graphics pipelines
-*Basic resources like GPU-side synchronization primitives, gpu buffers, images, descriptor sets, shaders, etc
-*Basic operations like barriers, blits, draw calls, uploading memory to gpu
-*DearImgui integration
+* Automatic cleaning of vulkan resources
+* Swapchains and presentation
+* Push constants
+* Specialization constants
+* Compute and Graphics pipelines
+* Basic resources like GPU-side synchronization primitives, gpu buffers, images, descriptor sets, shaders, etc
+* Basic operations like barriers, blits, draw calls, uploading memory to gpu
+* DearImgui integration
 
 There is also a converter from glb and gltf files to my custom assetpack format, which optimizes textures and meshes in such a way that they can be rendered at a higher quality for less overall memory. It also optimizes loading speed.
 More specifically:
