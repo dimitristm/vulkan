@@ -274,7 +274,6 @@ private:
     std::vector<std::vector<std::byte>> compressed_buffers;
     std::atomic<u32> blocks_done{0};
     std::atomic<bool> done{false};
-    std::atomic<bool> finalized{false};
     CompressedStreamPromiseGroup* group = nullptr;
 
     friend class CompressedStreamReader;
@@ -319,13 +318,8 @@ private:
     }
 
     // Marks the whole stream done and wakes both this promise's own
-    // waiters and the owning group's waiters. Guarded so it only ever
-    // runs once even if an error and a last-block success race. // todo i removed errors so maybe useless check
+    // waiters and the owning group's waiters.
     void finish() {
-        bool expected = false;
-        if (!finalized.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            return;
-        }
         done.store(true, std::memory_order_release);
         done.notify_all();
         if (group != nullptr) group->notify_stream_done(shared_from_this());
