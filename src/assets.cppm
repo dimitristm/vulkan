@@ -377,7 +377,7 @@ private:
             }
 
             SDL_AsyncIOOutcome outcome{};
-            // Still bounded, so a stop request that arrives mid-read is noticed promptly
+            // Bounded, so a stop request that arrives mid-read is noticed promptly
             // rather than blocking shutdown on an in-flight (or stuck) read.
             if (SDL_WaitAsyncIOResult(queue, &outcome, 20)) {
                 auto* job = static_cast<BlockJob*>(outcome.userdata);
