@@ -57,15 +57,16 @@ int main(){
     // }
 
     {
-        ResourceLoader loader;
-        loader.load_assetpack_table_of_contents(a);
-        ScenePicker scene_picker{loader};
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
         i32 window_width = 1700;
         i32 window_height = 900;
-    window = SDL_CreateWindow("Vulkan app", window_width, window_height, window_flags);
-
+        window = SDL_CreateWindow("Vulkan app", window_width, window_height, window_flags);
         VulkanEngine vk{window};
+
+        ResourceLoader loader;
+        loader.load_assetpack_table_of_contents(a);
+        ScenePicker scene_picker{loader};
+
         vk.init_imgui(window, DrawImage::format);
         loader.init_vulkan_resources(vk);
         loader.load_everything_to_gpu();

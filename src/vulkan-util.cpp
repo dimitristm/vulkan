@@ -20,24 +20,24 @@ import std;
 import vulkanEngine;
 import types;
 
-ImmediateSubmitter::ImmediateSubmitter(VulkanEngine &vk, const CommandPool &cmd_pool)
-:submit_fence(vk, false), internal_cmd_buffer(vk, cmd_pool){}
+ImmediateSubmitter::ImmediateSubmitter(const CommandPool &cmd_pool)
+:submit_fence(false), internal_cmd_buffer(cmd_pool){}
 
-void ImmediateSubmitter::submit(VulkanEngine &vk, const std::function<void()> &function){
+void ImmediateSubmitter::submit(const std::function<void()> &function){
     internal_cmd_buffer.restart(true);
 
     function();
 
     internal_cmd_buffer.end();
-    internal_cmd_buffer.submit(vk, submit_fence);
-    submit_fence.wait_and_reset(vk);
+    internal_cmd_buffer.submit(submit_fence);
+    submit_fence.wait_and_reset();
 }
 
 HostToDeviceUploader::HostToDeviceUploader(
-    VulkanEngine *const vk, const CommandPool cmd_pool,
+    VulkanEngine *const vk, const CommandPool &cmd_pool,
     u64 staging_buffer_size)
 :vk(vk),
-staging_buffer(*vk, staging_buffer_size),
+staging_buffer(staging_buffer_size),
 cmd_pool(cmd_pool),
 used_staging_buffer_bytes(0)
 {
@@ -47,18 +47,18 @@ used_staging_buffer_bytes(0)
     fence_pool.reserve(128);
     cmd_buffer_pool.reserve(128);
     for (int i = 0; i < 16; ++i){
-        fence_pool.emplace_back(*vk, false);
+        fence_pool.emplace_back(false);
     }
-    CommandBuffer::make_command_buffers(*vk, cmd_buffer_pool, cmd_pool, 64);
+    CommandBuffer::make_command_buffers(cmd_buffer_pool, cmd_pool, 64);
 }
 
 HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(u64 desired_size, bool require_desired_size){
-    u64 remaining_size = staging_buffer.capacity_in_bytes - used_staging_buffer_bytes;
+    u64 remaining_size = staging_buffer.get_capacity_in_bytes() - used_staging_buffer_bytes;
     assert((i64)remaining_size > -1);
     if (remaining_size == 0 || (require_desired_size && remaining_size < desired_size)) {
         begin_and_finish_uploads();
-        remaining_size = staging_buffer.capacity_in_bytes;
-        if (require_desired_size && staging_buffer.capacity_in_bytes < desired_size){
+        remaining_size = staging_buffer.get_capacity_in_bytes();
+        if (require_desired_size && staging_buffer.get_capacity_in_bytes() < desired_size){
             std::println("Staging buffer not large enough for write with require_desired_size");
             std::abort();
         }
@@ -88,7 +88,7 @@ void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const voi
         .size = free_region.size
     };
     for (auto &queued_upload : queued_buffer_uploads){
-        if (queued_upload.dst.buffer == dst.buffer){
+        if (queued_upload.dst == &dst){
             queued_upload.copy_info.push_back(copy);
             return;
         }
@@ -102,7 +102,7 @@ void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const voi
                 free_region.size
     );
     for (auto &queued_upload : queued_image_uploads){
-        if (queued_upload.dst == dst){
+        if (queued_upload.dst == &dst){
             queued_upload.copy_info.push_back(copy);
             return;
         }
@@ -135,12 +135,12 @@ static auto pop_back_and_return(Container& c) {
 
 void HostToDeviceUploader::begin_uploads(){
     // todo: log a warning if we call this and there are no queued uploads
-    const auto add_in_progress_upload = [&]{
-        CommandBuffer cmd_buffer = cmd_buffer_pool.empty() ? CommandBuffer(*vk, cmd_pool)
+    const auto add_in_progress_upload = [&]() -> InProgressUpload& {
+        CommandBuffer cmd_buffer = cmd_buffer_pool.empty() ? CommandBuffer(cmd_pool)
                                                            : pop_back_and_return(cmd_buffer_pool);
-        GpuFence fence = fence_pool.empty() ? GpuFence(*vk, false)
+        GpuFence fence = fence_pool.empty() ? GpuFence(false)
                                             : pop_back_and_return(fence_pool);
-        in_progress_uploads.emplace_back(cmd_buffer, fence);
+        in_progress_uploads.emplace_back(cmd_buffer, std::move(fence));
         return in_progress_uploads.back();
     };
 
@@ -148,13 +148,13 @@ void HostToDeviceUploader::begin_uploads(){
     const CommandBuffer &cmd_buffer = in_progress_upload.cmd_buffer;
     cmd_buffer.restart(true);
     for (auto &queued_upload : queued_buffer_uploads){
-        cmd_buffer.copy_buffer(staging_buffer, queued_upload.dst, queued_upload.copy_info);
+        cmd_buffer.copy_buffer(staging_buffer, *queued_upload.dst, queued_upload.copy_info);
     }
     for (auto &queued_upload : queued_image_uploads){
-        cmd_buffer.copy_buffer_to_image(staging_buffer, queued_upload.dst, queued_upload.copy_info);
+        cmd_buffer.copy_buffer_to_image(staging_buffer, *queued_upload.dst, queued_upload.copy_info);
     }
     cmd_buffer.end();
-    cmd_buffer.submit(*vk, in_progress_upload.fence);
+    cmd_buffer.submit(in_progress_upload.fence);
     queued_buffer_uploads.clear();
     queued_image_uploads.clear();
 }
@@ -162,8 +162,8 @@ void HostToDeviceUploader::begin_uploads(){
 void HostToDeviceUploader::finish_in_progress_uploads(){
     // todo: log a warning if we call this and there are no in progress uploads
     for (auto &in_progress_upload : in_progress_uploads){
-        in_progress_upload.fence.wait_and_reset(*vk);
-        fence_pool.push_back(in_progress_upload.fence);
+        in_progress_upload.fence.wait_and_reset();
+        fence_pool.push_back(std::move(in_progress_upload.fence));
         cmd_buffer_pool.push_back(in_progress_upload.cmd_buffer);
     }
     in_progress_uploads.clear();
@@ -207,8 +207,8 @@ static VkBufferImageCopy2 buffer_image_copy2(
     ImageAspects aspects,
     const VkOffset3D &img_offset = VkOffset3D{})
 {
-    assert(base_layer + layer_count <= image.layer_count);
-    const auto &base_extent = image.extent;
+    assert(base_layer + layer_count <= image.get_layer_count());
+    const auto &base_extent = image.get_extent();
     return VkBufferImageCopy2{
         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
         .pNext = nullptr,
@@ -256,7 +256,7 @@ void HostToDeviceUploader::add_to_last_upload(const void *src, u64 byte_count){
 
     FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
 
-    if (queued_buffer_uploads.empty() || queued_buffer_uploads.back().dst != *active_upload_dst){
+    if (queued_buffer_uploads.empty() || queued_buffer_uploads.back().dst != active_upload_dst){
         VkBufferCopy2 copy{
             .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
             .pNext = nullptr,

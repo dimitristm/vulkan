@@ -30,6 +30,9 @@ project(vulkan-project
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_compile_options(-Wno-unused-command-line-argument) # CMake passes unused '-c' when making modules
+
 option(TRACY_ENABLE "" OFF)
 option(TRACY_ON_DEMAND "" OFF)
 option(TRACY_LTO "" ON)
@@ -82,6 +85,7 @@ set(FASTGLTF_USE_STD_MODULE ${VK_PROJ_USE_IMPORT_STD} CACHE BOOL "" FORCE)
 set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
 set(FASTGLTF_ENABLE_CPP_MODULES ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fastgltf)
+target_compile_options(fastgltf_module PRIVATE -Wno-include-angled-in-module-purview)
 
 FetchContent_Declare(
     TBB
@@ -138,7 +142,6 @@ set(MESHOPT_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(meshoptimizer)
 
 find_package(Vulkan REQUIRED)
-find_package(SDL3 CONFIG REQUIRED)
 
 # Module libraries that wrap libraries from above
 add_library(glm_module STATIC)
@@ -178,6 +181,7 @@ target_sources(imgui
         vendored/imgui/imgui_impl_vulkan.cppm
 )
 target_include_directories(imgui PRIVATE ${CMAKE_SOURCE_DIR}/vendored/imgui)
+target_link_libraries(imgui PRIVATE SDL3::SDL3-static)
 
 add_library(xxhash STATIC)
 target_sources(xxhash
@@ -258,6 +262,7 @@ target_compile_options(vulkan-prog PRIVATE
     -Wall
     -Wextra
     -Wpedantic
+    -Wno-c23-extensions # for #embed, it is in c++26 but currently still considered a c23 extension by clang
     $<$<CONFIG:Release>:-ffunction-sections>
     $<$<CONFIG:Release>:-fdata-sections>
 )

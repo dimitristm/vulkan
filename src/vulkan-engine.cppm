@@ -22,7 +22,6 @@ module;
 #  pragma GCC diagnostic pop
 #endif
 
-
 #if !VK_PROJ_USE_IMPORT_STD
 #include <cstdio>
 #include <vector>
@@ -31,6 +30,9 @@ module;
 #include <unordered_set>
 #include <optional>
 #include <algorithm>
+#include <functional>
+#include <deque>
+#include <utility>
 #endif
 
 export module vulkanEngine;
@@ -42,6 +44,16 @@ import glm;
 import std;
 #endif
 
+using util::PassKey;
+
+class StructMaker;
+export class Swapchain;
+export class CommandBuffer;
+export class DescriptorSet;
+export class ImageView;
+export class ComputePipeline;
+export class PipelineLayout;
+export template <typename T> class GraphicsPipeline;
 
 struct APIVersionVulkan{
     u32 major;
@@ -123,6 +135,48 @@ public:
     PushConstantsBuilder &reset();
 };
 
+class DeletionBatch {
+    std::vector<std::function<void()>> commands;
+public:
+    DeletionBatch(std::vector<std::function<void()>> cmds) : commands(std::move(cmds)) {}
+    DeletionBatch() = default;
+    void execute() {
+        for (auto& cmd : commands) {
+            cmd();
+        }
+        commands.clear();
+    }
+    void add(std::function<void()>&& deletion_command){ commands.push_back(std::move(deletion_command)); }
+    [[nodiscard]] bool is_empty() const { return commands.empty(); }
+    void clear() { commands.clear(); }
+};
+
+class DeletionBatchQueue {
+    struct FencedDeletionBatch { DeletionBatch batch; VkFence fence; };
+    std::deque<FencedDeletionBatch> deletion_batches;
+public:
+    void add(DeletionBatch&& batch, VkFence fence){
+        deletion_batches.push_back({std::move(batch), fence});
+    }
+    void force_flush_all() {
+        for (auto& fenced_batch : deletion_batches) {
+            fenced_batch.batch.execute();
+        }
+        deletion_batches.clear();
+    }
+    void flush(VkDevice device) {
+        std::erase_if(deletion_batches, [&device](auto& fenced_batch) {
+            bool is_signaled = vkGetFenceStatus(device, fenced_batch.fence) == VK_SUCCESS;
+            if (is_signaled) {
+                fenced_batch.batch.execute();
+            }
+            return is_signaled;
+        });
+    }
+};
+
+export struct VulkanEngine;
+extern VulkanEngine* g_vk;
 export struct VulkanEngine{
     VkInstance vk_instance;
     VkDebugUtilsMessengerEXT debug_messenger;
@@ -135,6 +189,14 @@ export struct VulkanEngine{
     VkDescriptorPool descriptor_pool;
     APIVersionVulkan api_version{.major=1, .minor=3, .patch=0};
 
+    DeletionBatch deletions_in_this_fence;
+    DeletionBatchQueue queued_deletion_batches;
+    DeletionBatch& get_deletions_in_this_fence() { return deletions_in_this_fence; }
+    DeletionBatchQueue& get_queued_deletion_batches() { return queued_deletion_batches; }
+
+    void flush_queued_deletion_batches() { queued_deletion_batches.flush(device); };
+    void flush_deletions_in_this_fence_immediately() { deletions_in_this_fence.execute(); };
+
     struct ImageTrackingInfo{VkImage image; VmaAllocation allocation;};
     struct ImageTrackingInfoHash{
         std::size_t operator()(const ImageTrackingInfo& info) const noexcept {
@@ -146,30 +208,9 @@ export struct VulkanEngine{
             return a.image == b.image;
         }
     };
-    // These are used in the destructor to delete everything this engine made.
 
-    // The reason why we need to do this instead of just adding destructors is that this way we
-    // can ensure that they are destroyed in the correct order, thus the user of the objects does
-    // not need to be careful about the order in which they declare the objects. While this usually isn't
-    // a concern when they are just declaring them on the stack one by one as the fact that default constructors do not exist for these objects prevents them from initializing
-    // an object before they initialize the objects they depend on, they could still call the destructors in the wrong order if they use something like a vector, as those
-    // don't need to contain an initialized member.
-
-    // Might also use these in asserts in debug mode to ensure this is the engine that made them.
-    struct SwapchainTrackingInfo{VkSwapchainKHR swapchain; std::vector<VkImageView> image_views; std::vector<VkFence> present_fences;};
-    std::vector<SwapchainTrackingInfo> created_swapchains;
-    std::vector<VkSampler> created_samplers;
-    std::unordered_set<ImageTrackingInfo, ImageTrackingInfoHash, ImageTrackingInfoEqual> created_images;
-    std::unordered_set<VkImageView> created_image_views;
-    std::vector<VkCommandPool> created_command_pools;
-    std::vector<VkFence> created_fences;
-    std::vector<VkSemaphore> created_semaphores;
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts_to_delete;
-    std::vector<VkShaderModule> created_shader_modules;
-    std::vector<VkPipeline> created_pipelines;
-    std::vector<VkPipelineLayout> created_pipeline_layouts;
-    struct BufferTrackingInfo{VkBuffer buffer; VmaAllocation allocation;};
-    std::vector<BufferTrackingInfo> created_buffers;
+    std::vector<VkPipelineLayout> pipeline_layouts_to_delete;
 
     bool imgui_is_initialized = false;
 
@@ -186,10 +227,114 @@ export struct VulkanEngine{
     VkSurfaceCapabilitiesKHR get_surface_capabilities() const;
 };
 
-export struct Sampler{
-    VkSampler sampler;
-    Sampler(VulkanEngine &vk,
-            VkFilter mag_filter,
+// Move-only RAII wrapper. Ensures unique ownership of a vulkan resource (non-copyable). Destructor
+// queues the resource for deletion by VulkanEngine. A resource can be a VkSampler, VkImageView etc.
+template <typename VkResource, auto vk_destroy_func>
+struct ManagedVkResource {
+    VkResource underlying = VK_NULL_HANDLE;
+
+    ManagedVkResource() = default;
+    explicit ManagedVkResource(VkResource resource) : underlying(resource) {}
+
+    ManagedVkResource(const ManagedVkResource&) = delete;
+    ManagedVkResource& operator=(const ManagedVkResource&) = delete;
+
+    ManagedVkResource(ManagedVkResource&& other) noexcept
+        : underlying(std::exchange(other.underlying, VK_NULL_HANDLE)) {}
+
+    ManagedVkResource& operator=(ManagedVkResource&& other) noexcept {
+        std::swap(underlying, other.underlying);
+        return *this;
+    }
+
+    ~ManagedVkResource() {
+        if (underlying != VK_NULL_HANDLE) {
+            g_vk->get_deletions_in_this_fence().add([u = underlying]() {
+                vk_destroy_func(g_vk->device, u, nullptr);
+            });
+        }
+    }
+
+    VkResource get_underlying() const { return underlying; }
+    VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
+    const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
+
+    bool operator==(const ManagedVkResource& other) const noexcept { return underlying == other.underlying; }
+    bool operator!=(const ManagedVkResource& other) const noexcept { return underlying != other.underlying; }
+};
+
+// Same as ManagedVkResource but for resources that track and pass a VmaAllocation to their destroy function
+template <typename VkResource, auto vma_destroy_func>
+struct ManagedVmaResource {
+    VkResource underlying = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+
+    ManagedVmaResource() = default;
+    ManagedVmaResource(VkResource resource, VmaAllocation alloc)
+        : underlying(resource), allocation(alloc) {}
+
+    ManagedVmaResource(const ManagedVmaResource&) = delete;
+    ManagedVmaResource& operator=(const ManagedVmaResource&) = delete;
+
+    ManagedVmaResource(ManagedVmaResource&& other) noexcept
+        : underlying(std::exchange(other.underlying, VK_NULL_HANDLE)),
+          allocation(std::exchange(other.allocation, VK_NULL_HANDLE)) {}
+
+    ManagedVmaResource& operator=(ManagedVmaResource&& other) noexcept {
+        std::swap(underlying, other.underlying);
+        std::swap(allocation, other.allocation);
+        return *this;
+    }
+
+    ~ManagedVmaResource() {
+        if (allocation != VK_NULL_HANDLE) {
+            g_vk->get_deletions_in_this_fence().add([u = underlying, a = allocation]() {
+                vma_destroy_func(g_vk->allocator, u, a);
+            });
+        }
+    }
+
+    VkResource get_underlying() const { return underlying; }
+    VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
+    const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
+    VmaAllocation get_allocation() const { return allocation; }
+    VmaAllocation *get_allocation_ptr() { return &allocation; } // Only use to pass to a vkCreate* function
+    const VmaAllocation *get_allocation_ptr() const { return &allocation; } // Only use for Vulkan functions expecting an array of handles
+
+    bool operator==(const ManagedVmaResource& other) const noexcept { return underlying == other.underlying; }
+    bool operator!=(const ManagedVmaResource& other) const noexcept { return underlying != other.underlying; }
+};
+
+export class GpuFence{
+    ManagedVkResource<VkFence, vkDestroyFence> fence;
+public:
+    [[nodiscard]] VkFence get_underlying(PassKey<Swapchain, CommandBuffer>) const { return fence.get_underlying(); }
+    // by default we wait forever, if we change the timeout we crash with VK_TIMEOUT if we run out of time
+    // todo: try_wait for returning instead of crashing
+    static constexpr u64 default_timeout = UINT64_MAX;
+
+    GpuFence() = delete;
+
+    GpuFence(bool signaled);
+    explicit GpuFence(VkFence fence):fence(fence){}
+
+    void wait(u64 timeout = default_timeout) const;
+    void reset() const;
+    void wait_and_reset(u64 timeout = default_timeout) const;
+    [[nodiscard]] bool is_signaled() const;
+
+    static void wait(std::span<const VkFence> fences, bool wait_all, u64 timeout = default_timeout);
+    static void reset(std::span<const VkFence> fences);
+    static void wait_and_reset(std::span<const VkFence> fences, bool wait_all, u64 timeout = default_timeout);
+};
+
+export class Sampler{
+    ManagedVkResource<VkSampler, vkDestroySampler> sampler;
+public:
+    [[nodiscard]] VkSampler get_underlying(PassKey<DescriptorSet>) const { return sampler.get_underlying(); }
+    Sampler() = delete;
+
+    Sampler(VkFilter mag_filter,
             VkFilter min_filter,
             VkSamplerMipmapMode mipmap_mode,
             VkBool32 anisotropy_enable,
@@ -214,19 +359,24 @@ export enum class ImageAspects:VkImageAspectFlags{
     DEPTH_STENCIL = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
 };
 
-export struct Image{
-    VkImage vk_image;
-    VmaAllocation allocation;
+export class Image{
+    ManagedVmaResource<VkImage, vmaDestroyImage> vk_image;
     VkExtent2D extent;
     VkFormat format;
     u32 mip_level_count;
     u32 layer_count;
     MSAALevel msaa_level;
-
+public:
+    [[nodiscard]] VkImage get_underlying(PassKey<CommandBuffer, ImageView, StructMaker>) const { return vk_image.get_underlying(); }
+    [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
     [[nodiscard]] VkFormat get_format() const { return format; }
+    [[nodiscard]] u32 get_mip_level_count() const { return mip_level_count; }
+    [[nodiscard]] u32 get_layer_count() const { return layer_count; }
+    [[nodiscard]] MSAALevel get_msaa_level() const { return msaa_level; }
+
+    Image() = delete;
 
     Image(
-        VulkanEngine &vk,
         VkExtent2D extent,
         VkFormat format,
         VkImageUsageFlags image_usage_flags,
@@ -238,8 +388,6 @@ export struct Image{
 
     Image(VkImage img, VkExtent2D extent, VkFormat format, u32 layer_count);
 
-    void erase_self(VulkanEngine &vk);
-
     bool operator==(const Image& other) const noexcept {
         return vk_image == other.vk_image;
     }
@@ -249,11 +397,14 @@ export struct Image{
     }
 };
 
-export struct ImageView{
-    VkImageView view;
+export class ImageView{
+    ManagedVkResource<VkImageView, vkDestroyImageView> view;
+public:
+    [[nodiscard]] VkImageView get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker>) const { return view.get_underlying(); }
+
+    ImageView() = delete;
 
     ImageView(
-        VulkanEngine &vk,
         const Image &img,
         ImageAspects aspects,
         u32 base_mip_level,
@@ -261,95 +412,85 @@ export struct ImageView{
     );
 
     ImageView(VkImageView vk_view);
-    void erase_self(VulkanEngine &vk) const;
+
+    bool operator==(const ImageView& other) const noexcept {
+        return view == other.view;
+    }
+
+    bool operator!=(const ImageView& other) const noexcept {
+        return !(*this == other);
+    }
 };
 
-export struct GpuFence{
-    VkFence fence;
-    GpuFence(VulkanEngine &vk, bool signaled);
-    explicit GpuFence(VkFence fence):fence(fence){}
+export class GpuSemaphore{
+    ManagedVkResource<VkSemaphore, vkDestroySemaphore> semaphore;
+public:
+    [[nodiscard]] VkSemaphore get_underlying(PassKey<Swapchain, CommandBuffer>) const { return semaphore.get_underlying(); }
 
-    void wait(const VulkanEngine &vk) const;
-    void reset(const VulkanEngine &vk) const;
-    void wait_and_reset(const VulkanEngine &vk) const;
-    [[nodiscard]] bool is_signaled(const VulkanEngine &vk) const;
-
-    static void wait(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all);
-    static void reset(const VulkanEngine &vk, std::span<VkFence> fences);
-    static void wait_and_reset(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all);
+    GpuSemaphore();
 };
 
-export struct GpuSemaphore{
-    VkSemaphore semaphore;
-    GpuSemaphore(VulkanEngine &vk);
-};
-
-export struct Swapchain{
+export class Swapchain{
     VkSwapchainKHR swapchain{};
     VkFormat image_format{};
     VkExtent2D extent{};
     std::vector<Image> images;
     std::vector<ImageView> image_views;
-    std::vector<VkFence> present_fences;
+    std::vector<GpuFence> present_fences;
 
+    void initialize_swapchain(SDL_Window *window, VkPresentModeKHR present_mode, VkSwapchainKHR *old_swapchain = nullptr);
+
+public:
     [[nodiscard]] const std::vector<Image> &get_images() const { return images; }
     [[nodiscard]] const std::vector<ImageView> &get_image_views() const { return image_views; }
     [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
     [[nodiscard]] VkFormat get_format() const { return image_format; }
 
-    Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode);
+    Swapchain(SDL_Window *window, VkPresentModeKHR present_mode);
+    ~Swapchain();
 
     // Returns the index of the next image in the swapchain and the result can be:
     // VK_SUCCESS (proceed normally)
     // VK_ERROR_OUT_OF_DATE_KHR (must remake swapchain and call acquire again)
     // VK_SUBOPTIMAL_KHR (must use the swapchain image normally and then remake the swapchain at a later time)
     // the non-VK_SUCCESS results are typically returned when things like the window being resized or moved to another monitor happen.
-    [[nodiscard]] std::tuple<u32, VkResult> acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const;
+    [[nodiscard]] std::tuple<u32, VkResult> acquire_next_image(const GpuSemaphore& signal_sema) const;
 
     // Only returns VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR, or VK_SUBOPTIMAL_KHR
     // Synchronization primitives are affected even if it errors, do not attempt to present again on error
-    [[nodiscard]] VkResult present(VulkanEngine &vk, GpuSemaphore wait_sema, u32 swapchain_image_index);
-    // Returns true only if a valid swapchain that can be presented to the window can be made constructed.
+    [[nodiscard]] VkResult present(const GpuSemaphore& wait_sema, u32 swapchain_image_index);
+    // Returns true only if a valid swapchain that can be presented to the window can be made.
     // This is true unless the window size or surface extent is {0,0}.
-    [[nodiscard]] static bool presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window);
-    // If there is not VkExtent2D, that means we can't make a swapchain because either the window size or the
+    [[nodiscard]] static bool presentable_swapchain_exists(SDL_Window *window);
+    // If there is no VkExtent2D, that means we can't make a swapchain because either the window size or the
     // surface extent is {0,0}.
-    [[nodiscard]] static std::optional<VkExtent2D> decide_extent(VulkanEngine &vk, SDL_Window *window);
+    [[nodiscard]] static std::optional<VkExtent2D> decide_extent(SDL_Window *window);
 
- private:
-    void initialize_swapchain(
-        VulkanEngine &vk,
-        SDL_Window *window,
-        VkPresentModeKHR present_mode,
-        const VkSwapchainKHR *old_swapchain = nullptr
-    );
-
- public:
-
-    void rebuild_swapchain(
-        VulkanEngine &vk,
-        SDL_Window *window,
-        VkPresentModeKHR present_mode
-    );
+    void rebuild_swapchain(SDL_Window *window, VkPresentModeKHR present_mode);
 };
 
-export struct CommandPool{
-    VkCommandPool pool;
-    CommandPool(VulkanEngine &vk);
-};
-
-export struct VulkanBuffer{
-    VkBuffer buffer;
-    u64 capacity_in_bytes;
-    VmaAllocation allocation;
-private:
-    VkDeviceAddress device_address;
+export class CommandPool{
+    ManagedVkResource<VkCommandPool, vkDestroyCommandPool> pool;
 public:
-    [[nodiscard]] const VkBuffer &get_vk_buffer() const { return buffer; }
+    [[nodiscard]] VkCommandPool get_underlying(PassKey<StructMaker>) const { return pool.get_underlying(); }
+
+    CommandPool();
+};
+
+export class VulkanBuffer{
+    ManagedVmaResource<VkBuffer, vmaDestroyBuffer> buffer;
+    u64 capacity_in_bytes = 0;
+protected:
+    VkDeviceAddress device_address = 0;
+public:
+    [[nodiscard]] VkBuffer get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker>) const { return buffer.get_underlying(); }
+    [[nodiscard]] VmaAllocation get_allocation() const { return buffer.get_allocation(); }
+    [[nodiscard]] u64 get_capacity_in_bytes() const { return capacity_in_bytes; }
     [[nodiscard]] const VkDeviceAddress &get_device_address() const { return device_address; }
 
+    VulkanBuffer() = delete;
+
     VulkanBuffer(
-        VulkanEngine &vk,
         u64 capacity_in_bytes,
         VkBufferUsageFlags usage_flags,
         VmaAllocationCreateFlags vma_flags,
@@ -367,44 +508,45 @@ public:
 };
 
 // A GPU-side buffer for the gpu to read from and write to.
-export struct StorageBuffer : public VulkanBuffer{
-    StorageBuffer(VulkanEngine &vk, u64 size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
+export class StorageBuffer : public VulkanBuffer{
+public:
+    StorageBuffer(u64 size_in_bytes, bool is_transfer_source, bool is_transfer_dest);
 };
 
-// Used to get data from Host to Device. For performance reasons, host should write into it in sequentially, not at random.
+// Used to get data from Host to Device. For performance reasons, host should write into it sequentially, not at random.
 // Copy the contents into a buffer that resides in the Device instead of accessing it from the device directly.
-export struct StagingBuffer : public VulkanBuffer{
-private:
+export class StagingBuffer : public VulkanBuffer{
     void *mapped_data;
 public:
-    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
+    [[nodiscard]] void *get_mapped_data() const { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    StagingBuffer(VulkanEngine &vk, u64 size_in_bytes);
+    StagingBuffer(u64 size_in_bytes);
 };
 
 // The opposite of a staging buffer, can be used to copy gpu resources to the cpu or the gpu might store its result in it directly
 // It's fine for the host to access it in whatever way it pleases, but access will be slow for the device (unless we're on a UMA machine)
-export struct ReadbackBuffer : public VulkanBuffer{
-private:
+export class ReadbackBuffer : public VulkanBuffer{
     void *mapped_data;
 public:
-    void *get_mapped_data() { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
+    [[nodiscard]] void *get_mapped_data() const { return mapped_data; } // remember that if you ever have to add defragmentation or begin unmapping/remapping it you'll have to instead fetch this with vmaGetAllocationInfo every time because it might change
 
-    ReadbackBuffer(VulkanEngine &vk, u64 size_in_bytes);
+    ReadbackBuffer(u64 size_in_bytes);
 };
 
-export struct IndexBuffer : public VulkanBuffer{
+export class IndexBuffer : public VulkanBuffer{
+public:
     static const VkIndexType index_type = VK_INDEX_TYPE_UINT32;
-    IndexBuffer(VulkanEngine &vk, u64 total_indexes);
+    IndexBuffer(u64 total_indexes);
 };
 
 export template <typename VertexStruct>
-struct VertexBuffer : public VulkanBuffer{
+class VertexBuffer : public VulkanBuffer{
+public:
     static const std::size_t vertex_attribute_count = boost::pfr::tuple_size_v<VertexStruct>;
     static const u32 stride = sizeof(VertexStruct);
 
-    VertexBuffer(VulkanEngine &vk, u64 element_count)
-    :VulkanBuffer(vk,
+    VertexBuffer(u64 element_count)
+    :VulkanBuffer(
                  sizeof(VertexStruct) * element_count,
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  0, 0)
@@ -486,6 +628,8 @@ struct VertexBuffer : public VulkanBuffer{
         u32 curr_offset = 0;
         i32 i = 0;
         boost::pfr::for_each_field_with_name(VertexStruct{}, [&](std::string_view name, const auto &value){
+            u32 alignment = alignof(std::remove_cvref_t<decltype(value)>);
+            curr_offset = (curr_offset + alignment - 1) & ~(alignment - 1); // This is a classic trick for rounding curr_offset up to the nearest multiple of "alignment" (if alignment is a power of 2)
             vertex_attribute_descriptions[i++] = {
                 .location = curr_location,
                 .binding = binding,
@@ -499,71 +643,84 @@ struct VertexBuffer : public VulkanBuffer{
     }
 };
 
-export struct DescriptorSet{
+export class DescriptorSet{
     VkDescriptorSet set;
-    VkDescriptorSetLayout layout;
+    VkDescriptorSetLayout layout; // todo is there an actual performance benefit to sharing layouts?
+public:
+    DescriptorSet(VkDescriptorSetLayout layout);
 
-    DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout);
-
-    void update_storage_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views);
-    void update_storage_image(VulkanEngine &vk, u32 bind, ImageView &view);
-    void update_sampled_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views);
-    void update_sampled_image(VulkanEngine &vk, u32 bind, ImageView &view);
-    void update_samplers(VulkanEngine &vk, u32 bind, std::span<Sampler> samplers);
-    void update_sampler(VulkanEngine &vk, u32 bind, Sampler &sampler);
-    void update_storage_buffers(VulkanEngine &vk, u32 bind, std::span<StorageBuffer> buffers);
-    void update_storage_buffer(VulkanEngine &vk, u32 bind, StorageBuffer &buffer);
+    VkDescriptorSet get_underlying(PassKey<CommandBuffer>) const { return set; }
+    VkDescriptorSetLayout get_layout(PassKey<PipelineLayout>) const { return layout; }
+    void update_storage_images(u32 bind, std::span<const ImageView> views);
+    void update_storage_image(u32 bind, const ImageView &view);
+    void update_sampled_images(u32 bind, std::span<const ImageView> views);
+    void update_sampled_image(u32 bind, const ImageView &view);
+    void update_samplers(u32 bind, std::span<const Sampler> samplers);
+    void update_sampler(u32 bind, const Sampler &sampler);
+    void update_storage_buffers(u32 bind, std::span<const StorageBuffer> buffers);
+    void update_storage_buffer(u32 bind, const StorageBuffer &buffer);
 };
 
-struct Shader{
-    VkShaderModule module;
+class Shader{
+    ManagedVkResource<VkShaderModule, vkDestroyShaderModule> module;
+public:
+    [[nodiscard]] VkShaderModule get_underlying(PassKey<StructMaker>) const { return module.get_underlying(); }
+    template <typename T>
+    [[nodiscard]] VkShaderModule get_underlying(PassKey<GraphicsPipeline<T>>) const { return module.get_underlying(); }
 
-    Shader(VulkanEngine &vk, const std::string_view filepath);
+    Shader() = delete;
+
+    Shader(const std::string_view filepath);
 };
 
-export struct ComputeShader : public Shader{
-    ComputeShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
+export class ComputeShader : public Shader{
+public:
+    ComputeShader(const std::string_view filepath)
+    :Shader(filepath) {
         assert(filepath.contains(".comp") && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
-export struct VertexShader : public Shader {
-    VertexShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
+export class VertexShader : public Shader {
+public:
+    VertexShader(const std::string_view filepath)
+    :Shader(filepath) {
         assert(filepath.contains(".vert") && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
-export struct FragmentShader : public Shader {
-    FragmentShader(VulkanEngine &vk, const std::string_view filepath)
-    :Shader(vk, filepath) {
+export class FragmentShader : public Shader {
+public:
+    FragmentShader(const std::string_view filepath)
+    :Shader(filepath) {
         assert(filepath.contains(".frag") && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 
-export struct PipelineLayout{
-    VkPipelineLayout layout;
+export class PipelineLayout{
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+public:
+    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<CommandBuffer, StructMaker>) const { return layout; }
+    template <typename T>
+    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<GraphicsPipeline<T>>) const { return layout; }
+    PipelineLayout() = default;
 
     PipelineLayout(
-        VulkanEngine &vk,
         std::initializer_list<DescriptorSet> descriptor_sets,
         const std::optional<std::vector<VkPushConstantRange>> &push_constants
     );
-    PipelineLayout(VulkanEngine &vk, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants);
+    PipelineLayout(DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants);
 };
 
 // This struct does not need to be kept alive after being used to create a pipeline, and thus can be reset for use in another pipeline's initialization.
-export struct SpecializationInfo{
-private:
+export class SpecializationInfo{
     VkSpecializationInfo info{};
-public:
     std::vector<VkSpecializationMapEntry> entries;
     size_t data_buffer_max_capacity_in_bytes{};
     void *data{};
     bool finalized{};
-    // Differs from data_buffer_in_bytes in that this is the actually used memory, while data_buffer_in_bytes includes potentially unused memory
+    // Differs from data_buffer_max_capacity_in_bytes in that this is the actually used memory, while data_buffer_max_capacity_in_bytes includes potentially unused memory
     // and always reflects the actual amount of bytes available in the buffer.
     size_t data_size_in_bytes{};
-
+public:
     SpecializationInfo(size_t total_data_size = 128);
 
     template<typename T>
@@ -596,7 +753,7 @@ public:
 
     SpecializationInfo &reset();
 
-    // DO NOT cache the output of this funciton. If you ever reset this instance of SpecializationInfo or let it be destroyed,
+    // DO NOT cache the output of this function. If you ever reset this instance of SpecializationInfo or let it be destroyed,
     // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
     const VkSpecializationInfo *get_vk_specialization_info();
 
@@ -607,26 +764,31 @@ public:
     SpecializationInfo& operator=(SpecializationInfo&&) = delete;
 };
 
-export struct ComputePipeline{
-    VkPipeline pipeline;
+export class ComputePipeline{
+    ManagedVkResource<VkPipeline, vkDestroyPipeline> pipeline;
     PipelineLayout layout;
+public:
+    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer>) const { return pipeline.get_underlying(); }
+    [[nodiscard]] const PipelineLayout& get_layout() const { return layout; }
 
     ComputePipeline(
-        VulkanEngine &vk,
-        ComputeShader shader_module,
+        const ComputeShader& shader_module,
         PipelineLayout pipeline_layout,
         SpecializationInfo */* _Nullable */specialization_info = nullptr
     );
 };
 
 export template <typename T>
-struct GraphicsPipeline{
-    VkPipeline pipeline;
+class GraphicsPipeline{
+    ManagedVkResource<VkPipeline, vkDestroyPipeline> pipeline;
     PipelineLayout layout;
+public:
+    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer>) const { return pipeline.get_underlying(); }
+    [[nodiscard]] const PipelineLayout& get_layout() const { return layout; }
+
     GraphicsPipeline(
-        VulkanEngine &vk,
-        VertexShader vert_shader,
-        FragmentShader frag_shader,
+        const VertexShader& vert_shader,
+        const FragmentShader& frag_shader,
         PipelineLayout pipeline_layout,
         const VertexBuffer<T> &vertex_buffer,
         VkFormat color_attachment_format,
@@ -636,7 +798,7 @@ struct GraphicsPipeline{
         SpecializationInfo */* _Nullable */frag_specialization_info = nullptr,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
-    layout(pipeline_layout)
+    layout(std::move(pipeline_layout))
     {
         assert(
             topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
@@ -646,7 +808,7 @@ struct GraphicsPipeline{
         VkPipelineShaderStageCreateInfo shader_stage_infos[2];
 
         const auto make_pipeline_shader_stage_info = [](
-            Shader shader_module,
+            const Shader& shader_module,
             VkShaderStageFlagBits stage,
             SpecializationInfo */* _Nullable */specialization_info)
         {
@@ -655,7 +817,7 @@ struct GraphicsPipeline{
                 .pNext = nullptr,
                 .flags{},
                 .stage = stage,
-                .module = shader_module.module,
+                .module = shader_module.get_underlying(PassKey<GraphicsPipeline<T>>{}),
                 .pName = "main",
                 .pSpecializationInfo = specialization_info != nullptr ? specialization_info->get_vk_specialization_info() : nullptr,
             };
@@ -792,19 +954,18 @@ struct GraphicsPipeline{
             .pDepthStencilState = &ds_state,
             .pColorBlendState = &color_blend,
             .pDynamicState = &dynamic_state_info,
-            .layout = this->layout.layout,
+            .layout = this->layout.get_underlying(PassKey<GraphicsPipeline<T>>{}),
             .renderPass = VK_NULL_HANDLE,
             .subpass{},
             .basePipelineHandle{},
             .basePipelineIndex{},
         };
 
-        VkResult result = (vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, &this->pipeline));
+        VkResult result = (vkCreateGraphicsPipelines(g_vk->device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, this->pipeline.get_underlying_ptr()));
         if(result != VK_SUCCESS){
             printf("Vulkan error with code: %d", result);
             abort();
         }
-        vk.created_pipelines.push_back(pipeline);
     }
 };
 
@@ -821,205 +982,9 @@ export struct BarrierInfo{
     u32 mip_level_count = VK_REMAINING_MIP_LEVELS;
 };
 
-export struct CommandBuffer{
+export class CommandBuffer{
     VkCommandBuffer buffer;
-    CommandBuffer(const VulkanEngine &vk, const CommandPool &pool);
-    CommandBuffer(VkCommandBuffer vk_buffer):buffer(vk_buffer){}
-    static void make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append);
-    void draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const;
-    void restart(bool one_time_submit) const;
-    void submit(
-        VulkanEngine &vk,
-        std::optional<GpuSemaphore> wait_sema,
-        std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in the buffer that use these stages will not run until wait_sema is signaled
-        std::optional<GpuSemaphore> signal_sema, // Will be signaled when every command in the buffer is complete
-        std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in the buffer (other stages will have outdated cached data, causing errors)
-        GpuFence signal_fence
-    )const;
-    void submit(VulkanEngine &vk, GpuFence signal_fence) const;
-    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const;
-    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const;
-    void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const;
-    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const;
-    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const;
-    void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, u32 src_mip_level, u32 dst_mip_level) const;
 
-    template <typename T>
-    void draw_indexed(
-        ImageView color_attachment,
-        ImageView depth_attachment,
-        ImageView resolve_image_view,
-        VkExtent2D draw_extent,
-        const VertexBuffer<T> &vertex_buffer,
-        const IndexBuffer &index_buffer,
-        const std::vector<VkDrawIndexedIndirectCommand> &commands) const
-    {
-        VkRenderingAttachmentInfo color_attachment_info{
-            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .pNext       = nullptr,
-            .imageView   = color_attachment.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT,
-            .resolveImageView   = resolve_image_view.view,
-            .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{},
-        };
-
-        VkRenderingAttachmentInfo depth_attachment_info{
-            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .pNext       = nullptr,
-            .imageView   = depth_attachment.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .resolveMode{},
-            .resolveImageView{},
-            .resolveImageLayout{},
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{
-                .depthStencil{.depth = 0.0f, .stencil = 0}
-            },
-        };
-
-        const auto make_rendering_info = [](
-            VkExtent2D renderExtent,
-            VkRenderingAttachmentInfo* colorAttachment,
-            VkRenderingAttachmentInfo* depthAttachment)
-        {
-            return VkRenderingInfo{
-                .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .pNext                = nullptr,
-                .flags{},
-                .renderArea           = {{0, 0}, renderExtent},
-                .layerCount           = 1,
-                .viewMask{},
-                .colorAttachmentCount = 1,
-                .pColorAttachments    = colorAttachment,
-                .pDepthAttachment     = depthAttachment,
-                .pStencilAttachment   = nullptr,
-            };
-        };
-
-        VkRenderingInfo rendering_info = make_rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
-
-        vkCmdBeginRendering(buffer, &rendering_info);
-
-        VkDeviceSize offsets = 0;
-        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
-        vkCmdBindIndexBuffer(buffer, index_buffer.buffer, 0, IndexBuffer::index_type);
-
-        VkViewport viewport = {
-            .x = 0,
-            .y = 0,
-            .width = static_cast<f32>(draw_extent.width),
-            .height = static_cast<f32>(draw_extent.height),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
-        vkCmdSetViewport(buffer, 0, 1, &viewport);
-
-        VkRect2D scissor{
-            .offset{.x = 0, .y = 0},
-            .extent{draw_extent},
-        };
-        vkCmdSetScissor(buffer, 0, 1, &scissor);
-
-        for (const auto &command : commands)
-            vkCmdDrawIndexed(buffer, command.indexCount, command.instanceCount, command.firstIndex, command.vertexOffset, command.firstInstance);
-
-        vkCmdEndRendering(buffer);
-    }
-
-    template <typename T>
-    void draw_indexed(
-        ImageView color_attachment,
-        ImageView depth_attachment,
-        VkExtent2D draw_extent,
-        const VertexBuffer<T> &vertex_buffer,
-        const IndexBuffer &index_buffer,
-        u32 index_count) const
-    {
-        VkRenderingAttachmentInfo color_attachment_info{
-            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .pNext       = nullptr,
-            .imageView   = color_attachment.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .resolveMode{},
-            .resolveImageView{},
-            .resolveImageLayout{},
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD,
-            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{},
-        };
-
-        VkRenderingAttachmentInfo depth_attachment_info{
-            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .pNext       = nullptr,
-            .imageView   = depth_attachment.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .resolveMode{},
-            .resolveImageView{},
-            .resolveImageLayout{},
-            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{
-                .depthStencil{.depth = 0.0f, .stencil = 0}
-            },
-        };
-
-        const auto make_rendering_info = [](
-            VkExtent2D renderExtent,
-            VkRenderingAttachmentInfo* colorAttachment,
-            VkRenderingAttachmentInfo* depthAttachment)
-        {
-            return VkRenderingInfo{
-                .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .pNext                = nullptr,
-                .flags{},
-                .renderArea           = {{0, 0}, renderExtent},
-                .layerCount           = 1,
-                .viewMask{},
-                .colorAttachmentCount = 1,
-                .pColorAttachments    = colorAttachment,
-                .pDepthAttachment     = depthAttachment,
-                .pStencilAttachment   = nullptr,
-            };
-        };
-
-        VkRenderingInfo rendering_info = make_rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
-
-        vkCmdBeginRendering(buffer, &rendering_info);
-
-        VkDeviceSize offsets = 0;
-        vkCmdBindVertexBuffers(buffer, 0, 1, &vertex_buffer.buffer, &offsets);
-        vkCmdBindIndexBuffer(buffer, index_buffer.buffer, 0, IndexBuffer::index_type);
-
-        VkViewport viewport = {
-            .x = 0,
-            .y = 0,
-            .width = static_cast<f32>(draw_extent.width),
-            .height = static_cast<f32>(draw_extent.height),
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f,
-        };
-        vkCmdSetViewport(buffer, 0, 1, &viewport);
-
-        VkRect2D scissor{
-            .offset{.x = 0, .y = 0},
-            .extent{draw_extent},
-        };
-        vkCmdSetScissor(buffer, 0, 1, &scissor);
-
-        vkCmdDrawIndexed(buffer, index_count, 1, 0, 0, 0);
-        vkCmdEndRendering(buffer);
-    }
-
-private:
     static VkImageMemoryBarrier2 image_memory_barrier2(const BarrierInfo &barrier_info){
         return VkImageMemoryBarrier2 {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -1032,7 +997,7 @@ private:
             .newLayout = barrier_info.new_layout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // todo was 0 before and worked, figure out more about queue families
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = barrier_info.img.vk_image,
+            .image = barrier_info.img.get_underlying({}),
             .subresourceRange = {
                 .aspectMask     = static_cast<VkImageAspectFlags>(barrier_info.aspects),
                 .baseMipLevel   = barrier_info.base_mip_level,
@@ -1056,7 +1021,139 @@ private:
         .pImageMemoryBarriers = image_barriers.data(),
         };
     }
+
+    void bind_descriptor_sets_inner(VkPipelineBindPoint bind_point, std::initializer_list<DescriptorSet> sets, const PipelineLayout &layout) const{
+        const i32 max_sets = 4;
+        if (sets.size() > max_sets){
+            assert(false && "Too many desc sets");
+            abort();
+        };
+        VkDescriptorSet vk_sets[max_sets];
+        i32 i = 0;
+        for(const auto &set : sets){
+            vk_sets[i++] = set.get_underlying({});
+        }
+
+        vkCmdBindDescriptorSets(this->buffer, bind_point, layout.get_underlying({}), 0, sets.size(), vk_sets, 0, nullptr);
+    }
 public:
+    [[nodiscard]] VkCommandBuffer get_underlying(PassKey<StructMaker>) const { return buffer; }
+    CommandBuffer(const CommandPool &pool);
+    CommandBuffer(VkCommandBuffer vk_buffer):buffer(vk_buffer){}
+    static void make_command_buffers(std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append);
+    void draw_imgui(const ImageView& target_image_view, VkExtent2D draw_extent) const;
+    void restart(bool one_time_submit) const;
+    void submit(
+        std::optional<std::reference_wrapper<const GpuSemaphore>> wait_sema,
+        std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in the buffer that use these stages will not run until wait_sema is signaled
+        std::optional<std::reference_wrapper<const GpuSemaphore>> signal_sema, // Signals after the specified pipeline stages complete
+        std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Sets the pipeline stages that trigger the signal operation
+        const GpuFence& signal_fence
+    )const;
+    void submit(const GpuFence& signal_fence) const;
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, std::span<const VkBufferCopy2> ranges) const;
+    void copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const VkBufferCopy2 &range) const;
+    void copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, VkImageLayout image_layout, u32 region_count, const VkBufferImageCopy2 *regions) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image& image, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset = VkOffset3D{}) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const;
+    void copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<const VkBufferImageCopy2> regions) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, u64 buffer_offset, u32 mip_level, u32 base_layer, u32 layer_count, ImageAspects aspects, const VkOffset3D &img_offset) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const;
+    void copy_image_to_buffer(const Image &image, const VulkanBuffer &buffer, std::span<const VkBufferImageCopy2> regions) const;
+    void copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, u32 src_mip_level, u32 dst_mip_level) const;
+
+    template <typename T>
+    void draw_indexed(
+        const ImageView& color_attachment,
+        const ImageView& depth_attachment,
+        const ImageView& resolve_image_view,
+        VkExtent2D draw_extent,
+        const VertexBuffer<T> &vertex_buffer,
+        const IndexBuffer &index_buffer,
+        const std::vector<VkDrawIndexedIndirectCommand> &commands) const
+    {
+        VkRenderingAttachmentInfo color_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = color_attachment.get_underlying({}),
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT,
+            .resolveImageView   = resolve_image_view.get_underlying({}),
+            .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{},
+        };
+
+        VkRenderingAttachmentInfo depth_attachment_info{
+            .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext       = nullptr,
+            .imageView   = depth_attachment.get_underlying({}),
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .resolveMode{},
+            .resolveImageView{},
+            .resolveImageLayout{},
+            .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp     = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{
+                .depthStencil{.depth = 0.0f, .stencil = 0}
+            },
+        };
+
+        const auto make_rendering_info = [](
+            VkExtent2D renderExtent,
+            VkRenderingAttachmentInfo* colorAttachment,
+            VkRenderingAttachmentInfo* depthAttachment)
+        {
+            return VkRenderingInfo{
+                .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext                = nullptr,
+                .flags{},
+                .renderArea           = {{0, 0}, renderExtent},
+                .layerCount           = 1,
+                .viewMask{},
+                .colorAttachmentCount = 1,
+                .pColorAttachments    = colorAttachment,
+                .pDepthAttachment     = depthAttachment,
+                .pStencilAttachment   = nullptr,
+            };
+        };
+
+        VkRenderingInfo rendering_info = make_rendering_info(draw_extent, &color_attachment_info, &depth_attachment_info);
+
+        vkCmdBeginRendering(buffer, &rendering_info);
+
+        VkDeviceSize offsets = 0;
+        {
+            VkBuffer vb = vertex_buffer.get_underlying({});
+            vkCmdBindVertexBuffers(buffer, 0, 1, &vb, &offsets);
+        }
+        vkCmdBindIndexBuffer(buffer, index_buffer.get_underlying({}), 0, IndexBuffer::index_type);
+
+        VkViewport viewport = {
+            .x = 0,
+            .y = 0,
+            .width = static_cast<f32>(draw_extent.width),
+            .height = static_cast<f32>(draw_extent.height),
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+        vkCmdSetViewport(buffer, 0, 1, &viewport);
+
+        VkRect2D scissor{
+            .offset{.x = 0, .y = 0},
+            .extent{draw_extent},
+        };
+        vkCmdSetScissor(buffer, 0, 1, &scissor);
+
+        for (const auto &command : commands)
+            vkCmdDrawIndexed(buffer, command.indexCount, command.instanceCount, command.firstIndex, command.vertexOffset, command.firstInstance);
+
+        vkCmdEndRendering(buffer);
+    }
+
+
 
     template<typename... BarrierInfo_T>
     void barrier(const BarrierInfo_T&... barrier_infos) const {
@@ -1074,7 +1171,7 @@ public:
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
     }
 
-    void barrier_span(std::span<BarrierInfo> barrier_infos) const {
+    void barrier_span(std::span<const BarrierInfo> barrier_infos) const {
         std::vector<VkImageMemoryBarrier2> image_barriers; //todo optimize out the heap allocation with a custom allocator
         image_barriers.reserve(barrier_infos.size());
         for (const auto &info : barrier_infos){
@@ -1099,30 +1196,14 @@ public:
 
     template <typename T>
     void bind_pipeline(const GraphicsPipeline<T> &pipeline) const{
-        vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
+        vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.get_underlying({}));
     }
 
-private:
-    void bind_descriptor_sets_inner(VkPipelineBindPoint bind_point, std::initializer_list<DescriptorSet> sets, VkPipelineLayout layout) const{
-        const i32 max_sets = 4;
-        if (sets.size() > max_sets){
-            assert(false && "Too many desc sets");
-            abort();
-        };
-        VkDescriptorSet vk_sets[max_sets];
-        i32 i = 0;
-        for(const auto &set : sets){
-            vk_sets[i++] = set.set;
-        }
-
-        vkCmdBindDescriptorSets(this->buffer, bind_point, layout, 0, sets.size(), vk_sets, 0, nullptr);
-    }
-public:
     void bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const;
     void bind_descriptor_set(const ComputePipeline &pipeline, DescriptorSet set) const;
     template<typename VertexType>
     void bind_descriptor_sets(const GraphicsPipeline<VertexType> &pipeline, std::initializer_list<DescriptorSet> sets) const{
-        bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_GRAPHICS, sets, pipeline.layout.layout);
+        bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_GRAPHICS, sets, pipeline.get_layout());
     }
     template<typename VertexType>
     void bind_descriptor_set(const GraphicsPipeline<VertexType> &pipeline, DescriptorSet set) const {
@@ -1131,13 +1212,13 @@ public:
 
     template <typename T>
     void update_push_constants(
-        ComputePipeline pipeline,
-        const PushConstant<T>& push_constant)
+        const ComputePipeline &pipeline,
+        const PushConstant<T>& push_constant) const
     {
         assert(push_constant.shader_stages & VK_SHADER_STAGE_COMPUTE_BIT
                && "Updated push constants for a compute pipeline with a push constant that cannot be accessed by compute shaders.");
         vkCmdPushConstants(this->buffer,
-                           pipeline.layout.layout,
+                           pipeline.get_layout().get_underlying({}),
                            push_constant.shader_stages,
                            push_constant.offset,
                            push_constant.size,
@@ -1146,13 +1227,13 @@ public:
 
     template <typename T, typename U>
     void update_push_constants(
-        GraphicsPipeline<T> pipeline,
-        const PushConstant<U>& push_constant)
+        const GraphicsPipeline<T>& pipeline,
+        const PushConstant<U>& push_constant) const
     {
         assert(push_constant.shader_stages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
                && "Updated push constants for a graphics pipeline with a push constant that cannot be accessed by vertex nor fragment shaders.");
         vkCmdPushConstants(this->buffer,
-                           pipeline.layout.layout,
+                           pipeline.get_layout().get_underlying({}),
                            push_constant.shader_stages,
                            push_constant.offset,
                            push_constant.size,
@@ -1165,18 +1246,17 @@ public:
 
 // This is what you're meant to use instead of Descriptor Set Layouts and Descriptor Set Layout Bindings. You can
 // keep using build as many times as you want just like you would with a Layout.
-export struct DescriptorSetBuilder{
+export class DescriptorSetBuilder{
     std::vector<VkDescriptorSetLayoutBinding> bindings;
     VkDescriptorSetLayout layout{};
     bool finalized = false;
+public:
+    DescriptorSetBuilder &bind(u32 binding, VkDescriptorType type, u32 count = 1, VkShaderStageFlags accessible_stages_flags = VK_SHADER_STAGE_ALL);
 
-    DescriptorSetBuilder &bind(u32 binding, VkDescriptorType type, u32 count = 1, VkShaderStageFlagBits accessible_stages_flags = VK_SHADER_STAGE_ALL);
-
-    DescriptorSet build(VulkanEngine &vk);
+    DescriptorSet build();
 
     // Don't reset unless you know you won't be making another descriptor set with the same layout again. It's slower otherwise.
     // Objects passed into the creation of other objects must not be destroyed while the new object is in use, so we cannot destroy the layout here.
     // Since we use all descriptor sets until the end of the program, there is no reason to want that, either.
     DescriptorSetBuilder &reset();
 };
-

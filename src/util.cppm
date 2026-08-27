@@ -279,4 +279,25 @@ export template<typename T>
 u64 get_data_size(const std::vector<T> &vec){
     return std::size(vec) * sizeof(T);
 }
+
+// The PassKey pattern lets a private method give access to itself to
+// some classes B, C, D... without making B, C, D... into friend classes
+// (which would give access to every private class member).
+// Example: class A { private: void secret_method(PassKey<B, C, D>); }
+//          class B { void use_secret(A a) { a.secret_method({}); }
+export template <typename... Allowed>
+class PassKey {
+    friend Allowed...;
+
+    // Private constructor, so only friends can create a PassKey
+    constexpr PassKey() noexcept = default;
+
+    public:
+    // To pass the passkey down to others that need it (careful not to overuse)
+    constexpr PassKey(const PassKey&) noexcept = default;
+    constexpr PassKey(PassKey&&) noexcept = default;
+
+    PassKey& operator=(const PassKey&) = delete;
+    PassKey& operator=(PassKey&&) = delete;
+};
 }

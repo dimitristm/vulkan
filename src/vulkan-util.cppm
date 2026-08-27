@@ -26,15 +26,15 @@ export class ImmediateSubmitter{
     GpuFence submit_fence;
     CommandBuffer internal_cmd_buffer;
 public:
-    ImmediateSubmitter(VulkanEngine &vk, const CommandPool &cmd_pool);
-    void submit(VulkanEngine &vk, const std::function<void()> &function);
+    ImmediateSubmitter(const CommandPool &cmd_pool);
+    void submit(const std::function<void()> &function);
     const CommandBuffer &cmd_buffer(){ return internal_cmd_buffer; }
 };
 
 export class HostToDeviceUploader{
     VulkanEngine *const vk;
     StagingBuffer staging_buffer;
-    CommandPool cmd_pool;
+    const CommandPool &cmd_pool;
 
     std::vector<GpuFence> fence_pool;
     std::vector<CommandBuffer> cmd_buffer_pool;
@@ -42,22 +42,22 @@ export class HostToDeviceUploader{
     struct InProgressUpload{
         CommandBuffer cmd_buffer;
         GpuFence fence;
-        InProgressUpload(CommandBuffer &command_buffer, GpuFence &gpu_fence)
-        :cmd_buffer(command_buffer), fence(gpu_fence){}
+        InProgressUpload(CommandBuffer command_buffer, GpuFence&& gpu_fence)
+        :cmd_buffer(command_buffer), fence(std::move(gpu_fence)){}
     };
 
     struct QueuedBufferUpload{
-        VulkanBuffer dst;
+        const VulkanBuffer* dst;
         std::vector<VkBufferCopy2> copy_info;// todo performance: get rid of the allocation with a memory pool
-        QueuedBufferUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(dst){
+        QueuedBufferUpload(const VulkanBuffer &dst, const VkBufferCopy2 &copy):dst(&dst){
             copy_info.reserve(128);
             copy_info.push_back(copy);
         }
     };
     struct QueuedImageUpload{
-        Image dst;
+        const Image* dst;
         std::vector<VkBufferImageCopy2> copy_info;
-        QueuedImageUpload(const Image dst, const VkBufferImageCopy2 &copy):dst(dst){
+        QueuedImageUpload(const Image &dst, const VkBufferImageCopy2 &copy):dst(&dst){
             copy_info.reserve(128);
             copy_info.push_back(copy);
         }
@@ -76,11 +76,11 @@ export class HostToDeviceUploader{
     void stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, u64 dst_offset);
     void stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy);
 
-    const VulkanBuffer *active_upload_dst = nullptr;
+    const VulkanBuffer* active_upload_dst = nullptr;
     u64 active_upload_next_dst_offset = 0;
 
 public:
-    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool cmd_pool, u64 staging_buffer_size);
+    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool &cmd_pool, u64 staging_buffer_size);
 
     // The next three functions and their comments describe the core of how this class is used.
 
@@ -142,29 +142,31 @@ public:
 };
 
 export struct Texture : public Image{
-    Texture(VulkanEngine &vk, u32 width, u32 height, VkFormat format, u32 mip_level_count)
-    :Image(vk,
-           {.width=width,.height=height},
+    Texture(u32 width, u32 height, VkFormat format, u32 mip_level_count)
+    :Image({.width=width,.height=height},
            format,
            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,
            mip_level_count,
            1){}
-    ImageView make_view(VulkanEngine &vk)
+    ImageView make_view()
     {
-        return  {vk, *this, ImageAspects::COLOR, 0, VK_REMAINING_MIP_LEVELS};
+        return  {*this, ImageAspects::COLOR, 0, VK_REMAINING_MIP_LEVELS};
     }
 };
 
 static inline constexpr VkFormat drawing_format = VK_FORMAT_R16G16B16A16_SFLOAT;
-export struct ResolveImage{
-    static constexpr VkFormat format = drawing_format;
+export class ResolveImage{
     Image img;
     ImageView view;
-    ResolveImage(VulkanEngine &vk, const ivec2 &size)
-    :img(vk,
-           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+public:
+    static constexpr VkFormat format = drawing_format;
+    [[nodiscard]] const Image &get_image() const { return img; }
+    [[nodiscard]] const ImageView &get_image_view() const { return view; }
+
+    ResolveImage(const ivec2 &size)
+    :img({.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
            format,
            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
            | VK_IMAGE_USAGE_STORAGE_BIT
@@ -172,70 +174,71 @@ export struct ResolveImage{
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            MSAALevel::OFF,
            1, 1),
-    view(vk, img, ImageAspects::COLOR, 0, 1)
+    view(img, ImageAspects::COLOR, 0, 1)
     {}
-    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
-        change(vk, new_window_size);
+    void resize(const ivec2 &new_window_size){
+        change(new_window_size);
     }
-    void change(VulkanEngine &vk, const ivec2 &new_window_size){
-        img.erase_self(vk);
-        view.erase_self(vk);
-        *this = ResolveImage(vk, new_window_size);
+    void change(const ivec2 &new_window_size){
+        *this = ResolveImage(new_window_size);
     }
 };
 
-export struct DrawImage{
-    static constexpr VkFormat format = drawing_format;
+export class DrawImage{
     Image img;
     ImageView view;
     ResolveImage resolve_img;
-    DrawImage(VulkanEngine &vk, const ivec2 &size, MSAALevel msaa_level)
-    :img(vk,
-           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+public:
+    static constexpr VkFormat format = drawing_format;
+    [[nodiscard]] const Image &get_image() const { return img; }
+    [[nodiscard]] const ImageView &get_image_view() const { return view; }
+    [[nodiscard]] const ResolveImage &get_resolve_image() const { return resolve_img; }
+
+    DrawImage(const ivec2 &size, MSAALevel msaa_level)
+    :img({.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
            format,
            //VK_IMAGE_USAGE_STORAGE_BIT
            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, // transient because it gets resolved immediately during dynamic rendering, and after that we don't care about its contents
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            msaa_level,
            1, 1),
-    view(vk, img, ImageAspects::COLOR, 0, 1),
-    resolve_img(vk, size)
+    view(img, ImageAspects::COLOR, 0, 1),
+    resolve_img(size)
     {}
-    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
-        change(vk, new_window_size, img.msaa_level);
+    void resize(const ivec2 &new_window_size){
+        change(new_window_size, img.get_msaa_level());
     }
-    void change_msaa(VulkanEngine &vk, MSAALevel msaa_level){
-        change(vk, {img.extent.width, img.extent.height}, msaa_level);
+    void change_msaa(MSAALevel msaa_level){
+        change({img.get_extent().width, img.get_extent().height}, msaa_level);
     }
-    void change(VulkanEngine &vk, const ivec2 &new_window_size, MSAALevel msaa_level){
-        img.erase_self(vk);
-        view.erase_self(vk);
-        *this = DrawImage(vk, new_window_size, msaa_level);
+    void change(const ivec2 &new_window_size, MSAALevel msaa_level){
+        *this = DrawImage(new_window_size, msaa_level);
     }
 };
 
-export struct DepthImage{
+export class DepthImage{
     Image img;
     ImageView view;
-    DepthImage(VulkanEngine &vk, const ivec2 &size, MSAALevel msaa_level)
-    :img(vk,
-           {.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
+public:
+    [[nodiscard]] const Image &get_image() const { return img; }
+    [[nodiscard]] const ImageView &get_image_view() const { return view; }
+
+    DepthImage(const ivec2 &size, MSAALevel msaa_level)
+    :img({.width=static_cast<u32>(size.x), .height=static_cast<u32>(size.y)},
            VK_FORMAT_D32_SFLOAT,
            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
            msaa_level,
            1, 1),
-    view(vk, img, ImageAspects::DEPTH, 0, 1)
+    view(img, ImageAspects::DEPTH, 0, 1)
     {}
-    void resize(VulkanEngine &vk, const ivec2 &new_window_size){
-        change(vk, new_window_size, img.msaa_level);
+    void resize(const ivec2 &new_window_size){
+        change(new_window_size, img.get_msaa_level());
     }
-    void change_msaa(VulkanEngine &vk, MSAALevel msaa_level){
-        change(vk, {img.extent.width, img.extent.height}, msaa_level);
+    void change_msaa(MSAALevel msaa_level){
+        change({img.get_extent().width, img.get_extent().height}, msaa_level);
     }
-    void change(VulkanEngine &vk, const ivec2 &new_window_size, MSAALevel msaa_level){
-        img.erase_self(vk);
-        view.erase_self(vk);
-        *this = DepthImage(vk, new_window_size, msaa_level);
+    void change(const ivec2 &new_window_size, MSAALevel msaa_level){
+        *this = DepthImage(new_window_size, msaa_level);
     }
 };

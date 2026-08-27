@@ -32,6 +32,7 @@ module;
 #include <fstream>
 #include <optional>
 #include <utility>
+#include <deque>
 #endif
 
 module vulkanEngine;
@@ -39,6 +40,7 @@ module vulkanEngine;
 import std;
 #endif
 import types;
+import assets;
 
 import imgui_impl_sdl3;
 import imgui_impl_vulkan;
@@ -59,57 +61,56 @@ void VK_CHECK(VkResult result){
 
 const uint64_t timeout_length = 3000000000;
 
-namespace struct_makers {
-static VkCommandBufferSubmitInfo command_buffer_submit_info(VkCommandBuffer cmd){
+class StructMaker {
+public:
+static VkCommandBufferSubmitInfo command_buffer_submit_info(const CommandBuffer &cmd){
     return VkCommandBufferSubmitInfo{
         .sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
         .pNext         = nullptr,
-        .commandBuffer = cmd,
+        .commandBuffer = cmd.get_underlying({}),
         .deviceMask    = 0,
     };
 }
 
-static VkSemaphoreSubmitInfo semaphore_submit_info(
-    VkPipelineStageFlags2 stageMask,
-    VkSemaphore semaphore)
+
+static VkSubmitInfo2 submit_info2(
+    VkCommandBufferSubmitInfo* cmd_info,
+    VkSemaphoreSubmitInfo* signal_sema_info, // Can be null, in which case we do not signal a semaphore
+    VkSemaphoreSubmitInfo* wait_sema_info)   // Can be null, in which case we do not wait on a semaphore
 {
+    return VkSubmitInfo2{
+        .sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .pNext                    = nullptr,
+        .flags                    = 0,
+        .waitSemaphoreInfoCount   = wait_sema_info ? 1u : 0u,
+        .pWaitSemaphoreInfos      = wait_sema_info,
+        .commandBufferInfoCount   = 1,
+        .pCommandBufferInfos      = cmd_info,
+        .signalSemaphoreInfoCount = signal_sema_info ? 1u : 0u,
+        .pSignalSemaphoreInfos    = signal_sema_info,
+    };
+}
+
+static VkSemaphoreSubmitInfo semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore) {
     return VkSemaphoreSubmitInfo{
-        .sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext     = nullptr,
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
         .semaphore = semaphore,
-        .value     = 1,
+        .value = 1,
         .stageMask = stageMask,
         .deviceIndex = 0,
     };
 }
 
-static VkSubmitInfo2 submit_info2(
-    VkCommandBufferSubmitInfo* cmd,
-    VkSemaphoreSubmitInfo* signalSemaphoreInfo, // Can be null, in which case we do not signal a semaphore
-    VkSemaphoreSubmitInfo* waitSemaphoreInfo)   // Can be null, in which case we do not wait on a semaphore
-{
-    return VkSubmitInfo2{
-        .sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .pNext                    = nullptr,
-        .flags{},
-        .waitSemaphoreInfoCount   = waitSemaphoreInfo == nullptr ? 0u : 1u,
-        .pWaitSemaphoreInfos      = waitSemaphoreInfo,
-        .commandBufferInfoCount   = 1,
-        .pCommandBufferInfos      = cmd,
-        .signalSemaphoreInfoCount = signalSemaphoreInfo == nullptr ? 0u : 1u,
-        .pSignalSemaphoreInfos    = signalSemaphoreInfo,
-    };
-}
-
 static VkRenderingAttachmentInfo rendering_attachment_info(
-    VkImageView view,
+    const ImageView &view,
     VkClearValue* clear,
     VkImageLayout layout)
 {
     return VkRenderingAttachmentInfo{
         .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext       = nullptr,
-        .imageView   = view,
+        .imageView   = view.get_underlying({}),
         .imageLayout = layout,
         .resolveMode{},
         .resolveImageView{},
@@ -148,8 +149,8 @@ static VkBufferImageCopy2 buffer_image_copy2(
     ImageAspects aspects,
     VkOffset3D img_offset)
 {
-    assert(base_layer + layer_count <= image.layer_count);
-    const auto &base_extent = image.extent;
+    assert(base_layer + layer_count <= image.get_layer_count());
+    const auto &base_extent = image.get_extent();
     return VkBufferImageCopy2{
         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
         .pNext = nullptr,
@@ -181,8 +182,8 @@ static VkCopyBufferToImageInfo2 copy_buffer_to_image_info2(
     return VkCopyBufferToImageInfo2{
         .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
         .pNext = nullptr,
-        .srcBuffer = buffer.buffer,
-        .dstImage = image.vk_image,
+        .srcBuffer = buffer.get_underlying({}),
+        .dstImage = image.get_underlying({}),
         .dstImageLayout = layout,
         .regionCount = region_count,
         .pRegions = regions,
@@ -199,16 +200,55 @@ static VkCopyImageToBufferInfo2 copy_image_to_buffer_info2(
     return VkCopyImageToBufferInfo2{
         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
         .pNext = nullptr,
-        .srcImage = image.vk_image,
+        .srcImage = image.get_underlying({}),
         .srcImageLayout = layout,
-        .dstBuffer = buffer.buffer,
+        .dstBuffer = buffer.get_underlying({}),
         .regionCount = region_count,
         .pRegions = regions,
     };
 }
 
-} // End of namespace struct_makers.
+static VkPipelineShaderStageCreateInfo pipeline_shader_stage_info(
+    const Shader& shader_module,
+    VkShaderStageFlagBits stage,
+    SpecializationInfo */* _Nullable */specialization_info)
+{
+    return VkPipelineShaderStageCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags{},
+        .stage = stage,
+        .module = shader_module.get_underlying({}),
+        .pName = "main",
+        .pSpecializationInfo = specialization_info != nullptr ? specialization_info->get_vk_specialization_info() : nullptr,
+    };
+}
 
+static VkCommandBufferAllocateInfo command_buffer_allocate_info(const CommandPool &pool, u32 command_buffer_count){
+    return VkCommandBufferAllocateInfo{
+        .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext              = nullptr,
+        .commandPool        = pool.get_underlying({}),
+        .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = command_buffer_count,
+    };
+}
+
+static VkComputePipelineCreateInfo compute_pipeline_create_info(
+    const PipelineLayout &layout,
+    const VkPipelineShaderStageCreateInfo &stage_info)
+{
+    return VkComputePipelineCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags{},
+        .stage = stage_info,
+        .layout = layout.get_underlying({}),
+        .basePipelineHandle{},
+        .basePipelineIndex{},
+    };
+}
+};
 
 bool PushConstantsBuilder::range_stages_do_not_overlap(const std::vector<VkPushConstantRange>& old, VkShaderStageFlags new_flags){
     for (const auto &range : old){
@@ -283,20 +323,11 @@ static VmaAllocator init_vma_allocator(
     return allocator;
 }
 
-// The present fences are waited on so it's safe to delete the swapchain, but the fences themselves
-// are not deleted. That should happen independently.
-static void destroy_swapchain(const VulkanEngine &vk,
-                              VkSwapchainKHR swapchain,
-                              const std::vector<VkImageView> &swapchain_image_views,
-                              std::vector<VkFence> &present_fences){
-    GpuFence::wait(vk, std::span(present_fences), true);
-    for (const auto &swapchain_image_view : swapchain_image_views){
-        vkDestroyImageView(vk.device, swapchain_image_view, nullptr);
-    }
-    vkDestroySwapchainKHR(vk.device, swapchain, nullptr);
-}
+
+VulkanEngine* g_vk = nullptr;
 
 VulkanEngine::VulkanEngine(SDL_Window *window){
+    g_vk = this;
     vkb::InstanceBuilder builder;
     std::println("validation layers = {}", use_validation_layers);
     vkb::Instance vkb_inst = builder.set_app_name("Vulkan App")
@@ -376,29 +407,21 @@ VulkanEngine::VulkanEngine(SDL_Window *window){
 VulkanEngine::~VulkanEngine(){
     VK_CHECK(vkDeviceWaitIdle(device));
 
+    deletions_in_this_fence.execute();
+    queued_deletion_batches.force_flush_all();
+
     if (imgui_is_initialized){
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
     }
 
-    for(auto &pipeline : created_pipelines) vkDestroyPipeline(device, pipeline, nullptr);
-    for(auto &pipeline_layout : created_pipeline_layouts) vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
-    for(auto &shader_module : created_shader_modules) vkDestroyShaderModule(device, shader_module, nullptr);
-    for(auto &created_buffer : created_buffers) vmaDestroyBuffer(allocator, created_buffer.buffer, created_buffer.allocation);
-
     vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
     for(auto &layout : descriptor_set_layouts_to_delete) vkDestroyDescriptorSetLayout(device, layout, nullptr);
-    for(auto &command_pool : created_command_pools) vkDestroyCommandPool(device, command_pool, nullptr);
-    for(auto &sema : created_semaphores) vkDestroySemaphore(device, sema, nullptr);
-    for(const auto &img_view : created_image_views) vkDestroyImageView(device, img_view, nullptr);
-    for(const auto &image : created_images) vmaDestroyImage(allocator, image.image, image.allocation);
-    for(auto &sampler : created_samplers) vkDestroySampler(device, sampler, nullptr);
-    for(auto &swapchain : created_swapchains) destroy_swapchain(*this, swapchain.swapchain, swapchain.image_views, swapchain.present_fences);
-    for(auto &fence : created_fences) vkDestroyFence(device, fence, nullptr);
+    for(auto &layout : pipeline_layouts_to_delete) vkDestroyPipelineLayout(device, layout, nullptr);
 
     vmaDestroyAllocator(allocator);
-    vkDestroySurfaceKHR(vk_instance, surface, nullptr); // can i destroy surface after device?
+    vkDestroySurfaceKHR(vk_instance, surface, nullptr);
     vkDestroyDevice(device, nullptr);
     vkb::destroy_debug_utils_messenger(vk_instance, debug_messenger);
     vkDestroyInstance(vk_instance, nullptr);
@@ -569,7 +592,7 @@ VkSurfaceCapabilitiesKHR VulkanEngine::get_surface_capabilities() const{
     return capabilities;
 }
 
-Sampler::Sampler(VulkanEngine &vk,
+Sampler::Sampler(
                  VkFilter mag_filter,
                  VkFilter min_filter,
                  VkSamplerMipmapMode mipmap_mode,
@@ -606,12 +629,10 @@ Sampler::Sampler(VulkanEngine &vk,
         .borderColor = border_color,
         .unnormalizedCoordinates = unnormalized_coordinates,
     };
-    VK_CHECK(vkCreateSampler(vk.device, &info, nullptr, &this->sampler));
-    vk.created_samplers.push_back(sampler);
+    VK_CHECK(vkCreateSampler(g_vk->device, &info, nullptr, this->sampler.get_underlying_ptr()));
 }
 
 Image::Image(
-    VulkanEngine &vk,
     VkExtent2D extent,
     VkFormat format,
     VkImageUsageFlags image_usage_flags,
@@ -648,29 +669,18 @@ Image::Image(
     VmaAllocationCreateInfo img_alloc_info = {};
     img_alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
     img_alloc_info.requiredFlags = VkMemoryPropertyFlags(memory_property_flags);
-    VkImage image{};
-    VmaAllocation allocation{};
-    vmaCreateImage(vk.allocator, &img_create_info, &img_alloc_info, &image, &allocation, nullptr);
-
-    this->vk_image = image;
-    this->allocation = allocation;
-
-    vk.created_images.insert({.image=vk_image, .allocation=allocation});
+    vmaCreateImage(g_vk->allocator, &img_create_info, &img_alloc_info, vk_image.get_underlying_ptr(), vk_image.get_allocation_ptr(), nullptr);
 }
 
 // todo: give this all the relevant arguments to init any VkImage correctly and then change where we use it in swapchain.
-// curretnly things are hardwired and it's only right because we just use it in swapchain creation
+// currently things are hardwired and it's only right because we just use it in swapchain creation
 Image::Image(VkImage img, VkExtent2D extent, VkFormat format, u32 layer_count)
-:vk_image(img), allocation(nullptr), extent(extent), format(format), mip_level_count(1), layer_count(layer_count), msaa_level(MSAALevel::OFF)
+:vk_image(img, VK_NULL_HANDLE), extent(extent), format(format), mip_level_count(1), layer_count(layer_count), msaa_level(MSAALevel::OFF)
 {}
 
-void Image::erase_self(VulkanEngine &vk){
-    vmaDestroyImage(vk.allocator, vk_image, allocation);
-    vk.created_images.erase({.image=vk_image, .allocation=allocation});
-}
+
 
 ImageView::ImageView(
-    VulkanEngine &vk,
     const Image &img,
     ImageAspects aspects,
     u32 base_mip_level,
@@ -681,120 +691,111 @@ ImageView::ImageView(
         .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .pNext            = nullptr,
         .flags{},
-        .image            = img.vk_image,
+        .image            = img.get_underlying({}),
         .viewType         = VK_IMAGE_VIEW_TYPE_2D,
-        .format           = img.format,
+        .format           = img.get_format(),
         .components{},
         .subresourceRange = {
             .aspectMask     = static_cast<VkImageAspectFlags>(aspects),
             .baseMipLevel   = base_mip_level,
             .levelCount     = mip_level_count,
             .baseArrayLayer = 0,
-            .layerCount     = img.layer_count,
+            .layerCount     = img.get_layer_count(),
         },
     };
-    VK_CHECK(vkCreateImageView(vk.device, &view_info, nullptr, &view));
-
-    vk.created_image_views.insert(view);
+    VK_CHECK(vkCreateImageView(g_vk->device, &view_info, nullptr, view.get_underlying_ptr()));
 }
 
 ImageView::ImageView(VkImageView vk_view):view(vk_view){}
 
-void ImageView::erase_self(VulkanEngine &vk) const{
-    vkDestroyImageView(vk.device, view, nullptr);
-    vk.created_image_views.erase(view);
-}
 
-GpuFence::GpuFence(VulkanEngine &vk, bool signaled){
-    VkFenceCreateInfo fence_create_info {
+
+GpuFence::GpuFence(bool signaled){
+    VkFenceCreateInfo fence_info{
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .pNext = nullptr,
-        .flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0u,
+        .flags = static_cast<VkFenceCreateFlags>(signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0)
     };
-    VK_CHECK(vkCreateFence(vk.device, &fence_create_info, nullptr, &fence));
-    vk.created_fences.push_back(fence);
+    VK_CHECK(vkCreateFence(g_vk->device, &fence_info, nullptr, fence.get_underlying_ptr()));
 }
 
-void GpuFence::wait(const VulkanEngine &vk) const{
-    VK_CHECK(vkWaitForFences(vk.device, 1, &fence, VK_TRUE, timeout_length));
+
+void GpuFence::wait(u64 timeout) const{
+    VK_CHECK(vkWaitForFences(g_vk->device, 1, fence.get_underlying_ptr(), VK_TRUE, timeout));
 }
 
-void GpuFence::reset(const VulkanEngine &vk) const{
-    VK_CHECK(vkResetFences(vk.device, 1, &fence));
+void GpuFence::reset() const{
+    g_vk->flush_queued_deletion_batches();
+    VK_CHECK(vkResetFences(g_vk->device, 1, fence.get_underlying_ptr()));
 }
 
-void GpuFence::wait_and_reset(const VulkanEngine &vk) const {
-    wait(vk);
-    reset(vk);
+void GpuFence::wait_and_reset(u64 timeout) const {
+    wait(timeout);
+    reset();
 }
 
-bool GpuFence::is_signaled(const VulkanEngine &vk) const {
-    const auto result = vkGetFenceStatus(vk.device, this->fence);
+bool GpuFence::is_signaled() const {
+    const auto result = vkGetFenceStatus(g_vk->device, this->fence.get_underlying());
     if (result == VK_SUCCESS) return true;
     else if (result == VK_NOT_READY) return false;
     else VK_CHECK(result);
     std::unreachable();
 }
 
-void GpuFence::wait(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all){
+void GpuFence::wait(std::span<const VkFence> fences, bool wait_all, u64 timeout){
     assert(fences.size() > 0 && "The spec forbids calling vkWaitForFences with a fence count of 0");
-    VK_CHECK(vkWaitForFences(vk.device, fences.size(), fences.data(), static_cast<VkBool32>(wait_all), timeout_length));
+    VK_CHECK(vkWaitForFences(g_vk->device, fences.size(), fences.data(), static_cast<VkBool32>(wait_all), timeout));
 }
 
-void GpuFence::reset(const VulkanEngine &vk, std::span<VkFence> fences){
+void GpuFence::reset(std::span<const VkFence> fences){
     assert(fences.size() > 0 && "The spec forbids calling vkResetFences with a fence count of 0");
-    VK_CHECK(vkResetFences(vk.device, fences.size(), fences.data()));
+    g_vk->flush_queued_deletion_batches();
+    VK_CHECK(vkResetFences(g_vk->device, fences.size(), fences.data()));
 }
 
-void GpuFence::wait_and_reset(const VulkanEngine &vk, std::span<VkFence> fences, bool wait_all){
+void GpuFence::wait_and_reset(std::span<const VkFence> fences, bool wait_all, u64 timeout){
     assert(fences.size() > 0 && "The spec forbids calling vkWaitForFences and vkResetFences with a fence count of 0");
-    wait(vk, fences, wait_all);
-    reset(vk, fences);
+    wait(fences, wait_all, timeout);
+    reset(fences);
 }
 
-GpuSemaphore::GpuSemaphore(VulkanEngine &vk){
-    VkSemaphoreCreateInfo semaphore_create_info{
+GpuSemaphore::GpuSemaphore(){
+    VkSemaphoreCreateInfo sema_info{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         .pNext = nullptr,
-        .flags = 0,
+        .flags = 0
     };
-    VK_CHECK(vkCreateSemaphore(vk.device, &semaphore_create_info, nullptr, &semaphore));
-    vk.created_semaphores.push_back(semaphore);
+    VK_CHECK(vkCreateSemaphore(g_vk->device, &sema_info, nullptr, semaphore.get_underlying_ptr()));
 }
 
-Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR present_mode) {
-    auto f = GpuFence(vk, true);
+Swapchain::Swapchain(SDL_Window *window, VkPresentModeKHR present_mode) {
     present_fences.reserve(16);
-    present_fences.push_back(f.fence);
-    initialize_swapchain(vk, window, present_mode);
+    initialize_swapchain(window, present_mode);
 }
 
-[[nodiscard]] std::tuple<u32, VkResult> Swapchain::acquire_next_image(VulkanEngine &vk, GpuSemaphore signal_sema) const{
+[[nodiscard]] std::tuple<u32, VkResult> Swapchain::acquire_next_image(const GpuSemaphore& signal_sema) const{
     u32 swapchain_image_index;
-    VkResult result = vkAcquireNextImageKHR(vk.device, swapchain, timeout_length, signal_sema.semaphore, nullptr, &swapchain_image_index);
+    VkResult result = vkAcquireNextImageKHR(g_vk->device, swapchain, timeout_length, signal_sema.get_underlying({}), nullptr, &swapchain_image_index);
     if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) VK_CHECK(result);
     return {swapchain_image_index, result};
 }
 
-[[nodiscard]] VkResult Swapchain::present(VulkanEngine &vk, GpuSemaphore wait_sema, u32 swapchain_image_index){
+[[nodiscard]] VkResult Swapchain::present(const GpuSemaphore& wait_sema, u32 swapchain_image_index){
     VkFence free_present_fence = VK_NULL_HANDLE;
-    for(const auto &fence : present_fences){
-        auto f = GpuFence(fence);
-        if (f.is_signaled(vk)){
-            f.reset(vk);
-            free_present_fence = f.fence;
+    for(auto &fence : present_fences){
+        if (fence.is_signaled()){
+            fence.reset();
+            free_present_fence = fence.get_underlying({});
             break;
         }
     }
     if (free_present_fence == VK_NULL_HANDLE){
-        auto f = GpuFence(vk, false);
-        free_present_fence = f.fence;
-        present_fences.push_back(free_present_fence);
-        for(auto swap_track : vk.created_swapchains){
-            if (swap_track.swapchain == this->swapchain) swap_track.present_fences.emplace_back(free_present_fence);
-        }
+        GpuFence new_fence(false);
+        free_present_fence = new_fence.get_underlying({});
+        present_fences.push_back(std::move(new_fence));
         assert(present_fences.size() < 8 && "Oddly large amount of present fences, should never be this large as far as I know");
     }
+    VkSemaphore wait_sema_handle = wait_sema.get_underlying({});
     VkSwapchainPresentFenceInfoKHR swapchain_present_fence_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR,
         .pNext = nullptr,
@@ -806,13 +807,13 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = &swapchain_present_fence_info,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &wait_sema.semaphore,
+        .pWaitSemaphores = &wait_sema_handle,
         .swapchainCount = 1,
         .pSwapchains = &swapchain,
         .pImageIndices = &swapchain_image_index,
         .pResults{},
     };
-    VkResult result = vkQueuePresentKHR(vk.graphics_queue, &present_info);
+    VkResult result = vkQueuePresentKHR(g_vk->graphics_queue, &present_info);
     if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) VK_CHECK(result);
     return result;
 }
@@ -821,14 +822,14 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
     return surface_extent != VkExtent2D{0, 0} && window_size != ivec2{0,0};
 }
 
-[[nodiscard]] bool Swapchain::presentable_swapchain_exists(VulkanEngine &vk, SDL_Window *window){
-    VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
+[[nodiscard]] bool Swapchain::presentable_swapchain_exists(SDL_Window *window){
+    VkSurfaceCapabilitiesKHR capabilities = g_vk->get_surface_capabilities();
     ivec2 window_size = util::get_window_size_in_pixels(window);
     return presentable_swapchain_exists_inner(capabilities.currentExtent, window_size);
 }
 
-[[nodiscard]] std::optional<VkExtent2D> Swapchain::decide_extent(VulkanEngine &vk, SDL_Window *window){
-    VkSurfaceCapabilitiesKHR capabilities = vk.get_surface_capabilities();
+[[nodiscard]] std::optional<VkExtent2D> Swapchain::decide_extent(SDL_Window *window){
+    VkSurfaceCapabilitiesKHR capabilities = g_vk->get_surface_capabilities();
     const ivec2 window_size = util::get_window_size_in_pixels(window);
     const VkExtent2D &surface_extent = capabilities.currentExtent;
 
@@ -849,15 +850,14 @@ Swapchain::Swapchain(VulkanEngine &vk, SDL_Window *window, VkPresentModeKHR pres
 
 
 void Swapchain::initialize_swapchain(
-    VulkanEngine &vk,
     SDL_Window *window,
     VkPresentModeKHR present_mode,
-    const VkSwapchainKHR *old_swapchain)
+    VkSwapchainKHR *old_swapchain)
 {
-    std::optional<VkExtent2D> maybe_size = decide_extent(vk, window);
+    std::optional<VkExtent2D> maybe_size = decide_extent(window);
     if (!maybe_size.has_value()){
         auto window_size = util::get_window_size_in_pixels(window);
-        auto surface_extent = vk.get_surface_capabilities().currentExtent;
+        auto surface_extent = g_vk->get_surface_capabilities().currentExtent;
         std::println("Tried to initialize swapchain while either window or surface capabilities has size of {{0,0}}.");
         std::println("window size = {}, {}", window_size.x, window_size.y);
         std::println("surface_extent= {}, {}", surface_extent.width, surface_extent.height);
@@ -885,7 +885,7 @@ void Swapchain::initialize_swapchain(
         .presentGravityY{},
     };
 
-    vkb::SwapchainBuilder swapchain_builder{vk.physical_device, vk.device, vk.surface};
+    vkb::SwapchainBuilder swapchain_builder{g_vk->physical_device, g_vk->device, g_vk->surface};
     swapchain_builder.set_desired_format(VkSurfaceFormatKHR{ .format = VK_FORMAT_B8G8R8A8_SRGB, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
                      .add_pNext(&present_modes_create_info)
                      .add_pNext(&present_scaling_create_info)
@@ -899,6 +899,7 @@ void Swapchain::initialize_swapchain(
 
     image_views.clear();
     images.clear();
+    present_fences.clear();
 
     this->extent = vkb_swapchain.extent;
     this->swapchain = vkb_swapchain.swapchain;
@@ -915,59 +916,54 @@ void Swapchain::initialize_swapchain(
     for(VkImageView vk_view : vk_image_views){
         this->image_views.emplace_back(vk_view);
     }
-    vk.created_swapchains.push_back({.swapchain=swapchain, .image_views=vk_image_views, .present_fences=present_fences});
+    
 }
 
 void Swapchain::rebuild_swapchain(
-    VulkanEngine &vk,
-    SDL_Window *window,
+    SDL_Window *window, 
     VkPresentModeKHR present_mode)
 {
     VkSwapchainKHR old_swapchain = this->swapchain;
+    std::vector<GpuFence> old_fences = std::move(this->present_fences);
 
-    initialize_swapchain(vk, window, present_mode, &old_swapchain);
-    // Get rid of the old swapchain in the VulkanEngine and destroy its views
-    for (int i = 0; const auto &swapchain : vk.created_swapchains){
-        if (swapchain.swapchain == old_swapchain) {
-            destroy_swapchain(vk, swapchain.swapchain, swapchain.image_views, present_fences);
-            vk.created_swapchains.erase(vk.created_swapchains.begin() + i);
-            break;
-        }
-        ++i;
+    initialize_swapchain(window, present_mode, &old_swapchain);
+    
+    if (!old_fences.empty()) {
+        for(const auto& fence : old_fences) fence.wait();
     }
+    vkDestroySwapchainKHR(g_vk->device, old_swapchain, nullptr);
 }
 
-CommandPool::CommandPool(VulkanEngine &vk){
+CommandPool::CommandPool(){
     VkCommandPoolCreateInfo command_pool_info{
         .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .pNext            = nullptr,
         .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = vk.graphics_queue_family,
+        .queueFamilyIndex = g_vk->graphics_queue_family,
     };
-    VK_CHECK(vkCreateCommandPool(vk.device, &command_pool_info, nullptr, &pool));
-    vk.created_command_pools.push_back(pool);
+    VK_CHECK(vkCreateCommandPool(g_vk->device, &command_pool_info, nullptr, pool.get_underlying_ptr()));
 }
 
-DescriptorSet::DescriptorSet(VulkanEngine &vk, VkDescriptorSetLayout layout)
+DescriptorSet::DescriptorSet(VkDescriptorSetLayout layout)
 :layout(layout)
 {
     VkDescriptorSetAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloc_info.pNext = nullptr;
-    alloc_info.descriptorPool = vk.descriptor_pool; // todo dynamically make more descriptor pools if vkAllocateDescriptorSets returns OUT_OF_POOL_MEMORY
+    alloc_info.descriptorPool = g_vk->descriptor_pool; // todo dynamically make more descriptor pools if vkAllocateDescriptorSets returns OUT_OF_POOL_MEMORY
     alloc_info.descriptorSetCount = 1;
     alloc_info.pSetLayouts = &layout;
-    VK_CHECK(vkAllocateDescriptorSets(vk.device, &alloc_info, &set));
+    VK_CHECK(vkAllocateDescriptorSets(g_vk->device, &alloc_info, &set));
 }
 
 
-void DescriptorSet::update_storage_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views){
+void DescriptorSet::update_storage_images(u32 bind, std::span<const ImageView> views){
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(views.size());
-    for (auto image_view : views){
+    for (const auto& image_view : views){
         img_infos.push_back({
             .sampler{},
-            .imageView = image_view.view,
+            .imageView = image_view.get_underlying({}),
             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
         });
     }
@@ -984,20 +980,20 @@ void DescriptorSet::update_storage_images(VulkanEngine &vk, u32 bind, std::span<
         .pBufferInfo{},
         .pTexelBufferView{},
     };
-    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    vkUpdateDescriptorSets(g_vk->device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_storage_image(VulkanEngine &vk, u32 bind, ImageView &view){
-    update_storage_images(vk, bind, std::span<ImageView>(&view, 1));
+void DescriptorSet::update_storage_image(u32 bind, const ImageView &view){
+    update_storage_images(bind, std::span<const ImageView>(&view, 1));
 }
 
-void DescriptorSet::update_sampled_images(VulkanEngine &vk, u32 bind, std::span<ImageView> views){
+void DescriptorSet::update_sampled_images(u32 bind, std::span<const ImageView> views){
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(views.size());
     for (auto &image_view : views){
         img_infos.push_back({
             .sampler{},
-            .imageView = image_view.view,
+            .imageView = image_view.get_underlying({}),
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         });
     }
@@ -1014,20 +1010,20 @@ void DescriptorSet::update_sampled_images(VulkanEngine &vk, u32 bind, std::span<
         .pBufferInfo{},
         .pTexelBufferView{},
     };
-    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    vkUpdateDescriptorSets(g_vk->device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_sampled_image(VulkanEngine &vk, u32 bind, ImageView &view){
-    update_sampled_images(vk, bind, std::span<ImageView>(&view, 1));
+void DescriptorSet::update_sampled_image(u32 bind, const ImageView &view){
+    update_sampled_images(bind, std::span<const ImageView>(&view, 1));
 }
 
-void DescriptorSet::update_samplers(VulkanEngine &vk, u32 bind, std::span<Sampler> samplers) {
+void DescriptorSet::update_samplers(u32 bind, std::span<const Sampler> samplers) {
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(samplers.size());
 
-    for (auto sampler : samplers) {
+    for (const auto& sampler : samplers) {
         img_infos.push_back({
-            .sampler = sampler.sampler,
+            .sampler = sampler.get_underlying({}),
             .imageView = VK_NULL_HANDLE,
             .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         });
@@ -1046,21 +1042,21 @@ void DescriptorSet::update_samplers(VulkanEngine &vk, u32 bind, std::span<Sample
         .pTexelBufferView = nullptr,
     };
 
-    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    vkUpdateDescriptorSets(g_vk->device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_sampler(VulkanEngine &vk, u32 bind, Sampler &sampler){
-    update_samplers(vk, bind, std::span<Sampler>(&sampler, 1));
+void DescriptorSet::update_sampler(u32 bind, const Sampler &sampler){
+    update_samplers(bind, std::span<const Sampler>(&sampler, 1));
 }
 
-void DescriptorSet::update_storage_buffers(VulkanEngine &vk, u32 bind, std::span<StorageBuffer> buffers) {
+void DescriptorSet::update_storage_buffers(u32 bind, std::span<const StorageBuffer> buffers) {
     std::vector<VkDescriptorBufferInfo> buf_infos;
     buf_infos.reserve(buffers.size());
     for (auto &buffer : buffers) {
         buf_infos.push_back({
-            .buffer = buffer.get_vk_buffer(),
+            .buffer = buffer.get_underlying({}),
             .offset = 0,
-            .range = buffer.capacity_in_bytes,
+            .range = buffer.get_capacity_in_bytes(),
         });
     }
     VkWriteDescriptorSet write{
@@ -1075,14 +1071,14 @@ void DescriptorSet::update_storage_buffers(VulkanEngine &vk, u32 bind, std::span
         .pBufferInfo = buf_infos.data(),
         .pTexelBufferView = nullptr,
     };
-    vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    vkUpdateDescriptorSets(g_vk->device, 1, &write, 0, nullptr);
 }
 
-void DescriptorSet::update_storage_buffer(VulkanEngine &vk, u32 bind, StorageBuffer &buffer) {
-    update_storage_buffers(vk, bind, std::span<StorageBuffer>(&buffer, 1));
+void DescriptorSet::update_storage_buffer(u32 bind, const StorageBuffer &buffer) {
+    update_storage_buffers(bind, std::span<const StorageBuffer>(&buffer, 1));
 }
 
-Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
+Shader::Shader(const std::string_view filepath){
     assert(filepath.find(".spv") != std::string_view::npos && "Compiled SPIR-V shaders should have .spv in their name. You either passed an uncompiled shader or your shader does not follow naming convention");
     assert(filepath.data()[filepath.size()] == '\0' && "Error: filepath was not null-terminated string");
     // open the file. With cursor at the end
@@ -1108,11 +1104,10 @@ Shader::Shader(VulkanEngine &vk, const std::string_view filepath){
     createInfo.codeSize = buffer.size() * sizeof(u32);
     createInfo.pCode = buffer.data();
 
-    if (vkCreateShaderModule(vk.device, &createInfo, nullptr, &module) != VK_SUCCESS) {
+    if (vkCreateShaderModule(g_vk->device, &createInfo, nullptr, module.get_underlying_ptr()) != VK_SUCCESS) {
         std::println("Error: could not create shader module for shader {}", filepath);
         abort();
     }
-    vk.created_shader_modules.push_back(module);
 }
 
 static bool push_constants_valid(const std::optional<std::vector<VkPushConstantRange>> &push_constants){
@@ -1146,7 +1141,6 @@ static bool push_constants_valid(const std::optional<std::vector<VkPushConstantR
 }
 
 PipelineLayout::PipelineLayout(
-    VulkanEngine &vk,
     std::initializer_list<DescriptorSet> descriptor_sets,
     const std::optional<std::vector<VkPushConstantRange>> &push_constants)
 {
@@ -1158,7 +1152,7 @@ PipelineLayout::PipelineLayout(
     std::array<VkDescriptorSetLayout, max_descriptor_sets_in_shader> desc_set_layouts;
     i32 i = 0;
     for (const auto &set : descriptor_sets) {
-        desc_set_layouts.at(i++) = set.layout;
+        desc_set_layouts.at(i++) = set.get_layout({});
     }
 
     VkPipelineLayoutCreateInfo layout_create_info{
@@ -1170,12 +1164,12 @@ PipelineLayout::PipelineLayout(
         .pushConstantRangeCount = push_constants.has_value() ? static_cast<u32>(push_constants->size()) : 0,
         .pPushConstantRanges = push_constants.has_value() ? push_constants->data() : nullptr,
     };
-    VK_CHECK(vkCreatePipelineLayout(vk.device, &layout_create_info, nullptr, &layout));
-    vk.created_pipeline_layouts.push_back(layout);
+    VK_CHECK(vkCreatePipelineLayout(g_vk->device, &layout_create_info, nullptr, &layout));
+    g_vk->pipeline_layouts_to_delete.push_back(layout);
 }
 
-PipelineLayout::PipelineLayout(VulkanEngine &vk, DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
-:PipelineLayout(vk, {descriptor_set}, push_constants){}
+PipelineLayout::PipelineLayout(DescriptorSet descriptor_set, const std::optional<std::vector<VkPushConstantRange>> &push_constants)
+:PipelineLayout({descriptor_set}, push_constants){}
 
 
 SpecializationInfo::SpecializationInfo(size_t total_data_size)
@@ -1196,7 +1190,7 @@ SpecializationInfo &SpecializationInfo::reset(){
     return *this;
 }
 
-// DO NOT cache the output of this funciton. If you ever reset this instance of SpecializationInfo or let it be destroyed,
+// DO NOT cache the output of this function. If you ever reset this instance of SpecializationInfo or let it be destroyed,
 // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
 const VkSpecializationInfo *SpecializationInfo::get_vk_specialization_info(){
     if (!finalized){
@@ -1215,46 +1209,18 @@ SpecializationInfo::~SpecializationInfo(){
     free(data);
 }
 
-static VkPipelineShaderStageCreateInfo make_pipeline_shader_stage_info(
-    Shader shader_module,
-    VkShaderStageFlagBits stage,
-    SpecializationInfo */* _Nullable */specialization_info)
-{
-    return VkPipelineShaderStageCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags{},
-        .stage = stage,
-        .module = shader_module.module,
-        .pName = "main",
-        .pSpecializationInfo = specialization_info != nullptr ? specialization_info->get_vk_specialization_info() : nullptr,
-    };
-}
-
 ComputePipeline::ComputePipeline(
-    VulkanEngine &vk,
-    ComputeShader shader_module,
+    const ComputeShader& shader_module,
     PipelineLayout pipeline_layout,
     SpecializationInfo */* _Nullable */specialization_info)
-:layout(pipeline_layout)
+:layout(std::move(pipeline_layout))
 {
-    auto stageinfo = make_pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT, specialization_info);
-
-    VkComputePipelineCreateInfo computePipelineCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags{},
-        .stage = stageinfo,
-        .layout = this->layout.layout,
-        .basePipelineHandle{},
-        .basePipelineIndex{},
-    };
-    VK_CHECK(vkCreateComputePipelines(vk.device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, &pipeline));
-    vk.created_pipelines.push_back(pipeline);
+    auto stageinfo = StructMaker::pipeline_shader_stage_info(shader_module, VK_SHADER_STAGE_COMPUTE_BIT, specialization_info);
+    VkComputePipelineCreateInfo computePipelineCreateInfo = StructMaker::compute_pipeline_create_info(this->layout, stageinfo);
+    VK_CHECK(vkCreateComputePipelines(g_vk->device,VK_NULL_HANDLE,1,&computePipelineCreateInfo, nullptr, pipeline.get_underlying_ptr()));
 }
 
 VulkanBuffer::VulkanBuffer(
-    VulkanEngine &vk,
     uint64_t capacity_in_bytes,
     VkBufferUsageFlags usage_flags,
     VmaAllocationCreateFlags vma_flags,
@@ -1281,19 +1247,18 @@ VulkanBuffer::VulkanBuffer(
     alloc_create_info.preferredFlags = memory_property_flags_preferred;
 
     VmaAllocationInfo alloc_info;
-    vmaCreateBuffer(vk.allocator, &buf_create_info, &alloc_create_info, &buffer, &allocation, &alloc_info);
-    vk.created_buffers.push_back({.buffer = buffer, .allocation = allocation});
+    vmaCreateBuffer(g_vk->allocator, &buf_create_info, &alloc_create_info, buffer.get_underlying_ptr(), buffer.get_allocation_ptr(), &alloc_info);
 
     VkBufferDeviceAddressInfo buffer_device_adress_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
         .pNext = nullptr,
-        .buffer = buffer,
+        .buffer = buffer.get_underlying(),
     };
-    device_address = vkGetBufferDeviceAddress(vk.device, &buffer_device_adress_info);
+    device_address = vkGetBufferDeviceAddress(g_vk->device, &buffer_device_adress_info);
 }
 
-StorageBuffer::StorageBuffer(VulkanEngine &vk, uint64_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest)
-:VulkanBuffer(vk,
+StorageBuffer::StorageBuffer(uint64_t size_in_bytes, bool is_transfer_source, bool is_transfer_dest)
+:VulkanBuffer(
                 size_in_bytes,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                 | (is_transfer_source ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0)
@@ -1302,70 +1267,60 @@ StorageBuffer::StorageBuffer(VulkanEngine &vk, uint64_t size_in_bytes, bool is_t
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
 {}
 
-StagingBuffer::StagingBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
-:VulkanBuffer(vk,
+StagingBuffer::StagingBuffer(uint64_t size_in_bytes)
+:VulkanBuffer(
                 size_in_bytes,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
 {
     VmaAllocationInfo alloc_info;
-    vmaGetAllocationInfo(vk.allocator, allocation, &alloc_info);
+    vmaGetAllocationInfo(g_vk->allocator, this->get_allocation(), &alloc_info);
     mapped_data = alloc_info.pMappedData;
 }
 
 
-ReadbackBuffer::ReadbackBuffer(VulkanEngine &vk, uint64_t size_in_bytes)
-:VulkanBuffer(vk,
+ReadbackBuffer::ReadbackBuffer(uint64_t size_in_bytes)
+:VulkanBuffer(
                 size_in_bytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
 {
     VmaAllocationInfo alloc_info;
-    vmaGetAllocationInfo(vk.allocator, allocation, &alloc_info);
+    vmaGetAllocationInfo(g_vk->allocator, this->get_allocation(), &alloc_info);
     mapped_data = alloc_info.pMappedData;
 }
 
-IndexBuffer::IndexBuffer(VulkanEngine &vk, uint64_t total_indexes)
-:VulkanBuffer(vk,
+IndexBuffer::IndexBuffer(uint64_t total_indexes)
+:VulkanBuffer(
                 total_indexes * sizeof(u32),
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 0, 0)
 {}
 
-static VkCommandBufferAllocateInfo make_VkCommandBufferAllocateInfo(const CommandPool &pool, u32 command_buffer_count){
-    return VkCommandBufferAllocateInfo{
-        .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext              = nullptr,
-        .commandPool        = pool.pool,
-        .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = command_buffer_count,
-    };
+CommandBuffer::CommandBuffer(const CommandPool &pool) {
+    auto alloc_info = StructMaker::command_buffer_allocate_info(pool, 1);
+    VK_CHECK(vkAllocateCommandBuffers(g_vk->device, &alloc_info, &buffer));
 }
 
-CommandBuffer::CommandBuffer(const VulkanEngine &vk, const CommandPool &pool){
-    auto alloc_info = make_VkCommandBufferAllocateInfo(pool, 1);
-    VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, &buffer));
-}
-
-void CommandBuffer::make_command_buffers(const VulkanEngine &vk, std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append){
-    auto alloc_info = make_VkCommandBufferAllocateInfo(pool, how_many_buffers_to_append);
+void CommandBuffer::make_command_buffers(std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append){
+    VkCommandBufferAllocateInfo alloc_info = StructMaker::command_buffer_allocate_info(pool, (u32)how_many_buffers_to_append);
     thread_local std::vector<VkCommandBuffer> vk_buffers;
     vk_buffers.resize(how_many_buffers_to_append);
     buffers.reserve(buffers.size() + how_many_buffers_to_append);
 
-    VK_CHECK(vkAllocateCommandBuffers(vk.device, &alloc_info, vk_buffers.data()));
+    VK_CHECK(vkAllocateCommandBuffers(g_vk->device, &alloc_info, vk_buffers.data()));
     for (int i = 0; i < how_many_buffers_to_append; ++i){
         buffers.emplace_back(vk_buffers[i]);
     }
 }
 
-void CommandBuffer::draw_imgui(ImageView target_image_view, VkExtent2D draw_extent) const{
-    ImGui::Render(); // todo performance: maybe we should call this on another thread while other things are going on
+void CommandBuffer::draw_imgui(const ImageView& target_image_view, VkExtent2D draw_extent) const {
+    ImGui::Render();
 
-    VkRenderingAttachmentInfo colorAttachment = struct_makers::rendering_attachment_info(target_image_view.view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingInfo renderInfo = struct_makers::rendering_info(draw_extent, &colorAttachment, nullptr);
+    VkRenderingAttachmentInfo color_attachment = StructMaker::rendering_attachment_info(target_image_view, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingInfo renderInfo = StructMaker::rendering_info(draw_extent, &color_attachment, nullptr);
 
     vkCmdBeginRendering(this->buffer, &renderInfo);
 
@@ -1389,119 +1344,144 @@ void CommandBuffer::restart(bool one_time_submit) const{
 }
 
 void CommandBuffer::submit(
-    VulkanEngine &vk,
-    std::optional<GpuSemaphore> wait_sema,
+    std::optional<std::reference_wrapper<const GpuSemaphore>> wait_sema,
     std::optional<VkPipelineStageFlagBits2> wait_stage_mask, // Commands in the buffer that use these stages will not run until wait_sema is signaled
-    std::optional<GpuSemaphore> signal_sema, // Will be signaled when every command in the buffer is complete
+    std::optional<std::reference_wrapper<const GpuSemaphore>> signal_sema, // Will be signaled when every command in the buffer is complete
     std::optional<VkPipelineStageFlagBits2> signal_stage_mask, // Stages that wait on the signal_sema will have access to writes done by commands in the buffer (other stages will have outdated cached data, causing errors)
-    GpuFence signal_fence) const
+    const GpuFence& signal_fence) const
 {
     assert(wait_sema.has_value() == wait_stage_mask.has_value() && "You can't have a wait sema without a wait stage mask or the other way around");
     assert(signal_sema.has_value() == signal_stage_mask.has_value() && "You can't have a signal sema without a signal stage mask or the other way around");
 
-    VkCommandBufferSubmitInfo cmd_info = struct_makers::command_buffer_submit_info(buffer);
-    VkSemaphoreSubmitInfo wait_info = wait_sema.has_value() ? struct_makers::semaphore_submit_info(*wait_stage_mask, wait_sema->semaphore) : VkSemaphoreSubmitInfo{};
-    VkSemaphoreSubmitInfo signal_info = signal_sema.has_value() ? struct_makers::semaphore_submit_info(*signal_stage_mask, signal_sema->semaphore) : VkSemaphoreSubmitInfo{};
-    VkSubmitInfo2 submit_info = struct_makers::submit_info2(&cmd_info,
-                                                            signal_sema.has_value() ? &signal_info : nullptr,
-                                                            wait_sema.has_value() ? &wait_info : nullptr);
+    VkSemaphoreSubmitInfo wait_sema_info = StructMaker::semaphore_submit_info(
+        wait_stage_mask ? *wait_stage_mask : 0,
+        wait_sema ? wait_sema->get().get_underlying({}) : VK_NULL_HANDLE
+    );
+    VkSemaphoreSubmitInfo signal_sema_info = StructMaker::semaphore_submit_info(
+        signal_stage_mask ? *signal_stage_mask : 0,
+        signal_sema ? signal_sema->get().get_underlying({}) : VK_NULL_HANDLE
+    );
 
-    VK_CHECK(vkQueueSubmit2(vk.graphics_queue, 1, &submit_info, signal_fence.fence));
+    VkCommandBufferSubmitInfo cmd_info = StructMaker::command_buffer_submit_info(*this);
+    VkSubmitInfo2 submit_info = StructMaker::submit_info2(&cmd_info,
+                                                            signal_sema ? &signal_sema_info : nullptr,
+                                                            wait_sema ? &wait_sema_info : nullptr);
+
+    VK_CHECK(vkQueueSubmit2(g_vk->graphics_queue, 1, &submit_info, signal_fence.get_underlying({})));
+
+    if (signal_fence.get_underlying({}) != VK_NULL_HANDLE && !g_vk->get_deletions_in_this_fence().is_empty()) {
+        g_vk->get_queued_deletion_batches().add(
+            std::move(g_vk->deletions_in_this_fence),
+            signal_fence.get_underlying({})
+        );
+        g_vk->deletions_in_this_fence.clear();
+    }
 }
 
-void CommandBuffer::submit(VulkanEngine &vk, GpuFence signal_fence) const{
-    submit(vk, std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
+void CommandBuffer::submit(
+    const GpuFence& signal_fence) const
+{
+    submit(std::nullopt, std::nullopt, std::nullopt, std::nullopt, signal_fence);
 }
 
-void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const std::span<VkBufferCopy2> ranges) const{
+void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, std::span<const VkBufferCopy2> ranges) const {
     VkCopyBufferInfo2 copy_info{
         .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
         .pNext = nullptr,
-        .srcBuffer = src.buffer,
-        .dstBuffer = dst.buffer,
+        .srcBuffer = src.get_underlying({}),
+        .dstBuffer = dst.get_underlying({}),
         .regionCount = static_cast<u32>(ranges.size()),
         .pRegions = ranges.data()
     };
     vkCmdCopyBuffer2(buffer, &copy_info);
 }
 
-void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, VkBufferCopy2 &range) const{
-    copy_buffer(src, dst, std::span<VkBufferCopy2>(&range, 1));
+void CommandBuffer::copy_buffer(const VulkanBuffer &src, const VulkanBuffer &dst, const VkBufferCopy2 &range) const {
+    copy_buffer(src, dst, std::span<const VkBufferCopy2>(&range, 1));
 }
 
-void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const{
-    assert(dst.capacity_in_bytes >= src.capacity_in_bytes);
-    VkBufferCopy range{
-        .srcOffset = 0,
-        .dstOffset = 0,
-        .size = src.capacity_in_bytes,
-    };
-    vkCmdCopyBuffer(buffer, src.buffer, dst.buffer, 1, &range);
-}
-
-//The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
 void CommandBuffer::copy_buffer_to_image(
     const VulkanBuffer &buffer,
-    const Image &image,
-    uint64_t buffer_offset,
+    const Image& image,
+    u64 buffer_offset,
     u32 mip_level,
     u32 base_layer,
     u32 layer_count,
     ImageAspects aspects,
-    const VkOffset3D &img_offset = VkOffset3D{}) const
+    const VkOffset3D &img_offset) const
 {
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy2 region = StructMaker::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
+    VkCopyBufferToImageInfo2 buffer_image_copy = StructMaker::copy_buffer_to_image_info2(buffer, image, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
 }
+
+void CommandBuffer::copy_buffer_to_image(
+    const VulkanBuffer &buffer,
+    const Image &image,
+    VkImageLayout image_layout,
+    u32 region_count,
+    const VkBufferImageCopy2 *regions) const
+{
+    VkCopyBufferToImageInfo2 buffer_image_copy = StructMaker::copy_buffer_to_image_info2(buffer, image, regions, region_count, image_layout);
+    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+}
+
+void CommandBuffer::copy_entire_buffer(const VulkanBuffer &src, const VulkanBuffer &dst) const{
+    assert(dst.get_capacity_in_bytes() >= src.get_capacity_in_bytes());
+    VkBufferCopy range{
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = src.get_capacity_in_bytes(),
+    };
+    vkCmdCopyBuffer(buffer, src.get_underlying({}), dst.get_underlying({}), 1, &range);
+}
+
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
 void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, const VkBufferImageCopy2 &region) const{
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+    copy_buffer_to_image(buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
-void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<VkBufferImageCopy2> regions) const{
-    VkCopyBufferToImageInfo2 buffer_image_copy = struct_makers::copy_buffer_to_image_info2(buffer, image, regions.data(), regions.size(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdCopyBufferToImage2(this->buffer, &buffer_image_copy);
+void CommandBuffer::copy_buffer_to_image(const VulkanBuffer &buffer, const Image &image, std::span<const VkBufferImageCopy2> regions) const{
+    copy_buffer_to_image(buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, regions.size(), regions.data());
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
 void CommandBuffer::copy_image_to_buffer(
     const Image &image,
     const VulkanBuffer &buffer,
-    uint64_t buffer_offset,
+    u64 buffer_offset,
     u32 mip_level,
     u32 base_layer,
     u32 layer_count,
     ImageAspects aspects,
-    const VkOffset3D &img_offset = VkOffset3D{}) const
+    const VkOffset3D &img_offset) const
 {
-    VkBufferImageCopy2 region = struct_makers::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy2 region = StructMaker::buffer_image_copy2(image, buffer_offset, mip_level, base_layer, layer_count, aspects, img_offset);
+    VkCopyImageToBufferInfo2 image_buffer_copy = StructMaker::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
 void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, const VkBufferImageCopy2 &region) const
 {
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkCopyImageToBufferInfo2 image_buffer_copy = StructMaker::copy_image_to_buffer_info2(image, buffer, &region, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
-void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, std::span<VkBufferImageCopy2> regions) const
+void CommandBuffer::copy_image_to_buffer( const Image &image, const VulkanBuffer &buffer, std::span<const VkBufferImageCopy2> regions) const
 {
-    VkCopyImageToBufferInfo2 image_buffer_copy = struct_makers::copy_image_to_buffer_info2(image, buffer, regions.data(), regions.size(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkCopyImageToBufferInfo2 image_buffer_copy = StructMaker::copy_image_to_buffer_info2(image, buffer, regions.data(), regions.size(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer2(this->buffer, &image_buffer_copy);
 }
 
 //The image layout MUST be VK_IMAGE_LAYOUT_TRANSFER_SRC/DST_OPTIMAL.
 void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects src_aspects, ImageAspects dst_aspects, u32 src_mip_level, u32 dst_mip_level) const {
-    assert((src.extent.height == dst.extent.height) && "copy_image is designed for images of the same extent.");// todo make copy_image_regions
-    assert((src.extent.width == dst.extent.width) && "copy_image is designed for images of the same extent.");
-    assert(src.layer_count == dst.layer_count && "cop_image is designed for images with the same amount of layers.");
+    assert((src.get_extent().height == dst.get_extent().height) && "copy_image is designed for images of the same extent.");// todo make copy_image_regions
+    assert((src.get_extent().width == dst.get_extent().width) && "copy_image is designed for images of the same extent.");
+    assert(src.get_layer_count() == dst.get_layer_count() && "cop_image is designed for images with the same amount of layers.");
 
     VkImageCopy2 region{
         .sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2,
@@ -1510,24 +1490,24 @@ void CommandBuffer::copy_image(const Image &src, const Image &dst, ImageAspects 
             .aspectMask = static_cast<VkImageAspectFlags>(src_aspects),
             .mipLevel = src_mip_level,
             .baseArrayLayer = 0,
-            .layerCount = src.layer_count,
+            .layerCount = src.get_layer_count(),
         },
         .srcOffset{},
         .dstSubresource{
             .aspectMask = static_cast<VkImageAspectFlags>(dst_aspects),
             .mipLevel = dst_mip_level,
             .baseArrayLayer = 0,
-            .layerCount = dst.layer_count,
+            .layerCount = dst.get_layer_count(),
         },
         .dstOffset{},
-        .extent = {.width=src.extent.width, .height=src.extent.height, .depth=1},
+        .extent = {.width=src.get_extent().width, .height=src.get_extent().height, .depth=1},
     };
     VkCopyImageInfo2 image_copy{
         .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2,
         .pNext = nullptr,
-        .srcImage = src.vk_image,
+        .srcImage = src.get_underlying({}),
         .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        .dstImage = dst.vk_image,
+        .dstImage = dst.get_underlying({}),
         .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .regionCount = 1,
         .pRegions = &region,
@@ -1543,9 +1523,9 @@ void CommandBuffer::blit(
     ivec2 src_bottom_right,
     ivec2 dst_top_left,
     ivec2 dst_bottom_right,
-    ImageAspects aspects) const // todo add VkCmdCopyImage function for when we don't need to blit
+    ImageAspects aspects) const
 {
-    assert(src.layer_count == dst.layer_count);
+    assert(src.get_layer_count() == dst.get_layer_count());
 
     VkImageBlit2 blit_region{
         .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
@@ -1555,7 +1535,7 @@ void CommandBuffer::blit(
             .aspectMask = static_cast<VkImageAspectFlags>(aspects),
             .mipLevel = 0,
             .baseArrayLayer = 0,
-            .layerCount = src.layer_count,
+            .layerCount = src.get_layer_count(),
         },
         .srcOffsets{
             {.x=src_top_left.x, .y=src_top_left.y, .z=0},
@@ -1566,7 +1546,7 @@ void CommandBuffer::blit(
             .aspectMask = static_cast<VkImageAspectFlags>(aspects),
             .mipLevel = 0,
             .baseArrayLayer = 0,
-            .layerCount = dst.layer_count,
+            .layerCount = dst.get_layer_count(),
 
         },
         .dstOffsets{
@@ -1577,9 +1557,9 @@ void CommandBuffer::blit(
     VkBlitImageInfo2 blit_info{
         .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
         .pNext = nullptr,
-        .srcImage = src.vk_image,
+        .srcImage = src.get_underlying({}),
         .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        .dstImage = dst.vk_image,
+        .dstImage = dst.get_underlying({}),
         .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .regionCount = 1,
         .pRegions = &blit_region,
@@ -1589,15 +1569,15 @@ void CommandBuffer::blit(
 }
 
 void CommandBuffer::blit_entire_images(const Image &source, const Image &destination, ImageAspects aspects) const    {
-    blit(source, destination, {0,0}, {source.extent.width, source.extent.height}, {0,0}, {destination.extent.width, destination.extent.height}, aspects);
+    blit(source, destination, {0,0}, {source.get_extent().width, source.get_extent().height}, {0,0}, {destination.get_extent().width, destination.get_extent().height}, aspects);
 }
 
 void CommandBuffer::bind_pipeline(const ComputePipeline &pipeline) const{
-    vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    vkCmdBindPipeline(this->buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.get_underlying({}));
 }
 
 void CommandBuffer::bind_descriptor_sets(const ComputePipeline &pipeline, std::initializer_list<DescriptorSet> sets) const{
-    bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_COMPUTE, sets, pipeline.layout.layout);
+    bind_descriptor_sets_inner(VK_PIPELINE_BIND_POINT_COMPUTE, sets, pipeline.get_layout());
 }
 void CommandBuffer::bind_descriptor_set(const ComputePipeline &pipeline, DescriptorSet set) const{
     bind_descriptor_sets(pipeline, {set});
@@ -1611,7 +1591,7 @@ void CommandBuffer::end() const{
     VK_CHECK(vkEndCommandBuffer(this->buffer));
 }
 
-DescriptorSetBuilder &DescriptorSetBuilder::bind(u32 binding, VkDescriptorType type, u32 count, VkShaderStageFlagBits accessible_stages_flags){
+DescriptorSetBuilder &DescriptorSetBuilder::bind(u32 binding, VkDescriptorType type, u32 count, VkShaderStageFlags accessible_stages_flags){
     finalized = false;
     VkDescriptorSetLayoutBinding new_bind{
         .binding = binding,
@@ -1624,7 +1604,7 @@ DescriptorSetBuilder &DescriptorSetBuilder::bind(u32 binding, VkDescriptorType t
     return *this;
 }
 
-DescriptorSet DescriptorSetBuilder::build(VulkanEngine &vk){
+DescriptorSet DescriptorSetBuilder::build(){
     if (!finalized){
         std::vector<VkDescriptorBindingFlags> binding_flags(bindings.size());
         for (size_t i = 0; i < bindings.size(); ++i) {
@@ -1644,12 +1624,12 @@ DescriptorSet DescriptorSetBuilder::build(VulkanEngine &vk){
             .bindingCount = static_cast<u32>(bindings.size()),
             .pBindings = bindings.data(),
         };
-        VK_CHECK(vkCreateDescriptorSetLayout(vk.device, &info, nullptr, &layout));
-        vk.descriptor_set_layouts_to_delete.push_back(layout);
+        VK_CHECK(vkCreateDescriptorSetLayout(g_vk->device, &info, nullptr, &layout));
+        g_vk->descriptor_set_layouts_to_delete.push_back(layout);
         finalized = true;
     }
 
-    return DescriptorSet{vk, layout};
+    return DescriptorSet{layout};
 }
 
 DescriptorSetBuilder &DescriptorSetBuilder::reset(){
@@ -1658,3 +1638,14 @@ DescriptorSetBuilder &DescriptorSetBuilder::reset(){
     bindings.clear();
     return *this;
 }
+
+
+Swapchain::~Swapchain() {
+    if (swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(g_vk->device, swapchain, nullptr);
+        swapchain = VK_NULL_HANDLE;
+    }
+}
+
+
+template class GraphicsPipeline<Vertex>;

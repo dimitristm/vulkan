@@ -1382,23 +1382,23 @@ private:
 
         VulkanResources(VulkanEngine &vk):
             vk(vk),
-            cmd_pool(vk),
-            submitter(vk, cmd_pool),
+            cmd_pool(),
+            submitter(cmd_pool),
             uploader(&vk, cmd_pool, 64UL * 1024 * 1024),
-            vertices(vk, 1500000),
-            indices(vk, 1000000),
-            instance_info(vk, 10000, false, true),
+            vertices(1500000),
+            indices(1000000),
+            instance_info(10000, false, true),
             graphics_desc_set([&](){
                 return DescriptorSetBuilder()
                     .bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000, VK_SHADER_STAGE_FRAGMENT_BIT)
                     .bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
                     .bind(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT)
-                    .build(vk);
+                    .build();
             }()),
-            sampler(vk, VK_FILTER_NEAREST, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_TRUE, 16.0f)
+            sampler(VK_FILTER_NEAREST, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_TRUE, 16.0f)
         {
-            graphics_desc_set.update_sampler(vk, 1, sampler);
-            graphics_desc_set.update_storage_buffer(vk, 2, instance_info);
+            graphics_desc_set.update_sampler(1, sampler);
+            graphics_desc_set.update_storage_buffer(2, instance_info);
         }
     };
     std::optional<VulkanResources> vk_resources = std::nullopt;
@@ -1630,8 +1630,8 @@ public:
         u32 first_new_texture = vkr.textures.size();
         for (ImageAsset &ia : image_assets) {
             if (ia.vulkan_image_idx != ImageAsset::VULKAN_IMAGE_NOT_LOADED) continue;
-            vkr.textures.emplace_back(vkr.vk, ia.width, ia.height, ia.format, ia.mips.size());
-            vkr.texture_views.emplace_back(vkr.textures.back().make_view(vkr.vk));
+            vkr.textures.emplace_back(ia.width, ia.height, ia.format, ia.mips.size());
+            vkr.texture_views.emplace_back(vkr.textures.back().make_view());
             ia.vulkan_image_idx = vkr.textures.size() - 1;
             stream_reader.read(files[ia.file_idx].in, ia.stream, img_promises, &ia);
         }
@@ -1650,7 +1650,7 @@ public:
                     .aspects = ImageAspects::COLOR,
                 });
             }
-            vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
+            vkr.submitter.submit([&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
         }
 
         //maybe have only one promise group and pass 0 or 1 for mesh or texture
@@ -1694,11 +1694,11 @@ public:
                     .aspects = ImageAspects::COLOR,
                 });
             }
-            vkr.submitter.submit(vkr.vk, [&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
+            vkr.submitter.submit([&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
             // todo probably doesn't need to be immediately submitted... but we do need to check that it's done before we let the renderer use them
             // todo also layouts are per-mip, so if we want to do per mip uploads with low mips going first etc we must change how our barrier code works for performance.
         }
-        if (!vkr.texture_views.empty()) vkr.graphics_desc_set.update_sampled_images(vkr.vk, 0, vkr.texture_views);
+        if (!vkr.texture_views.empty()) vkr.graphics_desc_set.update_sampled_images(0, vkr.texture_views);
 
     }
 
