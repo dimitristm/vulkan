@@ -3,7 +3,8 @@
 /build-deb-import-std/
 /build-release/
 /build-deb-no-opt/
-/assets/
+/assets/*
+!/assets/fonts/
 /scratch-space/
 shaders/compiled/*
 !shaders/compiled/.gitkeep
