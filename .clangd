@@ -6,7 +6,16 @@ CompileFlags:
 
 Diagnostics:
   Suppress:
-    - "module_odr_violation*"
+    - "module_odr_violation_record"
+    - "module_odr_violation_template_parameter"
+    - "module_odr_violation_different_definitions"
+    - "module_odr_violation_mismatch"
+    - "module_odr_violation_function"
+    - "module_odr_violation_field"
+    - "module_odr_violation_enum"
+    - "module_odr_violation_typedef"
+    - "module_odr_violation_definition_data"
+    - "cppcoreguidelines-pro-type-vararg"
 
 Completion:
   HeaderInsertion: Never
