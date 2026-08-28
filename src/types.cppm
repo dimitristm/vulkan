@@ -110,7 +110,7 @@ struct std::formatter<strong_type_with_implicit_cast<T, Tag>, CharT> : std::form
 
 #define STRONG_TYPE_WITH_IMPLICIT_CAST(name, underlying)                               \
     namespace {struct name##___tag_mangle {};};                                        \
-    export using name = strong_type_with_implicit_cast<underlying, name##___tag_mangle>\
+    export using name = strong_type_with_implicit_cast<underlying, name##___tag_mangle> /* NOLINT(bugprone-macro-parentheses) */ \
 
 STRONG_TYPE_WITH_IMPLICIT_CAST(i8_norm_t, i8);
 STRONG_TYPE_WITH_IMPLICIT_CAST(i16_norm_t, i16);

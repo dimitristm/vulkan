@@ -5,10 +5,10 @@ module;
 #include <cassert>
 
 // Disable harmless VMA warnings
-#if defined(__clang__)
+#ifdef __clang__
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Weverything"
-#elif defined(__GNUC__)
+#elifdef __GNUC__
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wall"
 #  pragma GCC diagnostic ignored "-Wextra"
@@ -16,23 +16,25 @@ module;
 
 #include <vk_mem_alloc.h>
 
-#if defined(__clang__)
+#ifdef __clang__
 #  pragma clang diagnostic pop
-#elif defined(__GNUC__)
+#elifdef __GNUC__
 #  pragma GCC diagnostic pop
 #endif
 
-#if !VK_PROJ_USE_IMPORT_STD
 #include <cstdio>
+
+#if !VK_PROJ_USE_IMPORT_STD
+#include <print>
 #include <vector>
 #include <span>
 #include <array>
-#include <unordered_set>
 #include <optional>
 #include <algorithm>
 #include <functional>
 #include <deque>
 #include <utility>
+#include <filesystem>
 #endif
 
 export module vulkanEngine;
@@ -152,11 +154,11 @@ public:
 };
 
 class DeletionBatchQueue {
-    struct FencedDeletionBatch { DeletionBatch batch; VkFence fence; };
+    struct FencedDeletionBatch { DeletionBatch batch; VkFence fence{}; };
     std::deque<FencedDeletionBatch> deletion_batches;
 public:
     void add(DeletionBatch&& batch, VkFence fence){
-        deletion_batches.push_back({std::move(batch), fence});
+        deletion_batches.push_back({.batch=std::move(batch), .fence=fence});
     }
     void force_flush_all() {
         for (auto& fenced_batch : deletion_batches) {
@@ -166,7 +168,7 @@ public:
     }
     void flush(VkDevice device) {
         std::erase_if(deletion_batches, [&device](auto& fenced_batch) {
-            bool is_signaled = vkGetFenceStatus(device, fenced_batch.fence) == VK_SUCCESS;
+            const bool is_signaled = vkGetFenceStatus(device, fenced_batch.fence) == VK_SUCCESS;
             if (is_signaled) {
                 fenced_batch.batch.execute();
             }
@@ -224,7 +226,7 @@ export struct VulkanEngine{
 
     void init_imgui(SDL_Window *window, VkFormat image_format, MSAALevel msaa_level = MSAALevel::OFF);
     void wait_idle() const{ vkDeviceWaitIdle(device); }
-    VkSurfaceCapabilitiesKHR get_surface_capabilities() const;
+    [[nodiscard]] VkSurfaceCapabilitiesKHR get_surface_capabilities() const;
 };
 
 // Move-only RAII wrapper. Ensures unique ownership of a vulkan resource (non-copyable). Destructor
@@ -255,9 +257,9 @@ struct ManagedVkResource {
         }
     }
 
-    VkResource get_underlying() const { return underlying; }
-    VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
-    const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
+    [[nodiscard]] VkResource get_underlying() const { return underlying; }
+    [[nodiscard]] VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
+    [[nodiscard]] const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
 
     bool operator==(const ManagedVkResource& other) const noexcept { return underlying == other.underlying; }
     bool operator!=(const ManagedVkResource& other) const noexcept { return underlying != other.underlying; }
@@ -294,12 +296,12 @@ struct ManagedVmaResource {
         }
     }
 
-    VkResource get_underlying() const { return underlying; }
-    VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
-    const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
-    VmaAllocation get_allocation() const { return allocation; }
-    VmaAllocation *get_allocation_ptr() { return &allocation; } // Only use to pass to a vkCreate* function
-    const VmaAllocation *get_allocation_ptr() const { return &allocation; } // Only use for Vulkan functions expecting an array of handles
+    [[nodiscard]] VkResource get_underlying() const { return underlying; }
+    [[nodiscard]] VkResource *get_underlying_ptr() { return &underlying; } // Only use to pass to a vkCreate* function
+    [[nodiscard]] const VkResource *get_underlying_ptr() const { return &underlying; } // Only use for Vulkan functions expecting an array of handles
+    [[nodiscard]] VmaAllocation get_allocation() const { return allocation; }
+    [[nodiscard]] VmaAllocation *get_allocation_ptr() { return &allocation; } // Only use to pass to a vkCreate* function
+    [[nodiscard]] const VmaAllocation *get_allocation_ptr() const { return &allocation; } // Only use for Vulkan functions expecting an array of handles
 
     bool operator==(const ManagedVmaResource& other) const noexcept { return underlying == other.underlying; }
     bool operator!=(const ManagedVmaResource& other) const noexcept { return underlying != other.underlying; }
@@ -308,7 +310,7 @@ struct ManagedVmaResource {
 export class GpuFence{
     ManagedVkResource<VkFence, vkDestroyFence> fence;
 public:
-    [[nodiscard]] VkFence get_underlying(PassKey<Swapchain, CommandBuffer>) const { return fence.get_underlying(); }
+    [[nodiscard]] VkFence get_underlying(PassKey<Swapchain, CommandBuffer> /* key */) const { return fence.get_underlying(); }
     // by default we wait forever, if we change the timeout we crash with VK_TIMEOUT if we run out of time
     // todo: try_wait for returning instead of crashing
     static constexpr u64 default_timeout = UINT64_MAX;
@@ -331,7 +333,7 @@ public:
 export class Sampler{
     ManagedVkResource<VkSampler, vkDestroySampler> sampler;
 public:
-    [[nodiscard]] VkSampler get_underlying(PassKey<DescriptorSet>) const { return sampler.get_underlying(); }
+    [[nodiscard]] VkSampler get_underlying(PassKey<DescriptorSet> /* key */) const { return sampler.get_underlying(); }
     Sampler() = delete;
 
     Sampler(VkFilter mag_filter,
@@ -353,6 +355,7 @@ public:
 };
 
 export enum class ImageAspects:VkImageAspectFlags{
+    NONE = 0,
     COLOR = VK_IMAGE_ASPECT_COLOR_BIT,
     DEPTH = VK_IMAGE_ASPECT_DEPTH_BIT,
     STENCIL = VK_IMAGE_ASPECT_STENCIL_BIT,
@@ -367,7 +370,7 @@ export class Image{
     u32 layer_count;
     MSAALevel msaa_level;
 public:
-    [[nodiscard]] VkImage get_underlying(PassKey<CommandBuffer, ImageView, StructMaker>) const { return vk_image.get_underlying(); }
+    [[nodiscard]] VkImage get_underlying(PassKey<CommandBuffer, ImageView, StructMaker> /* key */) const { return vk_image.get_underlying(); }
     [[nodiscard]] const VkExtent2D &get_extent() const { return extent; }
     [[nodiscard]] VkFormat get_format() const { return format; }
     [[nodiscard]] u32 get_mip_level_count() const { return mip_level_count; }
@@ -400,7 +403,7 @@ public:
 export class ImageView{
     ManagedVkResource<VkImageView, vkDestroyImageView> view;
 public:
-    [[nodiscard]] VkImageView get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker>) const { return view.get_underlying(); }
+    [[nodiscard]] VkImageView get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker> /* key */) const { return view.get_underlying(); }
 
     ImageView() = delete;
 
@@ -425,7 +428,7 @@ public:
 export class GpuSemaphore{
     ManagedVkResource<VkSemaphore, vkDestroySemaphore> semaphore;
 public:
-    [[nodiscard]] VkSemaphore get_underlying(PassKey<Swapchain, CommandBuffer>) const { return semaphore.get_underlying(); }
+    [[nodiscard]] VkSemaphore get_underlying(PassKey<Swapchain, CommandBuffer> /* key */) const { return semaphore.get_underlying(); }
 
     GpuSemaphore();
 };
@@ -448,6 +451,10 @@ public:
 
     Swapchain(SDL_Window *window, VkPresentModeKHR present_mode);
     ~Swapchain();
+    Swapchain(const Swapchain&) = delete;
+    Swapchain& operator=(const Swapchain&) = delete;
+    Swapchain(Swapchain&&) = delete;
+    Swapchain& operator=(Swapchain&&) = delete;
 
     // Returns the index of the next image in the swapchain and the result can be:
     // VK_SUCCESS (proceed normally)
@@ -472,7 +479,7 @@ public:
 export class CommandPool{
     ManagedVkResource<VkCommandPool, vkDestroyCommandPool> pool;
 public:
-    [[nodiscard]] VkCommandPool get_underlying(PassKey<StructMaker>) const { return pool.get_underlying(); }
+    [[nodiscard]] VkCommandPool get_underlying(PassKey<StructMaker> /* key */) const { return pool.get_underlying(); }
 
     CommandPool();
 };
@@ -483,7 +490,7 @@ export class VulkanBuffer{
 protected:
     VkDeviceAddress device_address = 0;
 public:
-    [[nodiscard]] VkBuffer get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker>) const { return buffer.get_underlying(); }
+    [[nodiscard]] VkBuffer get_underlying(PassKey<CommandBuffer, DescriptorSet, StructMaker> /* key */) const { return buffer.get_underlying(); }
     [[nodiscard]] VmaAllocation get_allocation() const { return buffer.get_allocation(); }
     [[nodiscard]] u64 get_capacity_in_bytes() const { return capacity_in_bytes; }
     [[nodiscard]] const VkDeviceAddress &get_device_address() const { return device_address; }
@@ -614,7 +621,7 @@ public:
         else if constexpr (std::is_same_v<U, u32_A2R10G10B10_norm_t>)      return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
 
         std::string name{field_name};
-        printf("Your vertex struct conainted a field named %s which has a type that isn't supported as a vertex attribute.", name.c_str());
+        std::println(stderr, "Your vertex struct conainted a field named {} which has a type that isn't supported as a vertex attribute.", name);
         assert(false);
         abort();
         return VK_FORMAT_UNDEFINED;
@@ -649,8 +656,8 @@ export class DescriptorSet{
 public:
     DescriptorSet(VkDescriptorSetLayout layout);
 
-    VkDescriptorSet get_underlying(PassKey<CommandBuffer>) const { return set; }
-    VkDescriptorSetLayout get_layout(PassKey<PipelineLayout>) const { return layout; }
+    [[nodiscard]] VkDescriptorSet get_underlying(PassKey<CommandBuffer> /* key */) const { return set; }
+    [[nodiscard]] VkDescriptorSetLayout get_layout(PassKey<PipelineLayout> /* key */) const { return layout; }
     void update_storage_images(u32 bind, std::span<const ImageView> views);
     void update_storage_image(u32 bind, const ImageView &view);
     void update_sampled_images(u32 bind, std::span<const ImageView> views);
@@ -664,43 +671,43 @@ public:
 class Shader{
     ManagedVkResource<VkShaderModule, vkDestroyShaderModule> module;
 public:
-    [[nodiscard]] VkShaderModule get_underlying(PassKey<StructMaker>) const { return module.get_underlying(); }
+    [[nodiscard]] VkShaderModule get_underlying(PassKey<StructMaker> /*unused*/) const { return module.get_underlying(); }
     template <typename T>
-    [[nodiscard]] VkShaderModule get_underlying(PassKey<GraphicsPipeline<T>>) const { return module.get_underlying(); }
+    [[nodiscard]] VkShaderModule get_underlying(PassKey<GraphicsPipeline<T>> /*unused*/) const { return module.get_underlying(); }
 
     Shader() = delete;
 
-    Shader(const std::string_view filepath);
+    Shader(const std::filesystem::path &filepath);
 };
 
 export class ComputeShader : public Shader{
 public:
-    ComputeShader(const std::string_view filepath)
+    ComputeShader(const std::filesystem::path &filepath)
     :Shader(filepath) {
-        assert(filepath.contains(".comp") && "Compute shaders should have .comp in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(std::string_view(filepath.c_str()).ends_with(".comp.spv") && "Compute shaders should have the .comp.spv file extension. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 export class VertexShader : public Shader {
 public:
-    VertexShader(const std::string_view filepath)
+    VertexShader(const std::filesystem::path &filepath)
     :Shader(filepath) {
-        assert(filepath.contains(".vert") && "Vertex shaders should have .vert in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(std::string_view(filepath.c_str()).ends_with(".vert.spv") && "Vertex shaders should have the .vert.spv file extension. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 export class FragmentShader : public Shader {
 public:
-    FragmentShader(const std::string_view filepath)
+    FragmentShader(const std::filesystem::path &filepath)
     :Shader(filepath) {
-        assert(filepath.contains(".frag") && "Fragment shaders should have .frag in their name. You either passed the wrong shader or your shader does not follow naming convention");
+        assert(std::string_view(filepath.c_str()).ends_with(".frag.spv") && "Fragment shaders should have the .frag.spv file extension. You either passed the wrong shader or your shader does not follow naming convention");
     }
 };
 
 export class PipelineLayout{
     VkPipelineLayout layout = VK_NULL_HANDLE;
 public:
-    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<CommandBuffer, StructMaker>) const { return layout; }
+    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<CommandBuffer, StructMaker> /*unused*/) const { return layout; }
     template <typename T>
-    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<GraphicsPipeline<T>>) const { return layout; }
+    [[nodiscard]] VkPipelineLayout get_underlying(PassKey<GraphicsPipeline<T>> /*unused*/) const { return layout; }
     PipelineLayout() = default;
 
     PipelineLayout(
@@ -715,7 +722,7 @@ export class SpecializationInfo{
     VkSpecializationInfo info{};
     std::vector<VkSpecializationMapEntry> entries;
     size_t data_buffer_max_capacity_in_bytes{};
-    void *data{};
+    std::vector<std::byte> data;
     bool finalized{};
     // Differs from data_buffer_max_capacity_in_bytes in that this is the actually used memory, while data_buffer_max_capacity_in_bytes includes potentially unused memory
     // and always reflects the actual amount of bytes available in the buffer.
@@ -737,16 +744,16 @@ public:
 
         if(data_size_in_bytes + sizeof(T) > data_buffer_max_capacity_in_bytes){
             assert(false && "Exceeded limit of data buffer while adding entry to specialization info");
-            printf("%s", "Exceeded limit of data buffer while adding entry to specialization info");
+            std::println(stderr, "{}", "Exceeded limit of data buffer while adding entry to specialization info");
             abort();
         }
         assert(std::none_of(entries.begin(), entries.end(), [&](const VkSpecializationMapEntry& e){ return e.constantID == constant_ID; }) && "Duplicate specialization constant ID: can't set the same constant twice");
 
         finalized = false;
 
-        u32 offset = data_size_in_bytes;
+        const u32 offset = data_size_in_bytes;
         entries.emplace_back(constant_ID, offset, sizeof(T));
-        memcpy((std::byte*)data + offset, &constant_value, sizeof(T));
+        memcpy(data.data() + offset, &constant_value, sizeof(T));
         data_size_in_bytes += sizeof(T);
         return *this;
     }
@@ -756,19 +763,13 @@ public:
     // DO NOT cache the output of this function. If you ever reset this instance of SpecializationInfo or let it be destroyed,
     // the returned value of this function becomes invalid. Just pass it to a pipeline creation function and let it go.
     const VkSpecializationInfo *get_vk_specialization_info();
-
-    ~SpecializationInfo();
-    SpecializationInfo(const SpecializationInfo&) = delete;
-    SpecializationInfo(SpecializationInfo&&) = delete;
-    SpecializationInfo& operator=(const SpecializationInfo&) = delete;
-    SpecializationInfo& operator=(SpecializationInfo&&) = delete;
 };
 
 export class ComputePipeline{
     ManagedVkResource<VkPipeline, vkDestroyPipeline> pipeline;
     PipelineLayout layout;
 public:
-    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer>) const { return pipeline.get_underlying(); }
+    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer> /*unused*/) const { return pipeline.get_underlying(); }
     [[nodiscard]] const PipelineLayout& get_layout() const { return layout; }
 
     ComputePipeline(
@@ -783,7 +784,7 @@ class GraphicsPipeline{
     ManagedVkResource<VkPipeline, vkDestroyPipeline> pipeline;
     PipelineLayout layout;
 public:
-    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer>) const { return pipeline.get_underlying(); }
+    [[nodiscard]] VkPipeline get_underlying(PassKey<CommandBuffer> /*unused*/) const { return pipeline.get_underlying(); }
     [[nodiscard]] const PipelineLayout& get_layout() const { return layout; }
 
     GraphicsPipeline(
@@ -798,7 +799,7 @@ public:
         SpecializationInfo */* _Nullable */frag_specialization_info = nullptr,
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
     :
-    layout(std::move(pipeline_layout))
+    layout(pipeline_layout)
     {
         assert(
             topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
@@ -902,7 +903,7 @@ public:
             .maxDepthBounds = 1.0f
         };
 
-        VkPipelineColorBlendAttachmentState color_blend_attachment_alpha{
+        const VkPipelineColorBlendAttachmentState color_blend_attachment_alpha{
             .blendEnable = VK_TRUE,
 
             .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
@@ -963,7 +964,7 @@ public:
 
         VkResult result = (vkCreateGraphicsPipelines(g_vk->device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, nullptr, this->pipeline.get_underlying_ptr()));
         if(result != VK_SUCCESS){
-            printf("Vulkan error with code: %d", result);
+            std::println(stderr, "Vulkan error with code: {}", static_cast<int>(result));
             abort();
         }
     }
@@ -973,13 +974,43 @@ export struct BarrierInfo{
     const Image &img;
     VkImageLayout old_layout_or_undefined_to_discard_current_data;
     VkImageLayout new_layout;
+    ImageAspects aspects;
     VkPipelineStageFlags2 src_stage_mask;
     VkAccessFlags2 src_access_mask;
     VkPipelineStageFlags2 dst_stage_mask;
     VkAccessFlags2 dst_access_mask;
-    ImageAspects aspects;
-    u32 base_mip_level = 0;
-    u32 mip_level_count = VK_REMAINING_MIP_LEVELS;
+    u32 base_mip_level;
+    u32 mip_level_count;
+
+    BarrierInfo(
+        const Image &img,
+        VkImageLayout old_layout_or_undefined_to_discard_current_data,
+        VkImageLayout new_layout,
+        ImageAspects aspects,
+        VkPipelineStageFlags2 src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
+        VkAccessFlags2 src_access_mask = VK_ACCESS_2_NONE,
+        VkPipelineStageFlags2 dst_stage_mask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        VkAccessFlags2 dst_access_mask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+        u32 base_mip_level = 0,
+        u32 mip_level_count = VK_REMAINING_MIP_LEVELS
+    ) : img(img),
+        old_layout_or_undefined_to_discard_current_data(old_layout_or_undefined_to_discard_current_data),
+        new_layout(new_layout),
+        aspects(aspects),
+        src_stage_mask(src_stage_mask),
+        src_access_mask(src_access_mask),
+        dst_stage_mask(dst_stage_mask),
+        dst_access_mask(dst_access_mask),
+        base_mip_level(base_mip_level),
+        mip_level_count(mip_level_count)
+    {}
+
+    BarrierInfo() = delete;
+    BarrierInfo(const BarrierInfo &) = default;
+    BarrierInfo(BarrierInfo &&) noexcept = default;
+    BarrierInfo &operator=(const BarrierInfo &) = delete;
+    BarrierInfo &operator=(BarrierInfo &&) = delete;
+    ~BarrierInfo() = default;
 };
 
 export class CommandBuffer{
@@ -1028,16 +1059,16 @@ export class CommandBuffer{
             assert(false && "Too many desc sets");
             abort();
         };
-        VkDescriptorSet vk_sets[max_sets];
-        i32 i = 0;
+        std::array<VkDescriptorSet, max_sets> vk_sets{};
+        size_t i = 0;
         for(const auto &set : sets){
-            vk_sets[i++] = set.get_underlying({});
+            vk_sets.at(i++) = set.get_underlying({});
         }
 
-        vkCmdBindDescriptorSets(this->buffer, bind_point, layout.get_underlying({}), 0, sets.size(), vk_sets, 0, nullptr);
+        vkCmdBindDescriptorSets(this->buffer, bind_point, layout.get_underlying({}), 0, sets.size(), vk_sets.data(), 0, nullptr);
     }
 public:
-    [[nodiscard]] VkCommandBuffer get_underlying(PassKey<StructMaker>) const { return buffer; }
+    [[nodiscard]] VkCommandBuffer get_underlying(PassKey<StructMaker> /* key */) const { return buffer; }
     CommandBuffer(const CommandPool &pool);
     CommandBuffer(VkCommandBuffer vk_buffer):buffer(vk_buffer){}
     static void make_command_buffers(std::vector<CommandBuffer> &buffers, const CommandPool &pool, i32 how_many_buffers_to_append);
@@ -1110,7 +1141,7 @@ public:
                 .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
                 .pNext                = nullptr,
                 .flags{},
-                .renderArea           = {{0, 0}, renderExtent},
+                .renderArea           = {.offset = {.x = 0, .y = 0}, .extent = renderExtent},
                 .layerCount           = 1,
                 .viewMask{},
                 .colorAttachmentCount = 1,
@@ -1124,14 +1155,14 @@ public:
 
         vkCmdBeginRendering(buffer, &rendering_info);
 
-        VkDeviceSize offsets = 0;
+        const VkDeviceSize offsets = 0;
         {
             VkBuffer vb = vertex_buffer.get_underlying({});
             vkCmdBindVertexBuffers(buffer, 0, 1, &vb, &offsets);
         }
         vkCmdBindIndexBuffer(buffer, index_buffer.get_underlying({}), 0, IndexBuffer::index_type);
 
-        VkViewport viewport = {
+        const VkViewport viewport = {
             .x = 0,
             .y = 0,
             .width = static_cast<f32>(draw_extent.width),
@@ -1141,7 +1172,7 @@ public:
         };
         vkCmdSetViewport(buffer, 0, 1, &viewport);
 
-        VkRect2D scissor{
+        const VkRect2D scissor{
             .offset{.x = 0, .y = 0},
             .extent{draw_extent},
         };
@@ -1177,7 +1208,7 @@ public:
         for (const auto &info : barrier_infos){
             image_barriers.push_back(image_memory_barrier2(info));
         }
-        VkDependencyInfo dep_info = dependency_info(image_barriers);
+        const VkDependencyInfo dep_info = dependency_info(image_barriers);
         vkCmdPipelineBarrier2(this->buffer, &dep_info);
     }
 

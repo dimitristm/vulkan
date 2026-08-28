@@ -4,6 +4,7 @@ module;
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
 #include <stb/stb_image_resize2.h>
+#include <cstdio>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <print>
@@ -91,7 +92,7 @@ static constexpr bc7enc_compress_block_params create_bc7enc_compress_block_param
         p.m_try_least_squares = false;
         p.m_mode17_partition_estimation_filterbank = true;
     }
-    else { std::println("Unrecognised BCnQuality"); abort(); }
+    else { std::println(stderr, "Unrecognised BCnQuality"); abort(); }
 
     if (quality_type == BC7QualityType::PERCEPTUAL){
         p.m_perceptual = true;
@@ -108,7 +109,7 @@ static constexpr bc7enc_compress_block_params create_bc7enc_compress_block_param
         p.m_weights[2] = 1;
         p.m_weights[3] = 1;
     }
-    else { std::println("Unrecognised BC7QualityType"); abort(); }
+    else { std::println(stderr, "Unrecognised BC7QualityType"); abort(); }
 
     return p;
 }
@@ -122,10 +123,10 @@ static std::array<uint8_t, 64> extract_BCn_block(
     std::array<uint8_t, 64> out{};
     for (u32 block_pixel_y = 0; block_pixel_y < 4; ++block_pixel_y){
         for (u32 block_pixel_x = 0; block_pixel_x < 4; ++block_pixel_x){
-            u32 src_x = std::min(block_x * 4 + block_pixel_x, width - 1);
-            u32 src_y = std::min(block_y * 4 + block_pixel_y, height - 1);
-            const uint8_t *src_pixel = pixels_RGBA + (u64)(src_y * width + src_x) * 4;
-            uint8_t *o = out.data() + (u64)(block_pixel_y * 4 + block_pixel_x) * 4;
+            const u32 src_x = std::min(block_x * 4 + block_pixel_x, width - 1);
+            const u32 src_y = std::min(block_y * 4 + block_pixel_y, height - 1);
+            const uint8_t *src_pixel = pixels_RGBA + static_cast<u64>(src_y * width + src_x) * 4;
+            uint8_t *o = out.data() + static_cast<u64>(block_pixel_y * 4 + block_pixel_x) * 4;
             o[0] = src_pixel[0]; o[1] = src_pixel[1]; o[2] = src_pixel[2]; o[3] = src_pixel[3];
         }
     }
@@ -135,13 +136,13 @@ static std::array<uint8_t, 64> extract_BCn_block(
 static std::tuple<u32, u32, u64, u64> BCn_image_info(u32 width, u32 height, const u16 BC_level){
     const u32 block_amount_x = (width  + 3) / 4;
     const u32 block_amount_y = (height + 3) / 4;
-    const u64 total_blocks = (u64)block_amount_x * block_amount_y;
+    const u64 total_blocks = static_cast<u64>(block_amount_x) * block_amount_y;
     // Both BC7 and BC5 encode to 16 bytes per 4x4 block
     u32 bytes_per_block = 0;
     switch (BC_level){
-    case (7):
-    case (5): bytes_per_block = 16; break;
-    default: std::println("BC levels range from 1 to 7"); abort();
+    case 7:
+    case 5: bytes_per_block = 16; break;
+    default: std::println(stderr, "BC levels range from 1 to 7"); abort();
     }
     const u64 compressed_image_size = total_blocks * bytes_per_block;
     return std::make_tuple(block_amount_x, block_amount_y, total_blocks, compressed_image_size);
@@ -149,7 +150,7 @@ static std::tuple<u32, u32, u64, u64> BCn_image_info(u32 width, u32 height, cons
 
 export{
 
-std::vector<std::byte> to_bc7(const uint8_t* pixels_RGBA, u32 width, u32 height, const BCnQuality quality, const BC7QualityType quality_type){
+std::vector<std::byte> to_bc7(const uint8_t* pixels_RGBA, u32 width, u32 height, BCnQuality quality, BC7QualityType quality_type){
     init_img_processing();
     auto [block_amount_x, block_amount_y, total_blocks, compressed_image_size]
         = BCn_image_info(width, height, 7);
@@ -160,15 +161,15 @@ std::vector<std::byte> to_bc7(const uint8_t* pixels_RGBA, u32 width, u32 height,
         std::views::iota(0u, block_amount_y),
         std::views::iota(0u, block_amount_x)
     );
-    bc7enc_compress_block_params params = create_bc7enc_compress_block_params(quality, quality_type);
+    const bc7enc_compress_block_params params = create_bc7enc_compress_block_params(quality, quality_type);
 
     //todo: check that this lays out the threads in a cache efficient way
     tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
         [&](const auto &block_coordinates) {
             auto [block_y, block_x] = block_coordinates;
             std::array<uint8_t, 64> block = extract_BCn_block(pixels_RGBA, width, height, block_x, block_y);
-            u32 linear_index = block_y * block_amount_x + block_x;
-            std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + (u64)linear_index * 16;
+            const u32 linear_index = block_y * block_amount_x + block_x;
+            std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + static_cast<u64>(linear_index) * 16;
             bc7enc_compress_block(dst, block.data(), &params);
         }
     );
@@ -192,8 +193,8 @@ std::vector<std::byte> to_bc5(const uint8_t *pixels_RGBA, u32 width, u32 height,
             [&](const auto &block_coordinates) {
                 auto [block_y, block_x] = block_coordinates;
                 std::array<uint8_t, 64> block = extract_BCn_block(pixels_RGBA, width, height, block_x, block_y);
-                u32 linear_index = block_y * block_amount_x + block_x;
-                std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + (u64)linear_index * 16;
+                const u32 linear_index = block_y * block_amount_x + block_x;
+                std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + static_cast<u64>(linear_index) * 16;
                 rgbcx::encode_bc5(dst, block.data(), channel0, channel1, 4);
             }
         );
@@ -206,14 +207,14 @@ std::vector<std::byte> to_bc5(const uint8_t *pixels_RGBA, u32 width, u32 height,
             alpha_search_rad = 8;
             alpha_modes = 3; // both modes
         }
-        else{ std::println("Unknown BCnQuality in to_bc5"); abort(); }
+        else{ std::println(stderr, "Unknown BCnQuality in to_bc5"); abort(); }
 
         tbb::parallel_for_each(block_grid.begin(), block_grid.end(),
             [&](const auto &block_coordinates) {
                 auto [block_y, block_x] = block_coordinates;
                 std::array<uint8_t, 64> block = extract_BCn_block(pixels_RGBA, width, height, block_x, block_y);
-                u32 linear_index = block_y * block_amount_x + block_x;
-                std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + (u64)linear_index * 16;
+                const u32 linear_index = block_y * block_amount_x + block_x;
+                std::byte *dst = reinterpret_cast<std::byte*>(data.data()) + static_cast<u64>(linear_index) * 16;
                 // Metallic and Roughness are stored in the G and B channels for gltfs
                 rgbcx::encode_bc5_hq(dst, block.data(), channel0, channel1, 4, alpha_search_rad, alpha_modes);
             }
@@ -238,27 +239,27 @@ std::vector<std::vector<std::byte>> make_mips_color(
     // Handle NO_MIPS: return a vector of vectors containing only the original image
     if (quality == MipQuality::NO_MIPS) {
         std::vector<std::vector<std::byte>> mips(1);
-        mips[0].resize((u64)width * height * 4);
-        std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+        mips.front().resize(static_cast<u64>(width) * height * 4);
+        std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
         return mips;
     }
 
-    i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
+    const i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
     std::vector<std::vector<std::byte>> mips(mip_levels);
 
-    mips[0].resize((u64)width * height * 4);
-    std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+    mips.front().resize(static_cast<u64>(width) * height * 4);
+    std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
 
     for (i32 level = 1; level < mip_levels; ++level) {
-        i32 dst_w = std::max(1, width >> level);
-        i32 dst_h = std::max(1, height >> level);
-        mips[level].resize((u64)dst_w * dst_h * 4);
+        const i32 dst_w = std::max(1, width >> level);
+        const i32 dst_h = std::max(1, height >> level);
+        mips[level].resize(static_cast<u64>(dst_w) * dst_h * 4);
 
         // MIN generates from previous mip level (level - 1)
         // BALANCED and MAX generate from the original image (level 0)
-        i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
-        i32 src_w = std::max(1, width >> src_level);
-        i32 src_h = std::max(1, height >> src_level);
+        const i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
+        const i32 src_w = std::max(1, width >> src_level);
+        const i32 src_h = std::max(1, height >> src_level);
 
         const void* src_pixels = mips[src_level].data();
         void* dst_pixels = mips[level].data();
@@ -274,10 +275,10 @@ std::vector<std::vector<std::byte>> make_mips_color(
 
         // Configure filter type based on quality
         // MAX uses Mitchell (stb's high-quality cubic windowed filter), others use BOX
-        stbir_filter filter_type = (quality == MipQuality::MAX) ? STBIR_FILTER_MITCHELL : STBIR_FILTER_BOX;
+        const stbir_filter filter_type = (quality == MipQuality::MAX) ? STBIR_FILTER_MITCHELL : STBIR_FILTER_BOX;
         stbir_set_filters(&resize, filter_type, filter_type);
 
-        i32 splits = stbir_build_samplers_with_splits(&resize, tbb::this_task_arena::max_concurrency());
+        const i32 splits = stbir_build_samplers_with_splits(&resize, tbb::this_task_arena::max_concurrency());
         if (splits > 0) {
             tbb::parallel_for(0, splits, [&resize](i32 i) {
                 stbir_resize_extended_split(&resize, i, 1);
@@ -301,28 +302,28 @@ std::vector<std::vector<std::byte>> make_mips_normals(
 
     if (quality == MipQuality::NO_MIPS) {
         std::vector<std::vector<std::byte>> mips(1);
-        mips[0].resize((u64)width * height * 4);
-        std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+        mips.front().resize(static_cast<u64>(width) * height * 4);
+        std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
         return mips;
     }
 
-    i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
+    const i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
     std::vector<std::vector<std::byte>> mips(mip_levels);
 
-    mips[0].resize((u64)width * height * 4);
-    std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+    mips.front().resize(static_cast<u64>(width) * height * 4);
+    std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
 
     constexpr i32 x_channel = 0;
     constexpr i32 y_channel = 1;
 
     for (i32 level = 1; level < mip_levels; ++level) {
-        i32 dst_w = std::max(1, width >> level);
-        i32 dst_h = std::max(1, height >> level);
-        mips[level].resize((u64)dst_w * dst_h * 4);
+        const i32 dst_w = std::max(1, width >> level);
+        const i32 dst_h = std::max(1, height >> level);
+        mips[level].resize(static_cast<u64>(dst_w) * dst_h * 4);
 
-        i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
-        i32 src_w = std::max(1, width >> src_level);
-        i32 src_h = std::max(1, height >> src_level);
+        const i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
+        const i32 src_w = std::max(1, width >> src_level);
+        const i32 src_h = std::max(1, height >> src_level);
 
         const u8* src_pixels = reinterpret_cast<const u8*>(mips[src_level].data());
         u8* dst_pixels = reinterpret_cast<u8*>(mips[level].data());
@@ -335,17 +336,17 @@ std::vector<std::vector<std::byte>> make_mips_normals(
         tbb::parallel_for_each(pixel_grid.begin(), pixel_grid.end(), [=](const auto& coordinates) {
             auto [dst_y, dst_x] = coordinates;
 
-            i32 src_x_start = (dst_x * src_w) / dst_w;
-            i32 src_x_end   = ((dst_x + 1) * src_w) / dst_w;
-            i32 src_y_start = (dst_y * src_h) / dst_h;
-            i32 src_y_end   = ((dst_y + 1) * src_h) / dst_h;
+            const i32 src_x_start = (dst_x * src_w) / dst_w;
+            const i32 src_x_end   = ((dst_x + 1) * src_w) / dst_w;
+            const i32 src_y_start = (dst_y * src_h) / dst_h;
+            const i32 src_y_end   = ((dst_y + 1) * src_h) / dst_h;
 
             fvec3 summed_normal(0.0f);
             i32 sample_count = 0;
 
             for (i32 src_y = src_y_start; src_y < src_y_end; ++src_y) {
                 for (i32 src_x = src_x_start; src_x < src_x_end; ++src_x) {
-                    i32 src_pixel_offset = (src_y * src_w + src_x) * 4;
+                    const i32 src_pixel_offset = (src_y * src_w + src_x) * 4;
 
                     // Decode to [-1.0, 1.0]
                     fvec2 decoded_normal_xy(static_cast<f32>(src_pixels[src_pixel_offset + x_channel]),
@@ -353,8 +354,8 @@ std::vector<std::vector<std::byte>> make_mips_normals(
                     decoded_normal_xy = (decoded_normal_xy / 127.5f) - 1.0f;
 
                     // Reconstruct Z
-                    f32 reconstructed_z_squared = 1.0f - glm::dot(decoded_normal_xy, decoded_normal_xy);
-                    f32 reconstructed_z = (reconstructed_z_squared > 0.0f) ? std::sqrt(reconstructed_z_squared) : 0.0f;
+                    const f32 reconstructed_z_squared = 1.0f - glm::dot(decoded_normal_xy, decoded_normal_xy);
+                    const f32 reconstructed_z = (reconstructed_z_squared > 0.0f) ? std::sqrt(reconstructed_z_squared) : 0.0f;
 
                     summed_normal += fvec3(decoded_normal_xy, reconstructed_z);
 
@@ -362,20 +363,20 @@ std::vector<std::vector<std::byte>> make_mips_normals(
                 }
             }
             if (sample_count <= 0) {
-                std::println("make_mips_normals generated pixel with zero samples");
+                std::println(stderr, "make_mips_normals generated pixel with zero samples");
                 abort();
             }
 
             fvec2 averaged_normal_xy(0.0f);
-            f32 summed_normal_length = glm::length(summed_normal);
+            const f32 summed_normal_length = glm::length(summed_normal);
             if (summed_normal_length > 1e-6f) {// prevent going to Inf
-                fvec3 normalized_normal = summed_normal / summed_normal_length;
+                const fvec3 normalized_normal = summed_normal / summed_normal_length;
                 averaged_normal_xy = fvec2(normalized_normal.x, normalized_normal.y);
             } // if xy are near zero, z will just be reconstructed as ~1.
 
             // Encode back to [0, 255]
-            i32 dst_pixel_offset = (dst_y * dst_w + dst_x) * 4;
-            fvec2 encoded_normal_xy = glm::clamp((averaged_normal_xy * 0.5f + 0.5f) * 255.0f + 0.5f, 0.0f, 255.0f);
+            const i32 dst_pixel_offset = (dst_y * dst_w + dst_x) * 4;
+            const fvec2 encoded_normal_xy = glm::clamp((averaged_normal_xy * 0.5f + 0.5f) * 255.0f + 0.5f, 0.0f, 255.0f);
 
             dst_pixels[dst_pixel_offset + x_channel] = static_cast<u8>(encoded_normal_xy.x);
             dst_pixels[dst_pixel_offset + y_channel] = static_cast<u8>(encoded_normal_xy.y);
@@ -397,29 +398,29 @@ std::vector<std::vector<std::byte>> make_mips_metal_rough(
 
     if (quality == MipQuality::NO_MIPS) {
         std::vector<std::vector<std::byte>> mips(1);
-        mips[0].resize((u64)width * height * 4);
-        std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+        mips.front().resize(static_cast<u64>(width) * height * 4);
+        std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
         return mips;
     }
 
-    i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
+    const i32 mip_levels = 1 + static_cast<i32>(std::floor(std::log2(std::max(width, height))));
     std::vector<std::vector<std::byte>> mips(mip_levels);
 
-    mips[0].resize((u64)width * height * 4);
-    std::memcpy(mips[0].data(), pixels_RGBA, (u64)width * height * 4);
+    mips.front().resize(static_cast<u64>(width) * height * 4);
+    std::memcpy(mips.front().data(), pixels_RGBA, static_cast<u64>(width) * height * 4);
 
     // In gltfs, roughness is in green channel and metal in blue
     constexpr i32 roughness_channel = 1;
     constexpr i32 metallic_channel  = 2;
 
     for (i32 level = 1; level < mip_levels; ++level) {
-        i32 dst_w = std::max(1, width >> level);
-        i32 dst_h = std::max(1, height >> level);
-        mips[level].resize((u64)dst_w * dst_h * 4);
+        const i32 dst_w = std::max(1, width >> level);
+        const i32 dst_h = std::max(1, height >> level);
+        mips[level].resize(static_cast<u64>(dst_w) * dst_h * 4);
 
-        i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
-        i32 src_w = std::max(1, width >> src_level);
-        i32 src_h = std::max(1, height >> src_level);
+        const i32 src_level = (quality == MipQuality::MIN) ? level - 1 : 0;
+        const i32 src_w = std::max(1, width >> src_level);
+        const i32 src_h = std::max(1, height >> src_level);
 
         const u8* src_pixels = reinterpret_cast<const u8*>(mips[src_level].data());
         u8* dst_pixels = reinterpret_cast<u8*>(mips[level].data());
@@ -431,10 +432,10 @@ std::vector<std::vector<std::byte>> make_mips_metal_rough(
         tbb::parallel_for_each(pixel_grid.begin(), pixel_grid.end(), [=](const auto& coordinates) {
             auto [dst_y, dst_x] = coordinates;
 
-            i32 src_x_start = (dst_x * src_w) / dst_w;
-            i32 src_x_end   = ((dst_x + 1) * src_w) / dst_w;
-            i32 src_y_start = (dst_y * src_h) / dst_h;
-            i32 src_y_end   = ((dst_y + 1) * src_h) / dst_h;
+            const i32 src_x_start = (dst_x * src_w) / dst_w;
+            const i32 src_x_end   = ((dst_x + 1) * src_w) / dst_w;
+            const i32 src_y_start = (dst_y * src_h) / dst_h;
+            const i32 src_y_end   = ((dst_y + 1) * src_h) / dst_h;
 
             f32 summed_roughness_sq = 0.0f;
             u32 summed_metallic = 0;
@@ -442,11 +443,11 @@ std::vector<std::vector<std::byte>> make_mips_metal_rough(
 
             for (i32 src_y = src_y_start; src_y < src_y_end; ++src_y) {
                 for (i32 src_x = src_x_start; src_x < src_x_end; ++src_x) {
-                    i32 src_pixel_offset = (src_y * src_w + src_x) * 4;
+                    const i32 src_pixel_offset = (src_y * src_w + src_x) * 4;
 
                     // Accumulate squared roughness values for RMS calculation
                     // this is the physically correct way to do it
-                    f32 r = src_pixels[src_pixel_offset + roughness_channel];
+                    const f32 r = src_pixels[src_pixel_offset + roughness_channel];
                     summed_roughness_sq += r * r;
 
                     summed_metallic += src_pixels[src_pixel_offset + metallic_channel];
@@ -456,14 +457,14 @@ std::vector<std::vector<std::byte>> make_mips_metal_rough(
             }
 
             if (sample_count <= 0) {
-                std::println("make_mips_metal_rough generated pixel with zero samples");
+                std::println(stderr, "make_mips_metal_rough generated pixel with zero samples");
                 abort();
             }
-            i32 dst_pixel_offset = (dst_y * dst_w + dst_x) * 4;
+            const i32 dst_pixel_offset = (dst_y * dst_w + dst_x) * 4;
 
             // Compute Root-Mean-Square (RMS) for Roughness
-            f32 avg_roughness_sq = summed_roughness_sq / static_cast<f32>(sample_count);
-            f32 final_roughness = std::sqrt(avg_roughness_sq);
+            const f32 avg_roughness_sq = summed_roughness_sq / static_cast<f32>(sample_count);
+            const f32 final_roughness = std::sqrt(avg_roughness_sq);
             dst_pixels[dst_pixel_offset + roughness_channel] = static_cast<u8>(std::clamp(final_roughness + 0.5f, 0.0f, 255.0f));
 
             // Compute Arithmetic Mean for Metallic (with rounding)

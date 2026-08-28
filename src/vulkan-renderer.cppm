@@ -7,6 +7,7 @@ module;
 #include <VkBootstrap.h>
 
 #include <stb/stb_image.h>
+#include <cstdio>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <array>
@@ -79,25 +80,26 @@ export class Renderer{
     void set_initial_attachment_layouts(){
         immediate_submiter.submit([&](){
             immediate_submiter.cmd_buffer().barrier(
-                BarrierInfo{
-                    .img = depth_image.get_image(),
-                    .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
-                    .new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
-                    .src_access_mask = 0,
-                    .dst_stage_mask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    .dst_access_mask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    .aspects = ImageAspects::DEPTH
-                }, BarrierInfo{
-                    .img=draw_image.get_image(),
-                    .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
-                    .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    .src_stage_mask=VK_PIPELINE_STAGE_2_NONE,
-                    .src_access_mask=0,
-                    .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    .aspects=ImageAspects::COLOR
-                }
+                BarrierInfo(
+                    depth_image.get_image(),
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    ImageAspects::DEPTH,
+                    VK_PIPELINE_STAGE_2_NONE,
+                    0,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                ),
+                BarrierInfo(
+                    draw_image.get_image(),
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    ImageAspects::COLOR,
+                    VK_PIPELINE_STAGE_2_NONE,
+                    0,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                )
             );
         });
     }
@@ -203,15 +205,17 @@ public:
             }
         }();
 
-        cmd_buffer.barrier(BarrierInfo{
-                               .img=draw_image.get_resolve_image().get_image(),
-                               .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
-                               .new_layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                               .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                               .src_access_mask=0,
-                               .dst_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               .dst_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                               .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(
+            BarrierInfo(
+                draw_image.get_resolve_image().get_image(),
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                ImageAspects::COLOR,
+                VK_PIPELINE_STAGE_2_BLIT_BIT,
+                0,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+            )
         );
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
@@ -225,58 +229,64 @@ public:
 
         cmd_buffer.draw_imgui(draw_image.get_resolve_image().get_image_view(), {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)});
 
-        cmd_buffer.barrier(BarrierInfo{
-                                .img=draw_image.get_resolve_image().get_image(),
-                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                .src_stage_mask=VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                .src_access_mask=VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                                .dst_access_mask=VK_ACCESS_2_TRANSFER_READ_BIT,
-                                .aspects=ImageAspects::COLOR
-                           },
-                           BarrierInfo{
-                                .img=swapchain.get_images()[swapchain_img_idx],
-                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_UNDEFINED,
-                                .new_layout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image. should i make a seperate execution barrier?
-                                .src_access_mask=0,
-                                .dst_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                                .dst_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                .aspects=ImageAspects::COLOR
-                           }
+        auto &curr_swapchain_image = swapchain.get_images()[swapchain_img_idx];
+        const auto &curr_render_done_sema = swapchain_render_done_semas[swapchain_img_idx];
+
+        cmd_buffer.barrier(
+            BarrierInfo(
+                draw_image.get_resolve_image().get_image(),
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                ImageAspects::COLOR,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT
+            ),
+            BarrierInfo(
+                curr_swapchain_image,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                ImageAspects::COLOR,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, // Here to prevent the image transition write from happening before acquire_next_image can read the image
+                0,
+                VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT
+            )
         );
 
         cmd_buffer.blit(draw_image.get_resolve_image().get_image(),
-                        swapchain.get_images()[swapchain_img_idx],
+                        curr_swapchain_image,
                         {0,0},
                         window_size,
                         {0,0},
-                        {swapchain.get_images()[swapchain_img_idx].get_extent().width, swapchain.get_images()[swapchain_img_idx].get_extent().height},
+                        {curr_swapchain_image.get_extent().width, curr_swapchain_image.get_extent().height},
                         ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(BarrierInfo{
-                                .img=swapchain.get_images()[swapchain_img_idx],
-                                .old_layout_or_undefined_to_discard_current_data=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                .new_layout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                .src_stage_mask=VK_PIPELINE_STAGE_2_BLIT_BIT,
-                                .src_access_mask=VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                .dst_stage_mask=VK_PIPELINE_STAGE_2_NONE,
-                                .dst_access_mask=0,
-                                .aspects=ImageAspects::COLOR}
+        cmd_buffer.barrier(
+            BarrierInfo(
+                curr_swapchain_image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                ImageAspects::COLOR,
+                VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_NONE,
+                0
+            )
         );
 
         cmd_buffer.end();
 
         cmd_buffer.submit(frame_in_flight.swapchain_img_ready_sema,
                           VK_PIPELINE_STAGE_2_BLIT_BIT,
-                          swapchain_render_done_semas[swapchain_img_idx],
+                          curr_render_done_sema,
                           VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                           frame_in_flight.rendering_done_fence
         );
 
-        VkResult result = swapchain.present(swapchain_render_done_semas[swapchain_img_idx], swapchain_img_idx);
+        VkResult result = swapchain.present(curr_render_done_sema, swapchain_img_idx);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
         if (result == VK_SUBOPTIMAL_KHR) should_rebuild_swapchain = true;
 
@@ -285,7 +295,7 @@ public:
 
     void draw(const Camera &camera, ResourceLoader &loader, u64 scene_idx){
         if (!Swapchain::presentable_swapchain_exists(window)){
-            std::println("Can't build swapchain");
+            std::println(stderr, "Can't build swapchain");
             return;
         }
         update_drawing_surfaces(false);

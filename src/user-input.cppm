@@ -3,6 +3,7 @@ module;
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_events.h>
 #include <cassert>
+#include <cstdio>
 #if !VK_PROJ_USE_IMPORT_STD
 #include <print>
 #endif
@@ -18,14 +19,14 @@ import glm;
 import camera;
 
 static bool is_fullscreen(SDL_Window *window) {
-    SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
     return (flags & SDL_WINDOW_FULLSCREEN) != 0;
 }
 
 static void toggle_fullscreen(SDL_Window *window) {
-    bool fullscreen = is_fullscreen(window);
+    const bool fullscreen = is_fullscreen(window);
     if (!SDL_SetWindowFullscreen(window, !fullscreen)) {
-        std::println("Failed to toggle fullscreen: {}", SDL_GetError());
+        std::println(stderr, "Failed to toggle fullscreen: {}", SDL_GetError());
     }
 }
 
@@ -84,7 +85,7 @@ private:
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
                 ivec2 window_size;
                 SDL_GetWindowSize(window, &window_size.x, &window_size.y);
-                SDL_WarpMouseInWindow(window, window_size.x/2, window_size.y/2);
+                SDL_WarpMouseInWindow(window, static_cast<float>(window_size.x) / 2.0f, static_cast<float>(window_size.y) / 2.0f);
                 SDL_SetWindowRelativeMouseMode(window, false);
                 return;
         }

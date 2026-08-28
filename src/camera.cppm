@@ -1,7 +1,7 @@
 module;
 
 #if !VK_PROJ_USE_IMPORT_STD
-#include <print>
+#include <algorithm>
 #endif
 
 export module camera;
@@ -35,8 +35,8 @@ public:
         yaw += mouse_movement_x * mouse_sensitivity;
         pitch -= mouse_movement_y * mouse_sensitivity;
 
-        if(pitch > 89.0f) pitch = 89.0f;
-        if(pitch < -89.0f) pitch = -89.0f;
+        pitch = std::min(pitch, 89.0f);
+        pitch = std::max(pitch, -89.0f);
 
         direction.x = glm::cos(glm::radians(yaw)) * glm::cos(glm::radians(pitch));
         direction.y = glm::sin(glm::radians(pitch));

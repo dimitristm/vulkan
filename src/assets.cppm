@@ -10,6 +10,8 @@ module;
 #include <oneapi/tbb/blocked_range.h>
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
+#include <SDL3/SDL_log.h>
+#include <cstdio>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <unordered_map>
@@ -121,7 +123,7 @@ template<typename T>
 using XXH128Map = std::unordered_map<XXH128_hash_t, T, XXH128Hasher, XXH128Equal>;
 
 static void XXH_CHECK(XXH_errorcode result){
-    if (result == XXH_ERROR) {std::println("XXH error"); abort();}
+    if (result == XXH_ERROR) {std::println(stderr, "XXH error"); abort();}
 }
 
 // Describes an lz4-compressed byte stream stored as a sequence of independently
@@ -154,7 +156,7 @@ struct CompressedStreamInfo{
 
     [[nodiscard]] static u32 block_count(u64 uncompressed_stream_size) {
         if (uncompressed_stream_size == 0) return 0;
-        u32 last_block_uncompressed_size = compute_uncompressed_last_block_size(uncompressed_stream_size);
+        const u32 last_block_uncompressed_size = compute_uncompressed_last_block_size(uncompressed_stream_size);
         return static_cast<u32>((uncompressed_stream_size - last_block_uncompressed_size) / BLOCK_SIZE) + 1;
     }
     [[nodiscard]] u32 block_count() const {
@@ -173,8 +175,8 @@ struct CompressedStreamInfo{
     // previous block" rule.
     static constexpr u32 compute_uncompressed_last_block_size(u64 uncompressed_stream_size) {
         if (uncompressed_stream_size == 0) return 0;
-        u64 full_blocks = uncompressed_stream_size / BLOCK_SIZE;
-        u64 remainder = uncompressed_stream_size % BLOCK_SIZE;
+        const u64 full_blocks = uncompressed_stream_size / BLOCK_SIZE;
+        const u64 remainder = uncompressed_stream_size % BLOCK_SIZE;
         if (remainder == 0) return BLOCK_SIZE;
         // The whole stream fits in a single (possibly small) block.
         if (full_blocks == 0) return static_cast<u32>(remainder);
@@ -192,23 +194,24 @@ static CompressedStreamInfo compress_and_write_stream(const std::vector<std::byt
     std::vector<std::vector<std::byte>> compressed_blocks(info.blocks.size());
     tbb::parallel_for(tbb::blocked_range<u32>(0, compressed_blocks.size()), [&](const tbb::blocked_range<u32> &range){
         for (u32 block_idx = range.begin(); block_idx < range.end(); ++block_idx) {
-            u64 src_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
-            u32 src_size   = info.uncompressed_size_of_block(block_idx);
+            const u64 src_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
+            const u32 src_size   = info.uncompressed_size_of_block(block_idx);
             const char* src = reinterpret_cast<const char*>(uncompressed_data.data() + src_offset);
 
-            i32 bound = LZ4_compressBound(static_cast<i32>(src_size));
-            compressed_blocks[block_idx].resize(static_cast<std::size_t>(bound));
+            const i32 bound = LZ4_compressBound(static_cast<i32>(src_size));
+            auto &comp_block = compressed_blocks[block_idx];
+            comp_block.resize(static_cast<std::size_t>(bound));
 
-            i32 compressed_size = LZ4_compress_HC(
-                src, reinterpret_cast<char*>(compressed_blocks[block_idx].data()),
+            const i32 compressed_size = LZ4_compress_HC(
+                src, reinterpret_cast<char*>(comp_block.data()),
                 static_cast<int>(src_size), static_cast<int>(bound), LZ4HC_CLEVEL_DEFAULT);
-            if (compressed_size <= 0) { std::println("lz4 block compression failed"); abort(); }
-            compressed_blocks[block_idx].resize(static_cast<std::size_t>(compressed_size));
+            if (compressed_size <= 0) { std::println(stderr, "lz4 block compression failed"); abort(); }
+            comp_block.resize(static_cast<std::size_t>(compressed_size));
         }
     });
     for (const auto &[i, comp_block] : std::views::enumerate(compressed_blocks)){
-        u64 file_offset = out.tellp();
-        out.write(reinterpret_cast<const char*>(comp_block.data()), util::get_data_size(comp_block));
+        const u64 file_offset = out.tellp();
+        out.write(reinterpret_cast<const char*>(comp_block.data()), static_cast<std::streamsize>(util::get_data_size(comp_block)));
         info.blocks[i] = { .offset = file_offset, .size = comp_block.size() };
     }
     return info;
@@ -230,14 +233,14 @@ private:
     friend class CompressedStreamPromise;
 
     void register_stream() {
-        std::lock_guard lock(mutex);
+        const std::scoped_lock lock(mutex);
         ++registered;
     }
 
     // Called exactly once per stream.
     void notify_stream_done(std::shared_ptr<CompressedStreamPromise> promise) {
         {
-            std::lock_guard lock(mutex);
+            const std::scoped_lock lock(mutex);
             completed.push_back(std::move(promise));
             ++finished;
         }
@@ -289,26 +292,26 @@ private:
     info(std::move(stream_info)),
     user_data(user_data)
     {
-        for (const auto &[i, block_info] : std::views::enumerate(info.blocks)){
-            compressed_buffers[i].resize(block_info.size);
+        for (auto &&[buf, block_info] : std::views::zip(compressed_buffers, info.blocks)) {
+            buf.resize(block_info.size);
         }
     }
 
     void decompress_block(u32 block_idx) {
-        u64 dest_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
-        u32 dest_size = info.uncompressed_size_of_block(block_idx);
+        const u64 dest_offset = CompressedStreamInfo::uncompressed_offset_of_block(block_idx);
+        const u32 dest_size = info.uncompressed_size_of_block(block_idx);
 
         char* dest = reinterpret_cast<char*>(uncompressed_buffer.data() + dest_offset);
         const char* src = reinterpret_cast<const char*>(compressed_buffers[block_idx].data());
-        i32 compressed_size = static_cast<i32>(info.blocks[block_idx].size);
+        const i32 compressed_size = static_cast<i32>(info.blocks[block_idx].size);
 
-        i32 result = LZ4_decompress_safe(src, dest, compressed_size, static_cast<i32>(dest_size));
+        const i32 result = LZ4_decompress_safe(src, dest, compressed_size, static_cast<i32>(dest_size));
 
         // Free vector memory early
         compressed_buffers[block_idx] = {};
 
         if (result <= 0) {
-            std::println("LZ4 decompression failed at block {}", block_idx);
+            std::println(stderr, "LZ4 decompression failed at block {}", block_idx);
             std::abort();
         }
 
@@ -363,7 +366,7 @@ private:
 
     std::jthread worker;
 
-    void io_loop(std::stop_token stoken) {
+    void io_loop(const std::stop_token& stoken) {
         while (true) {
             // While idle, sleep until either a read is submitted or a stop is requested,
             // instead of waking up on a timer for the whole lifetime of the program.
@@ -372,7 +375,7 @@ private:
             // is needed in the destructor.
             {
                 std::unique_lock lock(wake_mutex);
-                bool have_work = wake_cv.wait(lock, stoken, [this] { return pending_reads > 0; });
+                const bool have_work = wake_cv.wait(lock, stoken, [this] { return pending_reads > 0; });
                 if (!have_work) return; // stop was requested while idle
             }
 
@@ -384,7 +387,7 @@ private:
 
                 if (outcome.result == SDL_ASYNCIO_COMPLETE) {
                     {
-                        std::lock_guard lock(wake_mutex);
+                        const std::scoped_lock lock(wake_mutex);
                         --pending_reads;
                     }
                     // Fire-and-forget to the oneTBB thread pool
@@ -393,7 +396,7 @@ private:
                         delete job; // Drop shared_ptr reference count
                     });
                 } else {
-                    std::println("Read failed, SDL error: {}", SDL_GetError());
+                    std::println(stderr, "Read failed, SDL error: {}", SDL_GetError());
                     std::abort();
                 }
             }
@@ -404,9 +407,9 @@ public:
     CompressedStreamReader()
     :queue(SDL_CreateAsyncIOQueue())
     {
-        if (queue == nullptr) { std::println("SDL failed to initialize async io queue: {}", SDL_GetError()); abort(); }
+        if (queue == nullptr) { std::println(stderr, "SDL failed to initialize async io queue: {}", SDL_GetError()); abort(); }
         // Start the I/O polling thread
-        worker = std::jthread([this](std::stop_token st) { io_loop(st); });
+        worker = std::jthread([this](const std::stop_token& st) { io_loop(st); });
     }
  
     ~CompressedStreamReader() {
@@ -456,7 +459,7 @@ public:
  
         if (!stream_info.blocks.empty()) {
             {
-                std::lock_guard lock(wake_mutex);
+                const std::scoped_lock lock(wake_mutex);
                 pending_reads += stream_info.blocks.size();
             }
             wake_cv.notify_all();
@@ -570,7 +573,7 @@ struct IndexedVertices{
 
         const auto *pos_it = prim.findAttribute("POSITION");
         if (pos_it == prim.attributes.end()) {
-            std::println("error: mesh primitive without position attribute parsed");
+            std::println(stderr, "error: mesh primitive without position attribute parsed");
             std::abort();
         }
         const auto& pos_accessor = asset.accessors[pos_it->accessorIndex];
@@ -583,44 +586,52 @@ struct IndexedVertices{
             std::vector<Vertex> prim_vertices(vertex_count);
 
             if (pos_it != prim.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                    asset, asset.accessors[pos_it->accessorIndex],
-                    [&](fastgltf::math::fvec3 gltf_pos, std::size_t i) {
-                        prim_vertices[i].pos = { gltf_pos.x(), gltf_pos.y(), gltf_pos.z() };
+                auto it = prim_vertices.begin();
+                fastgltf::iterateAccessor<fastgltf::math::fvec3>(
+                    asset, pos_accessor,
+                    [&](fastgltf::math::fvec3 gltf_pos) {
+                        it->pos = { gltf_pos.x(), gltf_pos.y(), gltf_pos.z() };
+                        ++it;
                     }
                 );
             }
             if (norm_it != prim.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
+                auto it = prim_vertices.begin();
+                fastgltf::iterateAccessor<fastgltf::math::fvec3>(
                     asset, asset.accessors[norm_it->accessorIndex],
-                    [&](fastgltf::math::fvec3 gltf_norm, std::size_t i) {
-                        prim_vertices[i].normal = { gltf_norm.x(), gltf_norm.y(), gltf_norm.z() };
+                    [&](fastgltf::math::fvec3 gltf_norm) {
+                        it->normal = { gltf_norm.x(), gltf_norm.y(), gltf_norm.z() };
+                        ++it;
                     }
                 );
             }else{
-                std::println("warning: mesh primitive without normal attribute parsed");
+                std::println(stderr, "warning: mesh primitive without normal attribute parsed");
                 for (auto& vert : prim_vertices) vert.normal = { 0.f, 0.f, 0.f };
             }
             if (uv_it != prim.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
+                auto it = prim_vertices.begin();
+                fastgltf::iterateAccessor<fastgltf::math::fvec2>(
                     asset, asset.accessors[uv_it->accessorIndex],
-                    [&](fastgltf::math::fvec2 gltf_uv, std::size_t i) {
-                        prim_vertices[i].u = gltf_uv.x();
-                        prim_vertices[i].v = gltf_uv.y();
+                    [&](fastgltf::math::fvec2 gltf_uv) {
+                        it->u = gltf_uv.x();
+                        it->v = gltf_uv.y();
+                        ++it;
                     }
                 );
             }else{
-                std::println("warning: mesh primitive without uv coordinates parsed");
+                std::println(stderr, "warning: mesh primitive without uv coordinates parsed");
                 for (auto& vert : prim_vertices) { vert.u = 0.f; vert.v = 0.f; }
             }
             if (tan_it != prim.attributes.end()) {
-                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(
+                auto it = prim_vertices.begin();
+                fastgltf::iterateAccessor<fastgltf::math::fvec4>(
                     asset, asset.accessors[tan_it->accessorIndex],
-                    [&](fastgltf::math::fvec4 gltf_tangent, std::size_t i) {
-                        prim_vertices[i].tangent = { gltf_tangent.x(), gltf_tangent.y(), gltf_tangent.z(), gltf_tangent.w() };
+                    [&](fastgltf::math::fvec4 gltf_tangent) {
+                        it->tangent = { gltf_tangent.x(), gltf_tangent.y(), gltf_tangent.z(), gltf_tangent.w() };
+                        ++it;
                     });
             }else{
-                std::println("warning: mesh primitive without tangent coordinates parsed");
+                std::println(stderr, "warning: mesh primitive without tangent coordinates parsed");
                 for (auto& vert : prim_vertices) vert.tangent = { 1.f, 1.f, 1.f, 1.f };
             }
             return prim_vertices;
@@ -648,7 +659,7 @@ struct IndexedVertices{
     [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process before hashing");
         XXH3_state_t* state = XXH3_createState();
-        if (state == nullptr) {std::println("XXH3_createState returned null");}
+        if (state == nullptr) {std::println(stderr, "XXH3_createState returned null");}
         XXH_CHECK(XXH3_128bits_reset(state));
         XXH_CHECK(XXH3_128bits_update(state, verts.data(), util::get_data_size(verts)));
         XXH_CHECK(XXH3_128bits_update(state, indices.data(), util::get_data_size(indices)));
@@ -670,13 +681,13 @@ struct IndexedVertices{
         if (is_processed) return;
 
         std::size_t vertex_count = verts.size();
-        std::size_t index_count = indices.size();
+        const std::size_t index_count = indices.size();
 
         assert(vertex_count != 0);
         assert(index_count != 0);
 
         std::vector<u32> remap(vertex_count);
-        std::size_t unique_vertex_count = meshopt_generateVertexRemap(
+        const std::size_t unique_vertex_count = meshopt_generateVertexRemap(
             remap.data(), indices.data(), index_count, verts.data(), vertex_count, sizeof(Vertex));
 
         std::vector<Vertex> remapped_verts(unique_vertex_count);
@@ -689,13 +700,13 @@ struct IndexedVertices{
 
         meshopt_optimizeVertexCache(indices.data(), indices.data(), index_count, vertex_count);
         meshopt_optimizeOverdraw(indices.data(), indices.data(), index_count,
-            &verts[0].pos.x, vertex_count, sizeof(Vertex), 1.05f);
-        std::size_t used_vertex_count = meshopt_optimizeVertexFetch(
+            &verts.front().pos.x, vertex_count, sizeof(Vertex), 1.05f);
+        const std::size_t used_vertex_count = meshopt_optimizeVertexFetch(
             verts.data(), indices.data(), index_count, verts.data(), vertex_count, sizeof(Vertex));
         verts.resize(used_vertex_count);
 
-        std::size_t vertex_bytes = util::get_data_size(verts);
-        std::size_t index_bytes = util::get_data_size(indices);
+        const std::size_t vertex_bytes = util::get_data_size(verts);
+        const std::size_t index_bytes = util::get_data_size(indices);
         data.resize(vertex_bytes + index_bytes);
         std::memcpy(data.data(), verts.data(), vertex_bytes);
         std::memcpy(data.data() + vertex_bytes, indices.data(), index_bytes);
@@ -715,11 +726,11 @@ struct IndexedVertices{
     }
 };
 struct MeshPrimitive{
-    u32 indexed_verts_meta_idx;
-    u32 sampler_idx;
-    u32 albedo_meta_idx;
-    u32 normal_map_meta_idx;
-    u32 metallic_roughness_meta_idx;
+    u32 indexed_verts_meta_idx{};
+    u32 sampler_idx{};
+    u32 albedo_meta_idx{};
+    u32 normal_map_meta_idx{};
+    u32 metallic_roughness_meta_idx{};
     fvec4 base_color_factor { 1.f, 1.f, 1.f, 1.f };
     f32 metallic_factor = 1.f;
     f32 roughness_factor = 1.f;
@@ -788,7 +799,7 @@ struct Image{
         } else if (type == Type::MetallicRoughness) {
             raw_mips = make_mips_metal_rough(pixels_RGBA, static_cast<i32>(meta.width), static_cast<i32>(meta.height), mip_quality);
         } else {
-            std::println("Unknown Image type");
+            std::println(stderr, "Unknown Image type");
             std::abort();
         }
 
@@ -799,13 +810,14 @@ struct Image{
         // stream). Reverse in place so raw_mips[0] is the lowest-resolution mip.
         std::ranges::reverse(raw_mips);
 
-        this->meta.mips.resize(raw_mips.size());
+        this->meta.mips.clear();
+        this->meta.mips.reserve(raw_mips.size());
 
         for (const auto &[i, raw_mip] : std::views::enumerate(raw_mips)) {
             // raw_mips is now lowest-res-first, so mip level = (count-1-i).
-            u32 mip_level  = static_cast<u32>(raw_mips.size() - 1 - i);
-            u32 mip_width  = std::max(1u, meta.width >> mip_level);//todo: mip_dimensions funcs
-            u32 mip_height = std::max(1u, meta.height >> mip_level);
+            const u32 mip_level  = static_cast<u32>(raw_mips.size() - 1 - i);
+            const u32 mip_width  = std::max(1u, meta.width >> mip_level);//todo: mip_dimensions funcs
+            const u32 mip_height = std::max(1u, meta.height >> mip_level);
             const u8* mip_pixels = reinterpret_cast<const u8*>(raw_mip.data());
 
             std::vector<std::byte> compressed_mip;
@@ -813,16 +825,16 @@ struct Image{
             if (type == Type::Albedo) {
                 compressed_mip = to_bc7(mip_pixels, mip_width, mip_height, bcn_quality, BC7QualityType::PERCEPTUAL);
             } else {
-                i32 channel0 = (type == Type::Normal) ? 0 : 1;
-                i32 channel1 = (type == Type::Normal) ? 1 : 2;
+                const i32 channel0 = (type == Type::Normal) ? 0 : 1;
+                const i32 channel1 = (type == Type::Normal) ? 1 : 2;
                 compressed_mip = to_bc5(mip_pixels, mip_width, mip_height, channel0, channel1, bcn_quality);
             }
 
-            std::size_t offset = this->data.size();
-            std::size_t size   = compressed_mip.size();
+            const std::size_t offset = this->data.size();
+            const std::size_t size   = compressed_mip.size();
 
             this->data.insert(this->data.end(), compressed_mip.begin(), compressed_mip.end());
-            this->meta.mips[i] = {.offset = offset, .size = size};
+            this->meta.mips.push_back({.offset = offset, .size = size});
         }
 
         is_processed = true;
@@ -840,9 +852,9 @@ struct Image{
     [[nodiscard]] XXH128_hash_t hash() const{
         assert(!is_processed && "Don't process an image before hashing it");
         XXH3_state_t* state = XXH3_createState();
-        if (state == nullptr) {std::println("XXH3_createState returned null");}
+        if (state == nullptr) {std::println(stderr, "XXH3_createState returned null");}
         XXH_CHECK(XXH3_128bits_reset(state));
-        XXH_CHECK(XXH3_128bits_update(state, pixels_RGBA, meta.width * meta.height * 4));
+        XXH_CHECK(XXH3_128bits_update(state, pixels_RGBA, static_cast<size_t>(meta.width) * meta.height * 4));
         XXH_CHECK(XXH3_128bits_update(state, &type, sizeof(type)));
         XXH128_hash_t hash = XXH3_128bits_digest(state);
         XXH3_freeState(state);
@@ -853,9 +865,9 @@ struct Image{
 
 struct Header{
     enum class Signatures : u64{
-        valid = 0xBF269A65A2E91226,
         unfinished = 0x85AC8E6951FC737D,
-    } signature;
+        valid = 0xBF269A65A2E91226,
+    } signature = Signatures::unfinished;
 };
 // Between the Header and ToC, there will be:
 // 1. Data blob: images, vertices, indices.
@@ -869,12 +881,12 @@ struct TableOfContents{
     std::vector<IndexedVerticesMetadata> indexed_verts_metadata;
 };
 struct Footer{
-    u64 offset_to_samplers;
-    u64 offset_to_toc;
-    u64 assetpack_version;
+    u64 offset_to_samplers{};
+    u64 offset_to_toc{};
+    u64 assetpack_version{};
     enum class EndSignature : u64{
         valid_end_of_file = 0x2B7FE37FC301CB84,
-    } end_signature;
+    } end_signature = EndSignature::valid_end_of_file;
 };
 
 export class Builder{
@@ -912,7 +924,7 @@ public:
     default_bcn_quality(default_bcn_quality),
     default_mip_quality(default_mip_quality)
     {
-        Header header{.signature = Header::Signatures::unfinished};
+        const Header header{.signature = Header::Signatures::unfinished};
         write(header);
     }
 
@@ -930,19 +942,19 @@ public:
         fastgltf::Parser parser;
         fastgltf::GltfFileStream file_stream(path);
         if (!file_stream.isOpen()) {
-            std::println("Cannot open {}", path.string()); abort();
+            std::println(stderr, "Cannot open {}", path.string()); abort();
         }
 
         const auto options = fastgltf::Options::LoadExternalBuffers | fastgltf::Options::DecomposeNodeMatrices;
 
         auto expected_asset = parser.loadGltf(file_stream, path.parent_path(), options);
         if (expected_asset.error() != fastgltf::Error::None) {
-            std::println("fastgltf error: {}", fastgltf::getErrorMessage(expected_asset.error()));
+            std::println(stderr, "fastgltf error: {}", fastgltf::getErrorMessage(expected_asset.error()));
             abort();
         }
         fastgltf::Asset& asset = expected_asset.get();
         if (auto err = fastgltf::validate(asset); err != fastgltf::Error::None) {
-            std::println("fastgltf validation error: {}", fastgltf::getErrorMessage(err));
+            std::println(stderr, "fastgltf validation error: {}", fastgltf::getErrorMessage(err));
             abort();
         }
 
@@ -957,7 +969,7 @@ public:
             if (auto it = dedup.find(hash); it != dedup.end()){
                 return it->second;
             }
-            u32 idx = static_cast<u32>(dedup.size());
+            const u32 idx = static_cast<u32>(dedup.size());
             storage.push_back(item);
             dedup[hash] = idx;
             return idx;
@@ -971,7 +983,7 @@ public:
             if (auto it = dedup.find(hash); it != dedup.end()){
                 return it->second;
             };
-            u32 idx = static_cast<u32>(dedup.size());
+            const u32 idx = static_cast<u32>(dedup.size());
             dedup[hash] = idx;
             data.process();
             data.write(out, toc_metadata_vector);
@@ -1031,33 +1043,33 @@ public:
                                 std::memcpy(raw_bytes.data(),
                                     arr.bytes.data() + bv.byteOffset, bv.byteLength);
                             },
-                            [](auto&&) { std::println("Unsupported buffer source"); abort(); }
+                            [](auto&&) { std::println(stderr, "Unsupported buffer source"); abort(); }
                         }, buf.data);
                     },
                     [&](const fastgltf::sources::URI& uri_src) {
                         auto img_path = asset_dir / uri_src.uri.fspath();
                         std::ifstream file(img_path, std::ios::binary | std::ios::ate);
-                        if (!file) { std::println("Cannot open image {}", img_path.string()); abort(); }
+                        if (!file) { std::println(stderr, "Cannot open image {}", img_path.string()); abort(); }
                         auto sz = static_cast<std::size_t>(file.tellg());
                         file.seekg(0);
                         raw_bytes.resize(sz);
-                        file.read(reinterpret_cast<char*>(raw_bytes.data()), sz);
+                        file.read(reinterpret_cast<char*>(raw_bytes.data()), static_cast<std::streamsize>(sz));
                     },
-                    [](auto&&) { std::println("Unsupported image source"); abort(); }
+                    [](auto&&) { std::println(stderr, "Unsupported image source"); abort(); }
                 }, fastgltf_img.data);
                 return raw_bytes;
             }();
 
-            int width, height, channels;
+            int width = 0, height = 0, channels = 0;
             stbi_uc* pixels = stbi_load_from_memory(
                 reinterpret_cast<const stbi_uc*>(raw_image_bytes.data()),
                 static_cast<int>(raw_image_bytes.size()),
                 &width, &height, &channels, 4);
-            if (!pixels) { std::println("stbi failed to decode image"); abort(); }
+            if (!pixels) { std::println(stderr, "stbi failed to decode image"); abort(); }
 
             Image img(pixels, static_cast<u32>(width), static_cast<u32>(height), default_bcn_quality, default_mip_quality, type);
 
-            u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
+            const u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.images_meta, img, toc.image_metadata);
             stbi_image_free(pixels);
             loaded_gltf_images[gltf_hash] = idx;
             return idx;
@@ -1077,7 +1089,7 @@ public:
             if(prim.materialIndex.has_value()){
                 const auto &fastgltf_material = asset.materials[*prim.materialIndex];
 
-                u32 sampler_idx = [&](){
+                const u32 sampler_idx = [&](){
                     if (fastgltf_material.pbrData.baseColorTexture.has_value()){
                         const auto &tex = asset.textures[fastgltf_material.pbrData.baseColorTexture->textureIndex];
                         if (tex.samplerIndex.has_value()){
@@ -1101,7 +1113,7 @@ public:
                     .normal_map_meta_idx = image_idx(fastgltf_material.normalTexture, Image::Type::Normal),
                     .metallic_roughness_meta_idx = image_idx(fastgltf_material.pbrData.metallicRoughnessTexture, Image::Type::MetallicRoughness),
                     .sampler_idx = sampler_idx,
-                    .base_color_factor = {base_color[0], base_color[1], base_color[2], base_color[3]},
+                    .base_color_factor = {base_color.x(), base_color.y(), base_color.z(), base_color.w()},
                     .metallic_factor = fastgltf_material.pbrData.metallicFactor,
                     .roughness_factor = fastgltf_material.pbrData.roughnessFactor,
                 };
@@ -1120,8 +1132,8 @@ public:
 
         const auto get_or_add_mesh_primitive = [&](const fastgltf::Primitive &prim)->u32{
             IndexedVertices indexed_verts(asset, prim);
-            u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.indexed_verts_meta, indexed_verts, toc.indexed_verts_metadata);
-            MaterialData mat = get_material_data(prim);
+            const u32 idx = deduplicate_data_and_add_Toc_metadata(dedup.indexed_verts_meta, indexed_verts, toc.indexed_verts_metadata);
+            const MaterialData mat = get_material_data(prim);
 
             MeshPrimitive mp{
                 .indexed_verts_meta_idx = idx,
@@ -1160,14 +1172,14 @@ public:
                 const auto &node = asset.nodes[node_idx];
                 fmat4 node_transform(1.f);
                 if (const auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-                    fmat4 T = glm::gtc::translate(fmat4(1.f), fvec3(trs->translation[0], trs->translation[1], trs->translation[2]));
-                    glm::quat q(trs->rotation[3], trs->rotation[0],
-                                trs->rotation[1], trs->rotation[2]);
-                    fmat4 R = glm::gtc::mat4_cast(q);
-                    fmat4 S = glm::gtc::scale(fmat4(1.f), fvec3(trs->scale[0], trs->scale[1], trs->scale[2]));
+                    const fmat4 T = glm::gtc::translate(fmat4(1.f), fvec3(trs->translation.x(), trs->translation.y(), trs->translation.z()));
+                    glm::quat q(trs->rotation.w(), trs->rotation.x(),
+                                trs->rotation.y(), trs->rotation.z());
+                    const fmat4 R = glm::gtc::mat4_cast(q);
+                    const fmat4 S = glm::gtc::scale(fmat4(1.f), fvec3(trs->scale.x(), trs->scale.y(), trs->scale.z()));
                     node_transform = T * R * S;
                 }
-                fmat4 world_transform = parent_transform * node_transform;
+                const fmat4 world_transform = parent_transform * node_transform;
                 if (node.meshIndex.has_value()) {
                     ap_scene.mesh_idx.push_back(get_or_add_mesh(static_cast<u32>(*node.meshIndex)));
                     ap_scene.transforms.push_back(world_transform);
@@ -1186,10 +1198,10 @@ public:
 
     Builder &build(){
 
-        u64 offset_to_samplers = out.tellp();
+        const u64 offset_to_samplers = out.tellp();
         write_vector(samplers);
 
-        Footer footer{
+        const Footer footer{
             .offset_to_samplers = offset_to_samplers,
             .offset_to_toc = static_cast<u64>(out.tellp()),
             .assetpack_version = 0,
@@ -1229,7 +1241,7 @@ public:
 
         write(footer);
 
-        Header done{.signature = Header::Signatures::valid};
+        const Header done{.signature = Header::Signatures::valid};
         out.seekp(0, std::ios::beg);
         write(done.signature);
         out.flush();
@@ -1256,7 +1268,7 @@ private:
         in(SDL_AsyncIOFromFile(this->filepath.string().c_str(), "r"))
         {
             if(in == nullptr){
-                std::println("AssetLoader::File couldn't open file {}. SDL Error: {}", this->filepath.string(), SDL_GetError());
+                std::println(stderr, "AssetLoader::File couldn't open file {}. SDL Error: {}", this->filepath.string(), SDL_GetError());
                 abort();
             }
         }
@@ -1382,7 +1394,6 @@ private:
 
         VulkanResources(VulkanEngine &vk):
             vk(vk),
-            cmd_pool(),
             submitter(cmd_pool),
             uploader(&vk, cmd_pool, 64UL * 1024 * 1024),
             vertices(1500000),
@@ -1411,14 +1422,14 @@ public:
     queue(SDL_CreateAsyncIOQueue())
     {
         if (queue == nullptr) {
-            std::println("Could not create async I/O queue: {}", SDL_GetError());
+            std::println(stderr, "Could not create async I/O queue: {}", SDL_GetError());
             abort();
         }
     }
-    ~ResourceLoader(){
+    ~ResourceLoader() noexcept {
         for (const auto &file : files){
             if (!SDL_CloseAsyncIO(file.in, false, queue, nullptr)) {
-                std::println("close failed: {}", SDL_GetError());
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "close failed: %s", SDL_GetError());
             }
         }
         SDL_DestroyAsyncIOQueue(queue);
@@ -1426,20 +1437,20 @@ public:
 
     FileID load_assetpack_table_of_contents(const std::filesystem::path &filepath){
         files.emplace_back(filepath);
-        FileID file_id = files.size() - 1;
+        const FileID file_id = files.size() - 1;
         const File& file = files.back();
 
-        u64 file_size = [&](){
-            i64 raw_size = SDL_GetAsyncIOSize(file.in);
+        const u64 file_size = [&](){
+            const i64 raw_size = SDL_GetAsyncIOSize(file.in);
             if (raw_size < 0) {
-                std::println("Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
+                std::println(stderr, "Could not get size of '{}': {}", file.filepath.string(), SDL_GetError());
                 std::abort();
             }
             return raw_size;
         }();
 
         if (file_size < sizeof(Assetpack::Header) + sizeof(Assetpack::Footer)) {
-            std::println("'{}': file too small", file.filepath.string());
+            std::println(stderr, "'{}': file too small", file.filepath.string());
             abort();
         }
 
@@ -1449,7 +1460,7 @@ public:
             SDL_AsyncIOOutcome outcome{};
             SDL_ReadAsyncIO(file.in, dst, offset, size, queue, nullptr);
             if (!SDL_WaitAsyncIOResult(queue, &outcome, -1) || outcome.result != SDL_ASYNCIO_COMPLETE) {
-                std::println("Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
+                std::println(stderr, "Read failed for '{}': {}", file.filepath.string(), SDL_GetError());
                 abort();
             }
         };
@@ -1458,11 +1469,11 @@ public:
         Assetpack::Header header{};
         blocking_read(&header, 0, sizeof(header));
         if (header.signature == Assetpack::Header::Signatures::unfinished) {
-            std::println("'{}': build() did not complete", file.filepath.string());
+            std::println(stderr, "'{}': build() did not complete", file.filepath.string());
             abort();
         }
         if (header.signature != Assetpack::Header::Signatures::valid) {
-            std::println("'{}': unrecognised header signature 0x{:016X}", file.filepath.string(),
+            std::println(stderr, "'{}': unrecognised header signature 0x{:016X}", file.filepath.string(),
                 static_cast<u64>(header.signature));
             abort();
         }
@@ -1471,24 +1482,24 @@ public:
         Assetpack::Footer footer{};
         blocking_read(&footer, file_size - sizeof(Assetpack::Footer), sizeof(Assetpack::Footer));
         if (footer.end_signature != Assetpack::Footer::EndSignature::valid_end_of_file) {
-            std::println("'{}': bad footer end signature", file.filepath.string());
+            std::println(stderr, "'{}': bad footer end signature", file.filepath.string());
             abort();
         }
-        u64 metadata_region_end = file_size - sizeof(Assetpack::Footer);
+        const u64 metadata_region_end = file_size - sizeof(Assetpack::Footer);
         if (footer.offset_to_samplers > footer.offset_to_toc || footer.offset_to_toc > metadata_region_end) {
-            std::println("'{}': corrupt footer offsets", file.filepath.string());
+            std::println(stderr, "'{}': corrupt footer offsets", file.filepath.string());
             abort();
         }
 
         // Samplers + ToC: one contiguous read covering everything from the start
         // of the samplers to the end of the ToC (i.e. right up to the footer).
-        u64 tail_offset = footer.offset_to_samplers;
+        const u64 tail_offset = footer.offset_to_samplers;
         u64 tail_size = metadata_region_end - tail_offset;
         std::vector<std::byte> buf(tail_size);
         blocking_read(buf.data(), tail_offset, tail_size);
 
         const std::byte* p = buf.data();
-        const std::byte* end = buf.data() + tail_size;
+        [[maybe_unused]] const std::byte* end = buf.data() + tail_size;
 
         const auto read = [&]<typename T>(T& v) {
             assert(p + sizeof(T) <= end && "read past end of samplers/toc section");
@@ -1512,17 +1523,17 @@ public:
         read_vec(file_samplers);
         for (const auto& s : file_samplers) {
             if (!sampler_idx.contains(s)) {
-                u32 idx = sampler_idx.size();
+                const u32 idx = sampler_idx.size();
                 sampler_idx[s] = idx;
             }
         }
 
         seek(footer.offset_to_toc - tail_offset);
 
-        u32 mesh_base = meshes.size();
-        u32 prim_base = primitives.size();
-        u32 img_base = image_assets.size();
-        u32 iv_base = indexed_verts.size();
+        const u32 mesh_base = meshes.size();
+        const u32 prim_base = primitives.size();
+        const u32 img_base = image_assets.size();
+        const u32 iv_base = indexed_verts.size();
 
         // Scenes
         size_t scene_count{}; read(scene_count);
@@ -1610,7 +1621,8 @@ public:
     }
 
     void load_everything_to_gpu() {
-        VulkanResources &vkr = *vk_resources;
+        assert(vk_resources.has_value());
+        VulkanResources &vkr = vk_resources.value();
 
         for (auto &iv : indexed_verts) {
             bool needs_load = false;
@@ -1627,7 +1639,7 @@ public:
             }
         }
 
-        u32 first_new_texture = vkr.textures.size();
+        const u32 first_new_texture = vkr.textures.size();
         for (ImageAsset &ia : image_assets) {
             if (ia.vulkan_image_idx != ImageAsset::VULKAN_IMAGE_NOT_LOADED) continue;
             vkr.textures.emplace_back(ia.width, ia.height, ia.format, ia.mips.size());
@@ -1638,24 +1650,24 @@ public:
 
         {
             std::vector<BarrierInfo> barriers;
-            for (u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
-                barriers.push_back(BarrierInfo{
-                    .img = vkr.textures[i],
-                    .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .src_stage_mask = VK_PIPELINE_STAGE_2_NONE,
-                    .src_access_mask = 0,
-                    .dst_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dst_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .aspects = ImageAspects::COLOR,
-                });
+            for (const u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
+                barriers.emplace_back(
+                    vkr.textures[i],
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    ImageAspects::COLOR,
+                    VK_PIPELINE_STAGE_2_NONE,
+                    0,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT
+                );
             }
             vkr.submitter.submit([&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
         }
 
         //maybe have only one promise group and pass 0 or 1 for mesh or texture
         mesh_promises.process_all_promises(
-            [&](std::shared_ptr<CompressedStreamPromise> p){
+            [&](const std::shared_ptr<CompressedStreamPromise>& p){
                 const IndexedVerticesAsset &iva = *static_cast<const IndexedVerticesAsset*>(p->user_data);
                 for (const auto &lod : iva.lods) {
                     vkr.uploader.queue_upload(p->buffer().data() + lod.stream_vertex_offset, vkr.vertices,
@@ -1668,11 +1680,11 @@ public:
         vkr.uploader.begin_uploads();
 
         img_promises.process_all_promises(
-            [&](std::shared_ptr<CompressedStreamPromise> p){
+            [&](const std::shared_ptr<CompressedStreamPromise>& p){
                 const ImageAsset &ia = *static_cast<const ImageAsset*>(p->user_data);
-                u32 mip_count = static_cast<u32>(ia.mips.size());
+                const u32 mip_count = static_cast<u32>(ia.mips.size());
                 for (auto &&[stream_idx, r] : std::views::enumerate(ia.mips)) {
-                    u32 vk_mip_level = mip_count - 1 - static_cast<u32>(stream_idx);
+                    const u32 vk_mip_level = mip_count - 1 - static_cast<u32>(stream_idx);
                     vkr.uploader.queue_upload(p->buffer().data() + r.offset,
                         vkr.textures[ia.vulkan_image_idx], r.size, vk_mip_level, 0, 1, ImageAspects::COLOR);
                 }
@@ -1682,17 +1694,17 @@ public:
         vkr.uploader.begin_and_finish_uploads();
         {
             std::vector<BarrierInfo> barriers;
-            for (u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
-                barriers.push_back(BarrierInfo{
-                    .img = vkr.textures[i],
-                    .old_layout_or_undefined_to_discard_current_data = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    .src_stage_mask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .src_access_mask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dst_stage_mask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    .dst_access_mask = VK_ACCESS_2_SHADER_READ_BIT,
-                    .aspects = ImageAspects::COLOR,
-                });
+            for (const u32 i : std::views::iota(first_new_texture, static_cast<u32>(vkr.textures.size()))) {
+                barriers.emplace_back(
+                    vkr.textures[i],
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    ImageAspects::COLOR,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_READ_BIT
+                );
             }
             vkr.submitter.submit([&](){ vkr.submitter.cmd_buffer().barrier_span(barriers); });
             // todo probably doesn't need to be immediately submitted... but we do need to check that it's done before we let the renderer use them
@@ -1711,17 +1723,18 @@ public:
 
         previously_prepared_scene = scene_idx;
         draw_commands.clear();
-        auto &vkr = *vk_resources;
+        assert(vk_resources.has_value());
+        auto &vkr = vk_resources.value();
         const Scene &scene = scenes.at(scene_idx);
 
-        for (const auto &[i, mesh_idx] : std::views::enumerate(scene.mesh_idx)) {
+        for (const auto &[mesh_idx, transform] : std::views::zip(scene.mesh_idx, scene.transforms)) {
             const Mesh &mesh = meshes[mesh_idx];
-            for (u32 prim_idx : mesh.mesh_prim_idx) {
+            for (const u32 prim_idx : mesh.mesh_prim_idx) {
                 const MeshPrimitive &prim = primitives[prim_idx];
-                const IndexedVerticesAsset::Lod &lod = indexed_verts[prim.indexed_verts_idx].lods[0];
-                u32 draw_idx = draw_commands.size();
-                InstanceInfo inst_info{
-                    .transform = scene.transforms[i], //why is scenes a SoA again? i think it shouldn't be anymore
+                const IndexedVerticesAsset::Lod &lod = indexed_verts[prim.indexed_verts_idx].lods.front();
+                const u32 draw_idx = draw_commands.size();
+                const InstanceInfo inst_info{
+                    .transform = transform,
                     .material{
                         .albedo_idx = image_assets[prim.material.albedo_idx].vulkan_image_idx,
                         .normal_map_idx = image_assets[prim.material.normal_map_idx].vulkan_image_idx,

@@ -3,6 +3,7 @@ module;
 #include <bits/stdint-uintn.h>
 #include <cassert>
 #include <vulkan/vulkan_core.h>
+#include <cstdio>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <cstring>
@@ -34,12 +35,11 @@ void ImmediateSubmitter::submit(const std::function<void()> &function){
 }
 
 HostToDeviceUploader::HostToDeviceUploader(
-    VulkanEngine *const vk, const CommandPool &cmd_pool,
+    VulkanEngine *vk, const CommandPool &cmd_pool,
     u64 staging_buffer_size)
 :vk(vk),
 staging_buffer(staging_buffer_size),
-cmd_pool(cmd_pool),
-used_staging_buffer_bytes(0)
+cmd_pool(cmd_pool)
 {
     in_progress_uploads.reserve(128);
     queued_buffer_uploads.reserve(128);
@@ -53,19 +53,19 @@ used_staging_buffer_bytes(0)
 }
 
 HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_region(u64 desired_size, bool require_desired_size){
+    assert(used_staging_buffer_bytes <= staging_buffer.get_capacity_in_bytes());
     u64 remaining_size = staging_buffer.get_capacity_in_bytes() - used_staging_buffer_bytes;
-    assert((i64)remaining_size > -1);
     if (remaining_size == 0 || (require_desired_size && remaining_size < desired_size)) {
         begin_and_finish_uploads();
         remaining_size = staging_buffer.get_capacity_in_bytes();
         if (require_desired_size && staging_buffer.get_capacity_in_bytes() < desired_size){
-            std::println("Staging buffer not large enough for write with require_desired_size");
+            std::println(stderr, "Staging buffer not large enough for write with require_desired_size");
             std::abort();
         }
     }
 
     FreeStagingRegion region{
-        .offset = static_cast<u64>(used_staging_buffer_bytes),
+        .offset = used_staging_buffer_bytes,
         .size = std::min(desired_size, remaining_size),
     };
     used_staging_buffer_bytes += region.size;
@@ -76,11 +76,11 @@ HostToDeviceUploader::FreeStagingRegion HostToDeviceUploader::get_free_staging_r
 // todo clearer naming convention for dst_offset. which dst? we have the staging as a dst in the memcpy
 // and then we have the dst vulkan buffer. maybe just rename it to dst_vk_buffer.
 void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const VulkanBuffer &dst, u64 dst_offset){
-    std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
-                (char*)src,
+    std::memcpy(static_cast<char*>(staging_buffer.get_mapped_data()) + free_region.offset,
+                src,
                 free_region.size
     );
-    VkBufferCopy2 copy{
+    const VkBufferCopy2 copy{
         .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
         .pNext = nullptr,
         .srcOffset = free_region.offset,
@@ -97,8 +97,8 @@ void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const voi
 }
 
 void HostToDeviceUploader::stage_upload(FreeStagingRegion free_region, const void *src, const Image &dst, const VkBufferImageCopy2 &copy){
-    std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
-                (char*)src,
+    std::memcpy(static_cast<char*>(staging_buffer.get_mapped_data()) + free_region.offset,
+                src,
                 free_region.size
     );
     for (auto &queued_upload : queued_image_uploads){
@@ -117,10 +117,10 @@ void HostToDeviceUploader::queue_upload(const void *src, const VulkanBuffer &dst
 
     u64 remaining_size = byte_count;
     while (remaining_size > 0){
-        FreeStagingRegion free_region = get_free_staging_region(remaining_size, false);
+        const FreeStagingRegion free_region = get_free_staging_region(remaining_size, false);
 
-        u64 bytes_already_written = byte_count - remaining_size;
-        stage_upload(free_region, (const char*)src + bytes_already_written, dst, dst_offset + bytes_already_written );
+        const u64 bytes_already_written = byte_count - remaining_size;
+        stage_upload(free_region, static_cast<const char*>(src) + bytes_already_written, dst, dst_offset + bytes_already_written );
 
         remaining_size -= free_region.size;
     }
@@ -136,8 +136,8 @@ static auto pop_back_and_return(Container& c) {
 void HostToDeviceUploader::begin_uploads(){
     // todo: log a warning if we call this and there are no queued uploads
     const auto add_in_progress_upload = [&]() -> InProgressUpload& {
-        CommandBuffer cmd_buffer = cmd_buffer_pool.empty() ? CommandBuffer(cmd_pool)
-                                                           : pop_back_and_return(cmd_buffer_pool);
+        const CommandBuffer cmd_buffer = cmd_buffer_pool.empty() ? CommandBuffer(cmd_pool)
+                                                                 : pop_back_and_return(cmd_buffer_pool);
         GpuFence fence = fence_pool.empty() ? GpuFence(false)
                                             : pop_back_and_return(fence_pool);
         in_progress_uploads.emplace_back(cmd_buffer, std::move(fence));
@@ -240,7 +240,7 @@ void HostToDeviceUploader::queue_upload(
     ImageAspects aspects,
     const VkOffset3D &img_offset)
 {
-    FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
+    const FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
     auto img_region = buffer_image_copy2(dst, free_region.offset, mip_level, base_layer, layer_count, aspects, img_offset);
     stage_upload(free_region, src, dst, img_region);
 }
@@ -254,10 +254,10 @@ void HostToDeviceUploader::add_to_last_upload(const void *src, u64 byte_count){
     assert(active_upload_dst != nullptr);
     assert(byte_count != 0);
 
-    FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
+    const FreeStagingRegion free_region = get_free_staging_region(byte_count, true);
 
     if (queued_buffer_uploads.empty() || queued_buffer_uploads.back().dst != active_upload_dst){
-        VkBufferCopy2 copy{
+        const VkBufferCopy2 copy{
             .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
             .pNext = nullptr,
             .srcOffset = free_region.offset,
@@ -270,8 +270,8 @@ void HostToDeviceUploader::add_to_last_upload(const void *src, u64 byte_count){
         QueuedBufferUpload &upload = queued_buffer_uploads.back();
         upload.copy_info.back().size += byte_count;
     }
-    std::memcpy((char*)staging_buffer.get_mapped_data() + free_region.offset,
-                (const char*)src,
+    std::memcpy(static_cast<char*>(staging_buffer.get_mapped_data()) + free_region.offset,
+                static_cast<const char*>(src),
                 byte_count
     );
     active_upload_next_dst_offset += byte_count;

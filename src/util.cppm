@@ -1,6 +1,7 @@
 module;
 #include <SDL3/SDL_video.h>
 #include <emmintrin.h>
+#include <cstdio>
 #if !VK_PROJ_USE_IMPORT_STD
 #include <thread>
 #include <chrono>
@@ -29,17 +30,17 @@ export ivec2 get_window_size_in_pixels(SDL_Window *window){
 }
 
 export ivec2 get_monitor_size_in_pixels(SDL_Window *window){
-    SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(window);
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
 
     if (mode == nullptr) {
-        std::println("Error: couldn't get display mode. SDL error: {}", SDL_GetError());
-        std::println("Falling back to window size.");
+        std::println(stderr, "Error: couldn't get display mode. SDL error: {}", SDL_GetError());
+        std::println(stderr, "Falling back to window size.");
         return get_window_size_in_pixels(window);
     }
     return{
-        std::ceil(mode->w * mode->pixel_density),
-        std::ceil(mode->h * mode->pixel_density),
+        std::ceil(static_cast<float>(mode->w) * mode->pixel_density),
+        std::ceil(static_cast<float>(mode->h) * mode->pixel_density),
     };
 }
 
@@ -47,7 +48,7 @@ export ivec2 get_monitor_size_in_pixels(SDL_Window *window){
 export fmat4 perspective_projection(f32 horizontal_fov_in_degrees, f32 horizontal_to_vertical_ratio, f32 near_z, f32 far_z){
     // todo numerical precision is there a reason to pass vertical_to_horizontal_ratio or horizontal to vertical? pick whichever has better precision or if it doesn't matter do h/v
     const f32 half_fov = glm::radians(horizontal_fov_in_degrees)/2;
-    f32 tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
+    const f32 tan = glm::tan(half_fov);// will it help the compiler if i calculate 1/tan once and then multiply it instead of divide it twice?
 
     // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
     return fmat4{
@@ -157,7 +158,7 @@ public:
     }
 
     [[nodiscard]] Duration elapsed() const{
-        if (!ended()) return Time::now() - start_time;
+        if (!end_time.has_value()) return Time::now() - start_time;
 
         return *end_time - start_time;
     }
@@ -236,10 +237,10 @@ public:
     }
 
     void end_frame(){
-        if (Duration target = Duration::from_sec(1.0 / static_cast<f64>(max_fps));
+        if (const Duration target = Duration::from_sec(1.0 / static_cast<f64>(max_fps));
             frame_limit_enabled && frame_timer.elapsed() < target)
         {
-            Duration remaining = target - frame_timer.elapsed();
+            const Duration remaining = target - frame_timer.elapsed();
 
             if (remaining > Duration::from_ms(1.0)){
                 std::this_thread::sleep_for((remaining - Duration::from_ms(1.0)).chrono());
@@ -250,7 +251,7 @@ public:
         frame_timer.end();
         frame_duration = frame_timer.elapsed();
 
-        f64 instant_fps = 1.0 / frame_duration.to_sec();
+        const f64 instant_fps = 1.0 / frame_duration.to_sec();
         ema_fps = ema_fps * 0.9 + instant_fps * 0.1;
     }
 
@@ -299,5 +300,6 @@ class PassKey {
 
     PassKey& operator=(const PassKey&) = delete;
     PassKey& operator=(PassKey&&) = delete;
+    ~PassKey() = default;
 };
 }

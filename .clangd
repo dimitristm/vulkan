@@ -1,0 +1,12 @@
+CompileFlags:
+  CompilationDatabase: "build"
+  Add:
+    - "-fskip-odr-check-in-gmf"
+    - "-Wno-odr"
+
+Diagnostics:
+  Suppress:
+    - "module_odr_violation*"
+
+Completion:
+  HeaderInsertion: Never

@@ -67,7 +67,7 @@ export class HostToDeviceUploader{
     std::vector<QueuedBufferUpload> queued_buffer_uploads;
     std::vector<QueuedImageUpload> queued_image_uploads;
  
-    u64 used_staging_buffer_bytes;
+    u64 used_staging_buffer_bytes = 0;
     struct FreeStagingRegion{
         u64 offset;
         u64 size;
@@ -80,7 +80,7 @@ export class HostToDeviceUploader{
     u64 active_upload_next_dst_offset = 0;
 
 public:
-    HostToDeviceUploader(VulkanEngine *const vk, const CommandPool &cmd_pool, u64 staging_buffer_size);
+    HostToDeviceUploader(VulkanEngine *vk, const CommandPool &cmd_pool, u64 staging_buffer_size);
 
     // The next three functions and their comments describe the core of how this class is used.
 

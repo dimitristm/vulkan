@@ -27,13 +27,13 @@ public:
     ScenePicker(const ResourceLoader &loader):loader(loader){}
 
     i32 pick(i32 new_scene_idx){
-        i32 scene_count = static_cast<i32>(loader.scene_count());
+        const i32 scene_count = static_cast<i32>(loader.scene_count());
         scene_idx = std::clamp(new_scene_idx, 0, scene_count-1);
         return scene_idx;
     }
 
     void imgui_content(){
-        i32 scene_count = static_cast<i32>(loader.scene_count());
+        const i32 scene_count = static_cast<i32>(loader.scene_count());
         ImGui::Text("Scene count: %d (max idx: %d)", scene_count, scene_count-1);
         ImGui::InputInt("Scene idx", &scene_idx);
         scene_idx = std::clamp(scene_idx, 0, scene_count-1);
@@ -47,19 +47,19 @@ int main(){
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window *window{};
 
-    std::string a("assets/mytests/main.assetpack");
+    const std::string a("assets/mytests/main.assetpack");
     // {
     //     Assetpack::Builder b(a, BCnQuality::MIN, MipQuality::MIN);
     //     b.add_from_gltf("assets/mytests/BoxTextured.glb")
     //         .add_from_gltf("assets/mytests/BoxTexturedNonPowerOfTwo.glb")
-    //     // .add_from_gltf("assets/flight-helmet.glb")
+    //     .add_from_gltf("assets/flight-helmet.glb")
     //     .build();
     // }
 
     {
-        SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
-        i32 window_width = 1700;
-        i32 window_height = 900;
+        const SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+        const i32 window_width = 1700;
+        const i32 window_height = 900;
         window = SDL_CreateWindow("Vulkan app", window_width, window_height, window_flags);
         VulkanEngine vk{window};
 
@@ -77,7 +77,7 @@ int main(){
         Renderer renderer{vk, loader, window};
         while (!input_handler.should_quit){
             frame_timer.begin_frame();
-            f32 dt = static_cast<f32>(frame_timer.get_frame_duration().to_sec());
+            const f32 dt = static_cast<f32>(frame_timer.get_frame_duration().to_sec());
             input_handler.handle_input(dt);
             //ImGui::ShowDemoWindow();
 
