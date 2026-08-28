@@ -1,13 +1,11 @@
 module;
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL_events.h>
-
+#include <SDL3/SDL_vulkan.h>
 #include <VkBootstrap.h>
-
-#include <stb/stb_image.h>
 #include <cstdio>
+#include <stb/stb_image.h>
 
 #if !VK_PROJ_USE_IMPORT_STD
 #include <array>
@@ -32,30 +30,27 @@ import glm;
 
 using namespace util;
 
-struct FrameInFlightData{
+struct FrameInFlightData {
     GpuSemaphore swapchain_img_ready_sema;
     CommandBuffer main_cmd_buffer;
     GpuFence rendering_done_fence;
 
-    FrameInFlightData(const CommandPool &cmd_pool)
-    :
-    swapchain_img_ready_sema(),
-    main_cmd_buffer(cmd_pool),
-    rendering_done_fence(true)
-    {}
+    FrameInFlightData(const CommandPool& cmd_pool)
+        : main_cmd_buffer(cmd_pool),
+          rendering_done_fence(true) {}
 };
 
-export class Renderer{
+export class Renderer {
     static constexpr int FRAMES_IN_FLIGHT = 2;
     const VkPresentModeKHR present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
     const MSAALevel msaa_level = MSAALevel::X4;
 
-    VulkanEngine &vk;
-    SDL_Window *window;
-    ivec2 window_size;// in pixels
-    CommandPool command_pool; // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
+    VulkanEngine& vk;
+    SDL_Window* window;
+    ivec2 window_size; // in pixels
+    // There must be one command pool for each thread and each thread only touches cmd buffers from its pool
+    CommandPool command_pool;
     ImmediateSubmitter immediate_submiter;
-    HostToDeviceUploader uploader;
 
     Swapchain swapchain;
     DrawImage draw_image;
@@ -68,7 +63,7 @@ export class Renderer{
     PushConstantsBuilder pc_builder;
     DescriptorSetBuilder ds_builder;
 
-    struct PushConstantType{
+    struct PushConstantType {
         fmat4 view_proj_matrix;
         fvec3 camera_pos;
         fvec3 frag_to_light_dir;
@@ -77,8 +72,8 @@ export class Renderer{
     PushConstant<PushConstantType> pc;
     GraphicsPipeline<Vertex> graphics_pipeline;
 
-    void set_initial_attachment_layouts(){
-        immediate_submiter.submit([&](){
+    void set_initial_attachment_layouts() {
+        immediate_submiter.submit([&]() {
             immediate_submiter.cmd_buffer().barrier(
                 BarrierInfo(
                     depth_image.get_image(),
@@ -105,24 +100,24 @@ export class Renderer{
     }
 
     bool should_rebuild_swapchain = false;
-    void update_drawing_surfaces(bool swapchain_out_of_date){
+    void update_drawing_surfaces(bool swapchain_out_of_date) {
         ivec2 new_window_size = get_window_size_in_pixels(window);
         bool window_changed_size = new_window_size != window_size;
 
-        const auto update_swapchain = [&](){
+        const auto update_swapchain = [&]() {
             swapchain.rebuild_swapchain(window, present_mode);
             should_rebuild_swapchain = false;
             while (swapchain_render_done_semas.size() < swapchain.get_images().size()) {
                 swapchain_render_done_semas.emplace_back();
             }
         };
-        const auto update_images = [&](){
+        const auto update_images = [&]() {
             draw_image.resize(new_window_size);
             depth_image.resize(new_window_size);
             set_initial_attachment_layouts();
         };
 
-        if (window_changed_size || swapchain_out_of_date || should_rebuild_swapchain){
+        if (window_changed_size || swapchain_out_of_date || should_rebuild_swapchain) {
             window_size = new_window_size;
             vk.wait_idle();
             vk.flush_deletions_in_this_fence_immediately();
@@ -132,51 +127,41 @@ export class Renderer{
         }
     }
 
-public:
-    Renderer(VulkanEngine &vk, ResourceLoader &loader, SDL_Window *window)
-    :
-    vk(vk),
-    window(window),
-    window_size(get_window_size_in_pixels(window)),
-    command_pool(),
-    immediate_submiter(command_pool),
-    uploader(&vk, command_pool, 64 * 1024 * 1024),// todo performance 64MiB is small, raise it if we do more later
-    swapchain(window, present_mode),
-    draw_image(get_window_size_in_pixels(window), msaa_level),
-    depth_image(get_window_size_in_pixels(window), msaa_level),
-    swapchain_render_done_semas(
-        [&] -> std::vector<GpuSemaphore> {
-            std::vector<GpuSemaphore> swapchain_render_done_semas;
-            int sema_count = (int)swapchain.get_images().size();
-            swapchain_render_done_semas.reserve(sema_count);
-            for (int i = 0; i <sema_count; ++i){
-                swapchain_render_done_semas.emplace_back();
-            }
-            return swapchain_render_done_semas;
-        }()
-    ),
-    frame_in_flight_data({FrameInFlightData(command_pool), FrameInFlightData(command_pool)}),
-    specialization_info((2 * sizeof(int32_t))),
-    pc_builder(),
-    ds_builder(),
-    pc(pc_builder.reset().add<PushConstantType>( VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)),
-    graphics_pipeline(
-                      VertexShader("shaders/compiled/pbr.vert.spv"),
-                      FragmentShader("shaders/compiled/pbr.frag.spv"),
-                      PipelineLayout(loader.get_descriptor_set(), pc_builder.get_ranges()),
-                      loader.get_vertex_buffer(),
-                      draw_image.get_image().get_format(),
-                      depth_image.get_image().get_format(),
-                      msaa_level)
-    {
+  public:
+    Renderer(VulkanEngine& vk, ResourceLoader& loader, SDL_Window* window)
+        : vk(vk),
+          window(window),
+          window_size(get_window_size_in_pixels(window)),
+          immediate_submiter(command_pool),
+          swapchain(window, present_mode),
+          draw_image(get_window_size_in_pixels(window), msaa_level),
+          depth_image(get_window_size_in_pixels(window), msaa_level),
+          swapchain_render_done_semas([&] -> std::vector<GpuSemaphore> {
+              std::vector<GpuSemaphore> swapchain_render_done_semas;
+              int sema_count = (int)swapchain.get_images().size();
+              swapchain_render_done_semas.reserve(sema_count);
+              for (int i = 0; i < sema_count; ++i) {
+                  swapchain_render_done_semas.emplace_back();
+              }
+              return swapchain_render_done_semas;
+          }()),
+          frame_in_flight_data({FrameInFlightData(command_pool), FrameInFlightData(command_pool)}),
+          specialization_info((2 * sizeof(int32_t))),
+          ds_builder(),
+          pc(pc_builder.reset().add<PushConstantType>(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)),
+          graphics_pipeline(
+              VertexShader("shaders/compiled/pbr.vert.spv"), FragmentShader("shaders/compiled/pbr.frag.spv"),
+              PipelineLayout(loader.get_descriptor_set(), pc_builder.get_ranges()), loader.get_vertex_buffer(),
+              draw_image.get_image().get_format(), depth_image.get_image().get_format(), msaa_level
+          ) {
         set_initial_attachment_layouts();
         pc.data.frag_to_light_dir = {0.f, 0.f, 1.f};
         pc.data.light_color = {0.5, 0.5, 0.5};
     }
 
-    FrameInFlightData &get_current_frame_in_flight(){ return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
+    FrameInFlightData& get_current_frame_in_flight() { return frame_in_flight_data[frame_count % FRAMES_IN_FLIGHT]; }
 
-    void imgui_content(){
+    void imgui_content() {
         // Direction vector controls (auto-normalizes internal values if modified)
         if (ImGui::SliderFloat3("Light Direction", &pc.data.frag_to_light_dir.x, -1.0f, 1.0f)) {
             // Prevent normalizer crash if vector happens to hit exactly zero during edit
@@ -188,49 +173,63 @@ public:
         ImGui::ColorEdit3("Light Color", &pc.data.light_color.x);
     }
 
-    void draw_scene(const Camera &camera, ResourceLoader &loader, u64 scene_idx){
+    void draw_scene(const Camera& camera, ResourceLoader& loader, u64 scene_idx) {
         vk.flush_queued_deletion_batches();
-        FrameInFlightData &frame_in_flight = get_current_frame_in_flight();
+        FrameInFlightData& frame_in_flight = get_current_frame_in_flight();
 
         frame_in_flight.rendering_done_fence.wait_and_reset();
-        CommandBuffer &cmd_buffer = frame_in_flight.main_cmd_buffer;
+        CommandBuffer& cmd_buffer = frame_in_flight.main_cmd_buffer;
         cmd_buffer.restart(true);
 
         uint32_t swapchain_img_idx = [&] {
-            while (true){
+            while (true) {
                 auto [idx, result] = swapchain.acquire_next_image(frame_in_flight.swapchain_img_ready_sema);
-                if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
-                if (result == VK_SUBOPTIMAL_KHR) { should_rebuild_swapchain = true; return idx; }
-                if (result == VK_SUCCESS) return idx;
+                if (result == VK_ERROR_OUT_OF_DATE_KHR)
+                    update_drawing_surfaces(true);
+                if (result == VK_SUBOPTIMAL_KHR) {
+                    should_rebuild_swapchain = true;
+                    return idx;
+                }
+                if (result == VK_SUCCESS)
+                    return idx;
             }
         }();
 
-        cmd_buffer.barrier(
-            BarrierInfo(
-                draw_image.get_resolve_image().get_image(),
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                ImageAspects::COLOR,
-                VK_PIPELINE_STAGE_2_BLIT_BIT,
-                0,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
-            )
-        );
+        cmd_buffer.barrier(BarrierInfo(
+            draw_image.get_resolve_image().get_image(),
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            ImageAspects::COLOR,
+            VK_PIPELINE_STAGE_2_BLIT_BIT,
+            0,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+        ));
 
         cmd_buffer.bind_pipeline(graphics_pipeline);
         cmd_buffer.bind_descriptor_set(graphics_pipeline, loader.get_descriptor_set());
-        pc.data.view_proj_matrix = perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) * camera.get_view_transform();
+        pc.data.view_proj_matrix =
+            perspective_projection(80.0f, (float)window_size.x / (float)window_size.y, 0.001f, 10000.0f) *
+            camera.get_view_transform();
         pc.data.camera_pos = camera.get_position();
         cmd_buffer.update_push_constants(graphics_pipeline, pc);
-        cmd_buffer.draw_indexed(draw_image.get_image_view(), depth_image.get_image_view(), draw_image.get_resolve_image().get_image_view(),
-                                {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)},
-                                loader.get_vertex_buffer(), loader.get_index_buffer(), loader.prepare_to_draw_scene(scene_idx));
+        cmd_buffer.draw_indexed(
+            draw_image.get_image_view(),
+            depth_image.get_image_view(),
+            draw_image.get_resolve_image().get_image_view(),
+            {.width = static_cast<u32>(window_size.x), .height = static_cast<u32>(window_size.y)},
+            loader.get_vertex_buffer(),
+            loader.get_index_buffer(),
+            loader.prepare_to_draw_scene(scene_idx)
+        );
 
-        cmd_buffer.draw_imgui(draw_image.get_resolve_image().get_image_view(), {.width=static_cast<u32>(window_size.x), .height=static_cast<u32>(window_size.y)});
+        cmd_buffer.draw_imgui(
+            draw_image.get_resolve_image().get_image_view(),
+            {.width = static_cast<u32>(window_size.x), .height = static_cast<u32>(window_size.y)}
+        );
 
-        auto &curr_swapchain_image = swapchain.get_images()[swapchain_img_idx];
-        const auto &curr_render_done_sema = swapchain_render_done_semas[swapchain_img_idx];
+        const auto& curr_swapchain_image = swapchain.get_images()[swapchain_img_idx];
+        const auto& curr_render_done_sema = swapchain_render_done_semas[swapchain_img_idx];
 
         cmd_buffer.barrier(
             BarrierInfo(
@@ -255,46 +254,48 @@ public:
             )
         );
 
-        cmd_buffer.blit(draw_image.get_resolve_image().get_image(),
-                        curr_swapchain_image,
-                        {0,0},
-                        window_size,
-                        {0,0},
-                        {curr_swapchain_image.get_extent().width, curr_swapchain_image.get_extent().height},
-                        ImageAspects::COLOR
+        cmd_buffer.blit(
+            draw_image.get_resolve_image().get_image(),
+            curr_swapchain_image,
+            {0, 0},
+            window_size,
+            {0, 0},
+            {curr_swapchain_image.get_extent().width, curr_swapchain_image.get_extent().height},
+            ImageAspects::COLOR
         );
 
-        cmd_buffer.barrier(
-            BarrierInfo(
-                curr_swapchain_image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                ImageAspects::COLOR,
-                VK_PIPELINE_STAGE_2_BLIT_BIT,
-                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_NONE,
-                0
-            )
-        );
+        cmd_buffer.barrier(BarrierInfo(
+            curr_swapchain_image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            ImageAspects::COLOR,
+            VK_PIPELINE_STAGE_2_BLIT_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_NONE,
+            0
+        ));
 
         cmd_buffer.end();
 
-        cmd_buffer.submit(frame_in_flight.swapchain_img_ready_sema,
-                          VK_PIPELINE_STAGE_2_BLIT_BIT,
-                          curr_render_done_sema,
-                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                          frame_in_flight.rendering_done_fence
+        cmd_buffer.submit(
+            frame_in_flight.swapchain_img_ready_sema,
+            VK_PIPELINE_STAGE_2_BLIT_BIT,
+            curr_render_done_sema,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            frame_in_flight.rendering_done_fence
         );
 
         VkResult result = swapchain.present(curr_render_done_sema, swapchain_img_idx);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) update_drawing_surfaces(true);
-        if (result == VK_SUBOPTIMAL_KHR) should_rebuild_swapchain = true;
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+            update_drawing_surfaces(true);
+        if (result == VK_SUBOPTIMAL_KHR)
+            should_rebuild_swapchain = true;
 
         ++frame_count;
     }
 
-    void draw(const Camera &camera, ResourceLoader &loader, u64 scene_idx){
-        if (!Swapchain::presentable_swapchain_exists(window)){
+    void draw(const Camera& camera, ResourceLoader& loader, u64 scene_idx) {
+        if (!Swapchain::presentable_swapchain_exists(window)) {
             std::println(stderr, "Can't build swapchain");
             return;
         }

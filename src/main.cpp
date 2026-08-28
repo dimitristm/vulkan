@@ -20,32 +20,34 @@ import camera;
 
 import imgui;
 
-class ScenePicker{
+class ScenePicker {
     i32 scene_idx{};
-    const ResourceLoader &loader;
-public:
-    ScenePicker(const ResourceLoader &loader):loader(loader){}
+    const ResourceLoader& loader;
 
-    i32 pick(i32 new_scene_idx){
+  public:
+    ScenePicker(const ResourceLoader& loader)
+        : loader(loader) {}
+
+    i32 pick(i32 new_scene_idx) {
         const i32 scene_count = static_cast<i32>(loader.scene_count());
-        scene_idx = std::clamp(new_scene_idx, 0, scene_count-1);
+        scene_idx = std::clamp(new_scene_idx, 0, scene_count - 1);
         return scene_idx;
     }
 
-    void imgui_content(){
+    void imgui_content() {
         const i32 scene_count = static_cast<i32>(loader.scene_count());
-        ImGui::Text("Scene count: %d (max idx: %d)", scene_count, scene_count-1);
+        ImGui::Text("Scene count: %d (max idx: %d)", scene_count, scene_count - 1);
         ImGui::InputInt("Scene idx", &scene_idx);
-        scene_idx = std::clamp(scene_idx, 0, scene_count-1);
+        scene_idx = std::clamp(scene_idx, 0, scene_count - 1);
     }
 
     [[nodiscard]] i32 get_scene_idx() const { return scene_idx; }
 };
 
-int main(){
+int main() {
     TracyNoop;
     SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window{};
+    SDL_Window* window{};
 
     const std::string a("assets/mytests/main.assetpack");
     // {
@@ -75,13 +77,13 @@ int main(){
         util::FrameTimer frame_timer;
 
         Renderer renderer{vk, loader, window};
-        while (!input_handler.should_quit){
+        while (!input_handler.should_quit) {
             frame_timer.begin_frame();
             const f32 dt = static_cast<f32>(frame_timer.get_frame_duration().to_sec());
             input_handler.handle_input(dt);
-            //ImGui::ShowDemoWindow();
+            // ImGui::ShowDemoWindow();
 
-            if (ImGui::Begin("General")){
+            if (ImGui::Begin("General")) {
                 ImGui::SeparatorText("FPS");
                 frame_timer.imgui_content();
                 ImGui::SeparatorText("Scene Changer");
