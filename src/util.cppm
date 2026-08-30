@@ -55,10 +55,10 @@ perspective_projection(f32 horizontal_fov_in_degrees, f32 horizontal_to_vertical
     // remember glm is column major so the actual matrix will be the transpose of what this notation would suggest
     return fmat4{
         // clang-format off
-        1 / tan, 0              , 0                         , 0                                  ,
-        0      , -hv_ratio / tan, 0                         , 0                                  ,
-        0      , 0              , -near_z / (near_z - far_z), (far_z * near_z) / (far_z - near_z),
-        0      , 0              , -1                        , 0                                  ,
+        1 / tan, 0              , 0                                  , 0 ,
+        0      , -hv_ratio / tan, 0                                  , 0 ,
+        0      , 0              , -near_z / (near_z - far_z)         , -1,
+        0      , 0              , (far_z * near_z) / (far_z - near_z), 0 ,
         // clang-format on
     };
 };
