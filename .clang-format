@@ -1,0 +1,38 @@
+---
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: Latest
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 120
+ReflowComments: IndentOnly
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterControlStatement: MultiLine
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+
+
+# Pointers & References
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+# Constructors & Spacing
+ConstructorInitializerIndentWidth: 4
+PackConstructorInitializers: Never
+SpacesInContainerLiterals: false
+
+# Includes
+IncludeBlocks: Regroup
+
+# Templates
+BreakTemplateDeclarations: Yes
+
+# Concepts & Requires
+BreakBeforeConceptDeclarations: Always
+RequiresClausePosition: OwnLine
+IndentRequiresClause: false
+

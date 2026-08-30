@@ -10,5 +10,4 @@ shaders/compiled/*
 !shaders/compiled/.gitkeep
 /.idea/
 /.cache/
-.clang-format
 imgui.ini
